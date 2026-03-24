@@ -1,0 +1,89 @@
+external wcwidth : int -> int = "caml_wcwidth"
+
+let codepoint_len s i =
+  if i >= String.length s then 0
+  else
+    let c = Char.code s.[i] in
+    if c land 0x80 = 0 then 1
+    else if c land 0xE0 = 0xC0 then 2
+    else if c land 0xF0 = 0xE0 then 3
+    else if c land 0xF8 = 0xF0 then 4
+    else 1  (* invalid byte, treat as 1 *)
+
+let decode s i =
+  let len = String.length s in
+  if i >= len then (0, 0)
+  else
+    let b0 = Char.code s.[i] in
+    if b0 land 0x80 = 0 then
+      (b0, 1)
+    else if b0 land 0xE0 = 0xC0 && i + 1 < len then
+      let cp = ((b0 land 0x1F) lsl 6)
+               lor (Char.code s.[i+1] land 0x3F) in
+      (cp, 2)
+    else if b0 land 0xF0 = 0xE0 && i + 2 < len then
+      let cp = ((b0 land 0x0F) lsl 12)
+               lor ((Char.code s.[i+1] land 0x3F) lsl 6)
+               lor (Char.code s.[i+2] land 0x3F) in
+      (cp, 3)
+    else if b0 land 0xF8 = 0xF0 && i + 3 < len then
+      let cp = ((b0 land 0x07) lsl 18)
+               lor ((Char.code s.[i+1] land 0x3F) lsl 12)
+               lor ((Char.code s.[i+2] land 0x3F) lsl 6)
+               lor (Char.code s.[i+3] land 0x3F) in
+      (cp, 4)
+    else
+      (0xFFFD, 1)  (* replacement character for invalid *)
+
+let codepoint_width cp =
+  let w = wcwidth cp in
+  (* wcwidth returns -1 for non-printable; treat as 0 for combining,
+     1 for control chars *)
+  if w < 0 then 0 else w
+
+let next s i =
+  let len = String.length s in
+  if i >= len then len
+  else i + codepoint_len s i
+
+let prev s i =
+  if i <= 0 then 0
+  else
+    (* Walk back over continuation bytes (10xxxxxx) *)
+    let j = ref (i - 1) in
+    while !j > 0 && Char.code s.[!j] land 0xC0 = 0x80 do
+      decr j
+    done;
+    !j
+
+let byte_to_col s byte_off =
+  let len = String.length s in
+  let byte_off = min byte_off len in
+  let col = ref 0 in
+  let i = ref 0 in
+  while !i < byte_off do
+    let (cp, n) = decode s !i in
+    col := !col + codepoint_width cp;
+    i := !i + n
+  done;
+  !col
+
+let col_to_byte s target_col =
+  let len = String.length s in
+  let col = ref 0 in
+  let i = ref 0 in
+  let stop = ref false in
+  while !i < len && !col < target_col && not !stop do
+    let (cp, n) = decode s !i in
+    let w = codepoint_width cp in
+    if w > 0 && !col + w > target_col then
+      stop := true  (* target is in the middle of a wide char *)
+    else begin
+      col := !col + w;
+      i := !i + n
+    end
+  done;
+  !i
+
+let string_width s =
+  byte_to_col s (String.length s)
