@@ -3,7 +3,7 @@ type sentence_status = Processing | Verified | Error of string
 type sentence_info = {
   start_off : int;
   end_off : int;
-  state_id : Stateid.t;
+  mutable state_id : Stateid.t;
   mutable status : sentence_status;
 }
 
@@ -16,6 +16,9 @@ type t = {
   mutable goals_cache : Interface.goals option;
   mutable msgs : string list;
   mutable err_range : (int * int) option;
+  mutable target_end : int;  (* user's target boundary *)
+  mutable goals_dirty : bool;  (* goals need refresh when idle *)
+  mutable state_changed : bool;
 }
 
 let create ?(prog="coqidetop") ?(args=[]) buf =
@@ -23,7 +26,8 @@ let create ?(prog="coqidetop") ?(args=[]) buf =
   let init_id = Rocq_protocol.init rocq None in
   { rocq; buf; tip = init_id; sentences = [];
     next_edit_id = -1; goals_cache = None; msgs = [];
-    err_range = None }
+    err_range = None; target_end = 0;
+    goals_dirty = false; state_changed = false }
 
 (* Find a sentence by state_id *)
 let find_sentence t sid =
@@ -35,7 +39,7 @@ let process_one_feedback t (fb : Feedback.feedback) =
   match fb.Feedback.contents with
   | Feedback.Processed ->
     (match find_sentence t sid with
-     | Some s -> s.status <- Verified
+     | Some s -> s.status <- Verified; t.state_changed <- true
      | None -> ())
   | Feedback.Message (Feedback.Error, _, _, msg) ->
     (match find_sentence t sid with
@@ -43,24 +47,21 @@ let process_one_feedback t (fb : Feedback.feedback) =
        let err_msg = Pp.string_of_ppcmds msg in
        s.status <- Error err_msg;
        t.msgs <- t.msgs @ [err_msg];
-       t.err_range <- Some (s.start_off, s.end_off)
+       t.err_range <- Some (s.start_off, s.end_off);
+       t.state_changed <- true
      | None ->
        t.msgs <- t.msgs @ [Pp.string_of_ppcmds msg])
   | Feedback.Message (Feedback.Warning, _, _, msg) ->
-    t.msgs <- t.msgs @ ["Warning: " ^ Pp.string_of_ppcmds msg]
+    t.msgs <- t.msgs @ ["Warning: " ^ Pp.string_of_ppcmds msg];
+    t.state_changed <- true
   | Feedback.Message (_, _, _, msg) ->
-    t.msgs <- t.msgs @ [Pp.string_of_ppcmds msg]
+    t.msgs <- t.msgs @ [Pp.string_of_ppcmds msg];
+    t.state_changed <- true
   | _ -> ()
 
-(* Drain all pending feedback and process it *)
 let process_feedback t =
   let fbs = Rocq_protocol.drain_feedback t.rocq in
   List.iter (process_one_feedback t) fbs
-
-(* Poll for new feedback without blocking *)
-let poll t =
-  Rocq_protocol.poll_feedback t.rocq;
-  process_feedback t
 
 let verified_end t =
   match t.sentences with
@@ -91,12 +92,12 @@ let rewind_errors t =
     t.err_range <- Some (err_s.start_off, err_s.end_off);
     t.sentences <- surviving;
     t.tip <- target_id;
+    (* Snap target back to error *)
+    t.target_end <- (match surviving with s :: _ -> s.end_off | [] -> 0);
     let result = Rocq_protocol.edit_at t.rocq target_id in
     process_feedback t;
-    (match result with
-     | Interface.Good _ -> ()
-     | Interface.Fail _ -> ());
-    Buffer.move_to_byte_offset t.buf (verified_end t)
+    (match result with Interface.Good _ -> () | Interface.Fail _ -> ());
+    t.state_changed <- true
 
 (* Format goals for display *)
 let format_goals ?(all_hyps=true) (gs : Interface.goals) =
@@ -158,14 +159,17 @@ let refresh_goals t =
   match Rocq_protocol.goals t.rocq with
   | Interface.Good (Some gs) ->
     process_feedback t;
-    t.goals_cache <- Some gs
+    t.goals_cache <- Some gs;
+    t.state_changed <- true
   | Interface.Good None ->
     process_feedback t;
-    t.goals_cache <- None
+    t.goals_cache <- None;
+    t.state_changed <- true
   | Interface.Fail (_, _, msg) ->
     process_feedback t;
     t.msgs <- t.msgs @ [Pp.string_of_ppcmds msg];
-    t.goals_cache <- None
+    t.goals_cache <- None;
+    t.state_changed <- true
 
 let rewind_to_state t safe_id =
   let rec drop = function
@@ -174,6 +178,7 @@ let rewind_to_state t safe_id =
   in
   t.sentences <- drop t.sentences;
   t.tip <- safe_id;
+  t.target_end <- verified_end t;
   Buffer.move_to_byte_offset t.buf (verified_end t);
   refresh_goals t
 
@@ -193,117 +198,202 @@ let line_info_at buf byte_off =
   done;
   (!line + 1, !bol)
 
-(* Internal step functions — don't clear messages *)
-let step_forward_inner t =
-  t.err_range <- None;
-  let text = Buffer.text t.buf in
-  let start = verified_end t in
-  match Sentence.find_end text ~start with
-  | None ->
-    t.msgs <- t.msgs @ ["No more sentences."]
-  | Some end_off ->
-    let phrase = String.sub text start (end_off - start) in
-    let eid = t.next_edit_id in
-    t.next_edit_id <- eid - 1;
-    let (line, bol) = line_info_at t.buf start in
-    let result = Rocq_protocol.add t.rocq
-      ~state_id:t.tip ~edit_id:eid ~verbose:true
-      ~bp:start ~line ~bol phrase in
-    process_feedback t;
-    match result with
-    | Interface.Good (new_id, _) ->
-      let s = { start_off = start; end_off; state_id = new_id;
-                status = Processing } in
-      t.sentences <- s :: t.sentences;
-      t.tip <- new_id;
-      Buffer.move_to_byte_offset t.buf end_off;
-      refresh_goals t;
+(* Async: submit next sentence toward target_end *)
+let submit_next_sentence t =
+  if Rocq_protocol.is_busy t.rocq then ()
+  else begin
+    let vend = verified_end t in
+    if vend >= t.target_end then ()  (* already caught up *)
+    else begin
+      let text = Buffer.text t.buf in
+      match Sentence.find_end text ~start:vend with
+      | None -> ()
+      | Some end_off ->
+        let phrase = String.sub text vend (end_off - vend) in
+        let eid = t.next_edit_id in
+        t.next_edit_id <- eid - 1;
+        let (line, bol) = line_info_at t.buf vend in
+        let prev_tip = t.tip in
+        let s = { start_off = vend; end_off; state_id = Stateid.dummy;
+                  status = Processing } in
+        t.sentences <- s :: t.sentences;
+        t.state_changed <- true;
+        let call = Xmlprotocol.add
+          ((((phrase, eid), (prev_tip, true)), vend), (line, bol)) in
+        Rocq_protocol.send_call t.rocq call
+          (fun result ->
+             process_feedback t;
+             match result with
+             | Interface.Good (new_id, _) ->
+               s.state_id <- new_id;
+               t.tip <- new_id;
+               t.state_changed <- true;
+               t.goals_dirty <- true;
+               process_feedback t;
+               let has_error = List.exists (fun si ->
+                 match si.status with Error _ -> true | _ -> false
+               ) t.sentences in
+               if has_error then
+                 rewind_errors t
+             | Interface.Fail (safe_id, _, msg) ->
+               (match t.sentences with
+                | hd :: rest when hd == s -> t.sentences <- rest
+                | _ -> ());
+               t.msgs <- t.msgs @ [Pp.string_of_ppcmds msg];
+               t.err_range <- Some (vend, end_off);
+               t.target_end <- verified_end t;
+               t.state_changed <- true;
+               if not (Stateid.equal safe_id t.tip
+                       || Stateid.equal safe_id Stateid.dummy) then
+                 rewind_to_state t safe_id
+               else
+                 t.tip <- (match t.sentences with
+                           | si :: _ -> si.state_id
+                           | [] -> Stateid.initial))
+    end
+  end
+
+(* Sync: rewind verified region to match target *)
+let rewind_to_target t =
+  while verified_end t > t.target_end do
+    match t.sentences with
+    | [] -> ()  (* shouldn't happen *)
+    | _ :: rest ->
+      let target_id = match rest with
+        | s :: _ -> s.state_id
+        | [] -> Stateid.initial
+      in
+      let result = Rocq_protocol.edit_at t.rocq target_id in
       process_feedback t;
-      rewind_errors t
-    | Interface.Fail (safe_id, _, msg) ->
-      t.msgs <- t.msgs @ [Pp.string_of_ppcmds msg];
-      t.err_range <- Some (start, end_off);
-      if not (Stateid.equal safe_id t.tip
-              || Stateid.equal safe_id Stateid.dummy) then
-        rewind_to_state t safe_id
+      (match result with
+       | Interface.Good _ ->
+         t.sentences <- rest;
+         t.tip <- target_id;
+         t.state_changed <- true
+       | Interface.Fail (safe_id, _, msg) ->
+         t.msgs <- t.msgs @ ["Undo failed: " ^ Pp.string_of_ppcmds msg];
+         if not (Stateid.equal safe_id t.tip
+                 || Stateid.equal safe_id Stateid.dummy) then
+           rewind_to_state t safe_id;
+         (* Break the loop *)
+         t.target_end <- verified_end t)
+  done
 
-let step_backward_inner t =
-  t.err_range <- None;
-  match t.sentences with
-  | [] ->
-    t.msgs <- t.msgs @ ["Already at the beginning."]
-  | _ :: rest ->
-    let target_id = match rest with
-      | s :: _ -> s.state_id
-      | [] -> Stateid.initial
-    in
-    let result = Rocq_protocol.edit_at t.rocq target_id in
-    process_feedback t;
-    (match result with
-     | Interface.Good _ ->
-       t.sentences <- rest;
-       t.tip <- target_id;
-       Buffer.move_to_byte_offset t.buf (verified_end t);
-       refresh_goals t
-     | Interface.Fail (safe_id, _, msg) ->
-       t.msgs <- t.msgs @ ["Undo failed: " ^ Pp.string_of_ppcmds msg];
-       if not (Stateid.equal safe_id t.tip
-               || Stateid.equal safe_id Stateid.dummy) then
-         rewind_to_state t safe_id)
+(* Find the sentence boundary before a given offset *)
+let sentence_start_before t off =
+  let rec find = function
+    | s :: _ when s.start_off < off -> s.start_off
+    | _ :: rest -> find rest
+    | [] -> 0
+  in
+  find t.sentences
 
-(* Public wrappers that clear messages *)
+(* Poll: process feedback and drive async stepping.
+   Returns true if state changed. *)
+let poll t =
+  t.state_changed <- false;
+  Rocq_protocol.poll t.rocq;
+  process_feedback t;
+  (* If verified < target and not busy, submit next sentence *)
+  if not (Rocq_protocol.is_busy t.rocq) then begin
+    let vend = verified_end t in
+    if vend < t.target_end then
+      submit_next_sentence t
+    else if t.goals_dirty then begin
+      (* Caught up — refresh goals *)
+      t.goals_dirty <- false;
+      refresh_goals t
+    end
+  end;
+  t.state_changed
+
+(* --- Public API --- *)
+
+let cursor_byte_offset t =
+  let (cl, cc) = Buffer.cursor t.buf in
+  let off = ref 0 in
+  for i = 0 to cl - 1 do
+    off := !off + String.length (Buffer.get_line t.buf i) + 1
+  done;
+  !off + cc
+
 let step_forward t =
   t.msgs <- [];
-  step_forward_inner t
+  t.err_range <- None;
+  let text = Buffer.text t.buf in
+  let cur_target = t.target_end in
+  match Sentence.find_end text ~start:cur_target with
+  | None -> t.msgs <- ["No more sentences."]
+  | Some end_off ->
+    let cursor_off = cursor_byte_offset t in
+    t.target_end <- end_off;
+    (* Push cursor out if it's now inside the target region *)
+    if cursor_off < end_off && cursor_off >= cur_target then
+      Buffer.move_to_byte_offset t.buf end_off;
+    t.state_changed <- true
 
 let step_backward t =
   t.msgs <- [];
-  step_backward_inner t
+  t.err_range <- None;
+  if t.target_end = 0 then
+    t.msgs <- ["Already at the beginning."]
+  else begin
+    (* Find the sentence boundary before current target *)
+    let old_target = t.target_end in
+    let new_target = sentence_start_before t old_target in
+    let cursor_off = cursor_byte_offset t in
+    t.target_end <- new_target;
+    (* Pull cursor back if it was exactly on the old boundary *)
+    if cursor_off = old_target then
+      Buffer.move_to_byte_offset t.buf new_target;
+    t.state_changed <- true;
+    (* If verified > target, need to rewind synchronously.
+       Wait for any in-flight call first. *)
+    if verified_end t > t.target_end then begin
+      if Rocq_protocol.is_busy t.rocq then begin
+        while Rocq_protocol.is_busy t.rocq do
+          ignore (Main_loop.select_with_watches [] 0.01)
+        done;
+        process_feedback t
+      end;
+      rewind_to_target t;
+      t.goals_dirty <- true
+    end
+  end
 
-let go_to_cursor ?render t =
+let go_to_cursor t =
   t.err_range <- None;
   t.msgs <- [];
   let (cur_line, cur_col) = Buffer.cursor t.buf in
-  let target_off = ref 0 in
+  let cursor_off = ref 0 in
   for i = 0 to cur_line - 1 do
-    target_off := !target_off + String.length (Buffer.get_line t.buf i) + 1
+    cursor_off := !cursor_off + String.length (Buffer.get_line t.buf i) + 1
   done;
-  target_off := !target_off + cur_col;
-  let target = !target_off in
-  let vend = verified_end t in
-  if target > vend then begin
-    let keep_going = ref true in
-    while !keep_going do
-      let cur_end = verified_end t in
-      if cur_end >= target then
-        keep_going := false
-      else begin
-        let text = Buffer.text t.buf in
-        match Sentence.find_end text ~start:cur_end with
-        | None -> keep_going := false
-        | Some end_off ->
-          let prev_end = verified_end t in
-          step_forward_inner t;
-          (* Render between steps if callback provided *)
-          (match render with Some f -> f () | None -> ());
-          if verified_end t = prev_end then
-            keep_going := false
-          else if end_off >= target then
-            keep_going := false
-      end
-    done
-  end else if target < vend then begin
-    let keep_going = ref true in
-    while !keep_going do
-      match t.sentences with
-      | s :: _ when s.start_off >= target ->
-        let n_before = List.length t.sentences in
-        step_backward_inner t;
-        let n_after = List.length t.sentences in
-        if t.sentences = [] || n_after >= n_before then
-          keep_going := false
-      | _ -> keep_going := false
-    done
+  cursor_off := !cursor_off + cur_col;
+  let cursor = !cursor_off in
+  (* Snap target to the last sentence boundary BEFORE the cursor *)
+  let text = Buffer.text t.buf in
+  let pos = ref 0 in
+  let snapped = ref 0 in
+  while !pos < cursor do
+    match Sentence.find_end text ~start:!pos with
+    | None -> pos := cursor
+    | Some end_off ->
+      if end_off <= cursor then snapped := end_off;
+      pos := end_off
+  done;
+  t.target_end <- !snapped;
+  t.state_changed <- true;
+  (* If verified > target, rewind synchronously *)
+  if verified_end t > t.target_end then begin
+    if Rocq_protocol.is_busy t.rocq then begin
+      while Rocq_protocol.is_busy t.rocq do
+        ignore (Main_loop.select_with_watches [] 0.01)
+      done;
+      process_feedback t
+    end;
+    rewind_to_target t;
+    t.goals_dirty <- true
   end
 
 (* Per-sentence status info for rendering *)
@@ -318,6 +408,7 @@ let sentence_ranges t =
     { sd_start = s.start_off; sd_end = s.end_off; sd_status = s.status }
   ) t.sentences
 
+let pending_end t = t.target_end
 let error_range t = t.err_range
 let clear_error t = t.err_range <- None
 let goals_text ?(all_hyps=true) t =
@@ -327,7 +418,8 @@ let goals_text ?(all_hyps=true) t =
 let messages t = t.msgs
 let clear_messages t = t.msgs <- []
 
-let is_busy _ = false
+let is_busy t =
+  Rocq_protocol.is_busy t.rocq || verified_end t < t.target_end
 
 let query t phrase =
   t.msgs <- [];

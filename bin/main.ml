@@ -64,39 +64,28 @@ let () =
   in
   (* Initial render *)
   Editor.handle_key (-1) buf display session |> ignore;
-  (* Use a timeout so we can poll for feedback *)
-  Curses.timeout 100;  (* 100ms timeout on getch *)
-  (* Main loop *)
+  (* Non-blocking getch — we drive input via select *)
+  Curses.timeout 0;
+  let stdin_fd = Unix.stdin in
+  (* Main loop: select on stdin + rocqtop fd, dispatch both *)
   let running = ref true in
-  while !running do
-    let ch = Curses.getch () in
-    if ch = -1 then begin
-      (* Timeout — poll for feedback and re-render if anything changed *)
-      (match session with
-       | Some s ->
-         let msgs_before = Session.messages s in
-         Session.poll s;
-         if Session.messages s <> msgs_before then
-           Editor.handle_key (-1) buf display session |> ignore
-       | None -> ())
-    end else
-    match Editor.handle_key ch buf display session with
-    | Editor.Quit ->
-      if Buffer.modified buf then begin
-        Display.set_status display "Unsaved changes! ^X again to quit, ^O to save.";
-        Display.refresh_all display;
-        Curses.timeout (-1);  (* block until user responds *)
+  let needs_render = ref false in
+  let handle_quit () =
+    if Buffer.modified buf then begin
+      Display.set_status display "Unsaved changes! ^X again to quit, ^O to save.";
+      Display.refresh_all display;
+      (* Block for user response *)
+      let ready = Main_loop.select_with_watches [stdin_fd] (-1.0) in
+      if List.mem stdin_fd ready then begin
         let ch2 = Curses.getch () in
-        Curses.timeout 100;   (* restore timeout *)
         if ch2 = 24 (* ^X *) then
           running := false
         else if ch2 = 15 (* ^O *) then begin
           (match Buffer.filename buf with
            | Some _ ->
-             if Buffer.save buf then begin
-               Display.set_status display "Saved.";
-               running := true
-             end else
+             if Buffer.save buf then
+               Display.set_status display "Saved."
+             else
                Display.set_status display "Error saving file."
            | None ->
              Display.set_status display "No filename. Use: rocqtui <file>");
@@ -105,20 +94,54 @@ let () =
           Display.set_status display "";
           Editor.handle_key ch2 buf display session |> ignore
         end
-      end else
-        running := false
-    | Editor.Save_prompt ->
-      begin match Buffer.filename buf with
-      | Some _ ->
-        if Buffer.save buf then
-          Display.set_status display "Saved."
-        else
-          Display.set_status display "Error saving file."
-      | None ->
-        Display.set_status display "No filename. Use: rocqtui <file>"
-      end;
-      Display.refresh_all display
-    | Editor.Continue -> ()
+      end
+    end else
+      running := false
+  in
+  while !running do
+    (* Select on stdin + watched fds (rocqtop), 100ms timeout.
+       Watch callbacks fire for rocqtop data inside select_with_watches. *)
+    let timeout = if (match session with
+      | Some s -> Session.is_busy s | None -> false)
+      then 0.01  (* 10ms when actively stepping *)
+      else 0.1   (* 100ms when idle *)
+    in
+    let ready = Main_loop.select_with_watches [stdin_fd] timeout in
+    (* Poll session to process feedback and drive async stepping *)
+    (match session with
+     | Some s ->
+       if Session.poll s then needs_render := true
+     | None -> ());
+    (* Handle keyboard input *)
+    if List.mem stdin_fd ready then begin
+      let rec drain () =
+        let ch = Curses.getch () in
+        if ch <> -1 then begin
+          match Editor.handle_key ch buf display session with
+          | Editor.Quit -> handle_quit ()
+          | Editor.Save_prompt ->
+            (match Buffer.filename buf with
+             | Some _ ->
+               if Buffer.save buf then
+                 Display.set_status display "Saved."
+               else
+                 Display.set_status display "Error saving file."
+             | None ->
+               Display.set_status display "No filename. Use: rocqtui <file>");
+            Display.refresh_all display
+          | Editor.Continue -> ();
+          (* Drain any remaining buffered keys *)
+          if !running then drain ()
+        end
+      in
+      drain ();
+      needs_render := false  (* handle_key already rendered *)
+    end;
+    (* Re-render if async state changed *)
+    if !needs_render then begin
+      Editor.handle_key (-1) buf display session |> ignore;
+      needs_render := false
+    end
   done;
   Clipboard.disable_bracketed_paste ();
   (match session with Some s -> Session.quit s | None -> ());

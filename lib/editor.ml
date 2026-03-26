@@ -6,6 +6,26 @@ type action =
 let init_error_msg = ref ""
 let set_init_error msg = init_error_msg := msg
 
+(* Blocking getch that works with our select-based main loop.
+   Waits for stdin via select (which also dispatches watch callbacks)
+   then calls non-blocking getch. *)
+let blocking_getch () =
+  let rec wait () =
+    let ready = Main_loop.select_with_watches [Unix.stdin] 1.0 in
+    if List.mem Unix.stdin ready then
+      let ch = Curses.getch () in
+      if ch = -1 then wait () else ch
+    else wait ()
+  in
+  wait ()
+
+(* Peek getch with short timeout — used for escape sequence detection.
+   Returns -1 if no key within timeout_sec. *)
+let peek_getch timeout_sec =
+  let ready = Main_loop.select_with_watches [Unix.stdin] timeout_sec in
+  if List.mem Unix.stdin ready then Curses.getch ()
+  else -1
+
 (* Pane focus *)
 type pane = Script | Goals | Messages
 
@@ -317,6 +337,30 @@ let render_script display buf session =
     end
   done;
   render_sentence_regions display buf session spans;
+  (* Overlay pending region (go_to_cursor target) *)
+  (match session with
+   | Some sess ->
+     let vend = Session.verified_end sess in
+     let pend = Session.pending_end sess in
+     if pend > vend then begin
+       let byte_off = ref 0 in
+       for i = 0 to Buffer.line_count buf - 1 do
+         let line = Buffer.get_line buf i in
+         let line_len = String.length line in
+         let line_start = !byte_off in
+         let line_end = line_start + line_len in
+         let row = i - scroll in
+         if row >= 0 && row < rows
+            && line_end > vend && line_start < pend then begin
+           let s = max 0 (vend - line_start) in
+           let e = min line_len (pend - line_start) in
+           chgat_byte_range win line row hscroll cols s e
+             Curses.A.normal Highlight.color_default_p
+         end;
+         byte_off := line_end + 1
+       done
+     end
+   | None -> ());
   (* Helper to iterate over byte ranges that overlap a region *)
   let overlay_range range_start range_end attr color =
     let byte_off = ref 0 in
@@ -370,46 +414,29 @@ let cursor_byte_offset buf =
   done;
   !off + cc
 
-let cursor_in_verified ?(for_backspace=false) buf session =
+let cursor_in_target ?(for_backspace=false) buf session =
   match session with
   | None -> false
   | Some sess ->
-    let vend = Session.verified_end sess in
-    if vend = 0 then false
+    let tend = Session.pending_end sess in
+    if tend = 0 then false
     else
       let off = cursor_byte_offset buf in
-      if for_backspace then off <= vend
-      else off < vend
+      if for_backspace then off <= tend
+      else off < tend
 
-(* After undo/redo, rewind Rocq session if the edit touched the verified region *)
+(* After undo/redo, retract target if the edit is inside the target region *)
 let rewind_if_needed buf session =
   match session with
   | None -> ()
   | Some sess ->
-    let vend = Session.verified_end sess in
-    if vend = 0 then ()
+    let tend = Session.pending_end sess in
+    if tend = 0 then ()
     else begin
-      (* Compute cursor byte offset *)
-      let (cl, cc) = Buffer.cursor buf in
-      let off = ref 0 in
-      for i = 0 to cl - 1 do
-        off := !off + String.length (Buffer.get_line buf i) + 1
-      done;
-      let cursor_off = !off + cc in
-      if cursor_off < vend then begin
-        (* Rewind to before the cursor position *)
-        let keep_going = ref true in
-        while !keep_going do
-          let ve = Session.verified_end sess in
-          if ve <= cursor_off || ve = 0 then
-            keep_going := false
-          else begin
-            Session.step_backward sess;
-            if Session.verified_end sess = ve then
-              keep_going := false  (* no progress *)
-          end
-        done
-      end
+      let cursor_off = cursor_byte_offset buf in
+      if cursor_off < tend then
+        (* Undo put cursor inside the target region — retract via go_to_cursor *)
+        Session.go_to_cursor sess
     end
 
 (* Format a key code as a readable character *)
@@ -628,7 +655,7 @@ let pane_select_word ps lines_cache scroll row byte_col =
   end
 
 let insert_string buf session s =
-  if not (cursor_in_verified buf session) then
+  if not (cursor_in_target buf session) then
     String.iter (fun c ->
       if c = '\n' then Buffer.insert_newline buf
       else Buffer.insert_char buf c
@@ -659,7 +686,6 @@ let handle_key ch buf display session =
   if compose_handled then begin
     (match !compose_state with
      | Some cs when not (Compose.active cs) ->
-       Curses.timeout 100;  (* restore timeout *)
        render_all display buf session
      | _ -> ());
     Continue
@@ -686,11 +712,7 @@ let handle_key ch buf display session =
     end
     else if ch = 5 then begin (* ^E — go to cursor *)
       goals_scroll := 0; messages_scroll := 0;
-      (match session with
-       | Some s ->
-         Session.go_to_cursor s
-           ~render:(fun () -> render_all display buf session)
-       | None -> ());
+      (match session with Some s -> Session.go_to_cursor s | None -> ());
       Some Continue
     end
     else if ch = 27 then begin (* Escape *)
@@ -699,34 +721,28 @@ let handle_key ch buf display session =
         (match session with Some s -> Session.sync_options_and_refresh s | None -> ())
       end else begin
         (* Peek at next char to distinguish bracketed paste from compose *)
-        Curses.timeout 25;
-        let next = Curses.getch () in
-        Curses.timeout 100;
+        let next = peek_getch 0.025 in
         if next = Char.code '[' then begin
           (* Could be bracketed paste \e[200~ or other escape sequence *)
-          Curses.timeout 25;
-          let c1 = Curses.getch () in
-          let c2 = Curses.getch () in
-          let c3 = Curses.getch () in
-          let c4 = Curses.getch () in
-          Curses.timeout 100;
+          let c1 = peek_getch 0.025 in
+          let c2 = peek_getch 0.025 in
+          let c3 = peek_getch 0.025 in
+          let c4 = peek_getch 0.025 in
           if c1 = Char.code '2' && c2 = Char.code '0'
              && c3 = Char.code '0' && c4 = Char.code '~' then begin
             (* Bracketed paste — read until \e[201~ *)
             let paste_buf = Stdlib.Buffer.create 256 in
             let done_ = ref false in
             while not !done_ do
-              let c = Curses.getch () in
+              let c = blocking_getch () in
               if c = 27 then begin
                 (* Check for [201~ *)
-                Curses.timeout 25;
-                let n1 = Curses.getch () in
+                let n1 = peek_getch 0.025 in
                 if n1 = Char.code '[' then begin
-                  let n2 = Curses.getch () in
-                  let n3 = Curses.getch () in
-                  let n4 = Curses.getch () in
-                  let n5 = Curses.getch () in
-                  Curses.timeout 100;
+                  let n2 = peek_getch 0.025 in
+                  let n3 = peek_getch 0.025 in
+                  let n4 = peek_getch 0.025 in
+                  let n5 = peek_getch 0.025 in
                   if n2 = Char.code '2' && n3 = Char.code '0'
                      && n4 = Char.code '1' && n5 = Char.code '~' then
                     done_ := true
@@ -740,7 +756,6 @@ let handle_key ch buf display session =
                     if n5 >= 0 then Stdlib.Buffer.add_char paste_buf (Char.chr n5)
                   end
                 end else begin
-                  Curses.timeout 100;
                   Stdlib.Buffer.add_char paste_buf '\x1b';
                   if n1 >= 0 then Stdlib.Buffer.add_char paste_buf (Char.chr n1)
                 end
@@ -762,7 +777,6 @@ let handle_key ch buf display session =
           match !compose_state with
           | Some cs ->
             Compose.start cs;
-            Curses.timeout (-1);
             Display.set_status display (format_compose_status cs);
             Display.refresh_all display
           | None -> ()
@@ -771,18 +785,15 @@ let handle_key ch buf display session =
           match !compose_state with
           | Some cs ->
             Compose.start cs;
-            Curses.timeout (-1);
             let result = Compose.feed cs next in
             (match result with
              | Compose.Pending ->
                Display.set_status display (format_compose_status cs);
                Display.refresh_all display
              | Compose.Composed text ->
-               Curses.timeout 100;
                ignore (Buffer.delete_selection buf);
                insert_string buf session text
-             | Compose.NoMatch ->
-               Curses.timeout 100)
+             | Compose.NoMatch -> ())
           | None -> ()
         end
       end;
@@ -920,7 +931,6 @@ let handle_key ch buf display session =
               (match session with
                | Some s ->
                  Session.go_to_cursor s
-                   ~render:(fun () -> render_all display buf session)
                | None -> ())
             | None -> ()
           end
@@ -975,9 +985,7 @@ let handle_key ch buf display session =
       let _ = Curses.wnoutrefresh win in
       Display.set_status display "F1:Help  Press any key to close.";
       Display.refresh_all display;
-      Curses.timeout (-1);
-      ignore (Curses.getch ());
-      Curses.timeout 100;
+      ignore (blocking_getch ());
       Some Continue
     end
     else if ch = 1 then begin (* ^A — About query from any pane *)
@@ -1115,7 +1123,7 @@ let handle_key ch buf display session =
     end
     (* Clipboard *)
     else if ch = 11 then begin (* ^K — cut *)
-      if not (cursor_in_verified buf session) then begin
+      if not (cursor_in_target buf session) then begin
         (match session with Some s -> Session.clear_error s | None -> ());
         match Buffer.delete_selection buf with
         | Some text ->
@@ -1128,7 +1136,7 @@ let handle_key ch buf display session =
       Some Continue
     end
     else if ch = 21 then begin (* ^U — paste *)
-      if not (cursor_in_verified buf session) then begin
+      if not (cursor_in_target buf session) then begin
         (match session with Some s -> Session.clear_error s | None -> ());
         ignore (Buffer.delete_selection buf);
         if !clipboard <> "" then
@@ -1143,7 +1151,7 @@ let handle_key ch buf display session =
     (* Editing — clear error region on any edit *)
     else if ch = Curses.Key.dc then begin
       let clear_err () = match session with Some s -> Session.clear_error s | None -> () in
-      if not (cursor_in_verified buf session) then begin
+      if not (cursor_in_target buf session) then begin
         clear_err ();
         (match Buffer.delete_selection buf with
          | Some _ -> () | None -> Buffer.delete_char_at buf)
@@ -1151,7 +1159,7 @@ let handle_key ch buf display session =
       Some Continue
     end
     else if ch = Curses.Key.backspace || ch = 127 || ch = 8 then begin
-      if not (cursor_in_verified ~for_backspace:true buf session) then begin
+      if not (cursor_in_target ~for_backspace:true buf session) then begin
         (match session with Some s -> Session.clear_error s | None -> ());
         (match Buffer.delete_selection buf with
          | Some _ -> () | None -> Buffer.delete_char_before buf)
@@ -1159,7 +1167,7 @@ let handle_key ch buf display session =
       Some Continue
     end
     else if ch = 10 || ch = 13 || ch = Curses.Key.enter then begin
-      if not (cursor_in_verified buf session) then begin
+      if not (cursor_in_target buf session) then begin
         (match session with Some s -> Session.clear_error s | None -> ());
         ignore (Buffer.delete_selection buf);
         Buffer.insert_newline buf
@@ -1167,7 +1175,7 @@ let handle_key ch buf display session =
       Some Continue
     end
     else if ch >= 32 && ch < 127 then begin
-      if not (cursor_in_verified buf session) then begin
+      if not (cursor_in_target buf session) then begin
         (match session with Some s -> Session.clear_error s | None -> ());
         ignore (Buffer.delete_selection buf);
         Buffer.insert_char buf (Char.chr ch)
