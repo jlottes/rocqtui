@@ -41,12 +41,13 @@ let () =
       b
     | None -> Buffer.create ()
   in
-  (* Ignore SIGINT in our process — ^C is handled as a keypress
-     and forwarded to rocqtop via SIGINT *)
-  Sys.set_signal Sys.sigint Sys.Signal_ignore;
+  (* Ignore signals that conflict with keybindings *)
+  Sys.set_signal Sys.sigint Sys.Signal_ignore;   (* ^C — we forward to rocqtop *)
+  Sys.set_signal Sys.sigtstp Sys.Signal_ignore;  (* ^Z — we use for undo *)
   let display = Display.init () in
   Theme.apply theme;
   Editor.init_compose ();
+  Clipboard.enable_bracketed_paste ();
   (* Find project file args and start Rocq session *)
   let (_project_dir, project_args) = Project.find_args filename in
   let all_args = project_args @ extra_args in
@@ -119,5 +120,6 @@ let () =
       Display.refresh_all display
     | Editor.Continue -> ()
   done;
+  Clipboard.disable_bracketed_paste ();
   (match session with Some s -> Session.quit s | None -> ());
   Display.teardown display

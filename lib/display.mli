@@ -38,6 +38,22 @@ val script_dims : t -> int * int
     control focus indicators. *)
 val draw_chrome : ?goals_focused:bool -> ?messages_focused:bool -> t -> unit
 
+(** Pane identification for mouse events. *)
+type pane_id = PScript | PGoals | PMessages | PStatus | PNone
+              | PBorderV | PBorderH
+
+(** Determine which pane a screen coordinate falls in. *)
+val pane_at : t -> x:int -> y:int -> pane_id
+
+(** Read a mouse event. Returns (ok, x, y, bstate). *)
+val get_mouse : unit -> int * int * int * int
+
+(** Move the vertical split (script/goals border) to column [col]. *)
+val move_split_v : t -> int -> unit
+
+(** Move the horizontal split (goals/messages border) to row [row]. *)
+val move_split_h : t -> int -> unit
+
 (** Set the status bar text. *)
 val set_status : t -> string -> unit
 

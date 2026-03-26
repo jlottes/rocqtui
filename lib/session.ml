@@ -62,62 +62,48 @@ let poll t =
   Rocq_protocol.poll_feedback t.rocq;
   process_feedback t
 
-(* Rewind errored sentences: if any sentence has Error status,
-   rewind to just before it *)
-let rec rewind_errors t =
-  (* Find the first (oldest) errored sentence *)
-  let rev_sentences = List.rev t.sentences in
-  let errored = List.find_opt (fun s ->
-    match s.status with Error _ -> true | _ -> false
-  ) rev_sentences in
-  match errored with
+let verified_end t =
+  match t.sentences with
+  | s :: _ -> s.end_off
+  | [] -> 0
+
+(* Rewind errored sentences *)
+let rewind_errors t =
+  let rec find_and_drop = function
+    | [] -> None
+    | s :: rest ->
+      match s.status with
+      | Error _ ->
+        let target_id = match rest with
+          | s2 :: _ -> s2.state_id
+          | [] -> Stateid.initial
+        in
+        Some (rest, target_id, s)
+      | _ ->
+        match find_and_drop rest with
+        | Some (surviving, target_id, err_s) ->
+          Some (surviving, target_id, err_s)
+        | None -> None
+  in
+  match find_and_drop t.sentences with
   | None -> ()
-  | Some err_s ->
-    (* Rewind to the state before the errored sentence *)
-    let target_id = ref Stateid.initial in
-    let keep = ref [] in
-    List.iter (fun s ->
-      if Stateid.equal s.state_id err_s.state_id then ()
-      else begin
-        (* Keep sentences before the error *)
-        let dominated =
-          List.exists (fun k -> Stateid.equal k.state_id s.state_id) !keep in
-        if not dominated then begin
-          target_id := s.state_id;
-          keep := s :: !keep
-        end
-      end
-    ) rev_sentences;
-    (* Actually rewind: drop sentences from the error onward *)
-    let rec drop_from = function
-      | s :: rest when not (Stateid.equal s.state_id err_s.state_id) ->
-        s :: drop_from rest
-      | _ -> []  (* drop this and everything after *)
-    in
-    let surviving = drop_from rev_sentences in
-    t.sentences <- List.rev surviving;
-    t.tip <- !target_id;
-    (* Tell Rocq to rewind *)
-    let result = Rocq_protocol.edit_at t.rocq !target_id in
+  | Some (surviving, target_id, err_s) ->
+    t.err_range <- Some (err_s.start_off, err_s.end_off);
+    t.sentences <- surviving;
+    t.tip <- target_id;
+    let result = Rocq_protocol.edit_at t.rocq target_id in
     process_feedback t;
     (match result with
      | Interface.Good _ -> ()
      | Interface.Fail _ -> ());
     Buffer.move_to_byte_offset t.buf (verified_end t)
 
-and verified_end t =
-  match t.sentences with
-  | s :: _ -> s.end_off
-  | [] -> 0
-
-(* Format goals for display.
-   When [all_hyps] is false (RocqIDE style), only the first goal shows hypotheses. *)
+(* Format goals for display *)
 let format_goals ?(all_hyps=true) (gs : Interface.goals) =
   let ob = Stdlib.Buffer.create 256 in
   let fg = gs.Interface.fg_goals in
   let n = List.length fg in
   if n = 0 then begin
-    (* Check unfocused goals *)
     let bg = List.concat_map (fun (l, r) -> l @ r) gs.Interface.bg_goals in
     let shelved = gs.Interface.shelved_goals in
     let given_up = gs.Interface.given_up_goals in
@@ -166,7 +152,6 @@ let format_goals ?(all_hyps=true) (gs : Interface.goals) =
   Stdlib.Buffer.contents ob
 
 let refresh_goals t =
-  (* Sync printing options before fetching goals, like RocqIDE does *)
   let opts = Printopts.to_set_options () in
   ignore (Rocq_protocol.set_options t.rocq opts);
   process_feedback t;
@@ -181,6 +166,16 @@ let refresh_goals t =
     process_feedback t;
     t.msgs <- t.msgs @ [Pp.string_of_ppcmds msg];
     t.goals_cache <- None
+
+let rewind_to_state t safe_id =
+  let rec drop = function
+    | s :: rest when not (Stateid.equal s.state_id safe_id) -> drop rest
+    | remaining -> remaining
+  in
+  t.sentences <- drop t.sentences;
+  t.tip <- safe_id;
+  Buffer.move_to_byte_offset t.buf (verified_end t);
+  refresh_goals t
 
 (* Compute byte offset and line/bol info for the Add call *)
 let line_info_at buf byte_off =
@@ -198,9 +193,9 @@ let line_info_at buf byte_off =
   done;
   (!line + 1, !bol)
 
-let rec step_forward t =
+(* Internal step functions — don't clear messages *)
+let step_forward_inner t =
   t.err_range <- None;
-  t.msgs <- [];
   let text = Buffer.text t.buf in
   let start = verified_end t in
   match Sentence.find_end text ~start with
@@ -223,17 +218,17 @@ let rec step_forward t =
       t.tip <- new_id;
       Buffer.move_to_byte_offset t.buf end_off;
       refresh_goals t;
-      (* Check if feedback already marked it as error *)
       process_feedback t;
       rewind_errors t
     | Interface.Fail (safe_id, _, msg) ->
       t.msgs <- t.msgs @ [Pp.string_of_ppcmds msg];
       t.err_range <- Some (start, end_off);
-      rewind_to_state t safe_id
+      if not (Stateid.equal safe_id t.tip
+              || Stateid.equal safe_id Stateid.dummy) then
+        rewind_to_state t safe_id
 
-and step_backward t =
+let step_backward_inner t =
   t.err_range <- None;
-  t.msgs <- [];
   match t.sentences with
   | [] ->
     t.msgs <- t.msgs @ ["Already at the beginning."]
@@ -252,19 +247,20 @@ and step_backward t =
        refresh_goals t
      | Interface.Fail (safe_id, _, msg) ->
        t.msgs <- t.msgs @ ["Undo failed: " ^ Pp.string_of_ppcmds msg];
-       rewind_to_state t safe_id)
+       if not (Stateid.equal safe_id t.tip
+               || Stateid.equal safe_id Stateid.dummy) then
+         rewind_to_state t safe_id)
 
-and rewind_to_state t safe_id =
-  let rec drop = function
-    | s :: rest when not (Stateid.equal s.state_id safe_id) -> drop rest
-    | remaining -> remaining
-  in
-  t.sentences <- drop t.sentences;
-  t.tip <- safe_id;
-  Buffer.move_to_byte_offset t.buf (verified_end t);
-  refresh_goals t
+(* Public wrappers that clear messages *)
+let step_forward t =
+  t.msgs <- [];
+  step_forward_inner t
 
-let go_to_cursor t =
+let step_backward t =
+  t.msgs <- [];
+  step_backward_inner t
+
+let go_to_cursor ?render t =
   t.err_range <- None;
   t.msgs <- [];
   let (cur_line, cur_col) = Buffer.cursor t.buf in
@@ -287,9 +283,11 @@ let go_to_cursor t =
         | None -> keep_going := false
         | Some end_off ->
           let prev_end = verified_end t in
-          step_forward t;
+          step_forward_inner t;
+          (* Render between steps if callback provided *)
+          (match render with Some f -> f () | None -> ());
           if verified_end t = prev_end then
-            keep_going := false  (* no progress or error *)
+            keep_going := false
           else if end_off >= target then
             keep_going := false
       end
@@ -299,13 +297,16 @@ let go_to_cursor t =
     while !keep_going do
       match t.sentences with
       | s :: _ when s.start_off >= target ->
-        step_backward t;
-        if t.sentences = [] then keep_going := false
+        let n_before = List.length t.sentences in
+        step_backward_inner t;
+        let n_after = List.length t.sentences in
+        if t.sentences = [] || n_after >= n_before then
+          keep_going := false
       | _ -> keep_going := false
     done
   end
 
-(* Return per-sentence status info for rendering *)
+(* Per-sentence status info for rendering *)
 type sentence_display = {
   sd_start : int;
   sd_end : int;
@@ -318,6 +319,7 @@ let sentence_ranges t =
   ) t.sentences
 
 let error_range t = t.err_range
+let clear_error t = t.err_range <- None
 let goals_text ?(all_hyps=true) t =
   match t.goals_cache with
   | None -> None
@@ -325,9 +327,10 @@ let goals_text ?(all_hyps=true) t =
 let messages t = t.msgs
 let clear_messages t = t.msgs <- []
 
+let is_busy _ = false
+
 let query t phrase =
   t.msgs <- [];
-  (* Sync print options before query *)
   let opts = Printopts.to_set_options () in
   ignore (Rocq_protocol.set_options t.rocq opts);
   process_feedback t;

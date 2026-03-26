@@ -194,3 +194,148 @@ type t = {
 - `-R`/`-Q` paths from `_RocqProject` resolved to absolute paths
 - `_RocqProject`/`_CoqProject` auto-detected from cwd and file directory
 - CLI: `rocqtui [-theme NAME] [file.v] [-- rocq-args...]`
+
+---
+
+## Phase 8: Asynchronous Stepping  (REDO)
+
+**Goal**: Make sentence stepping non-blocking so the UI remains responsive
+and the Processing state is visible.
+
+Currently, `eval_call` blocks until rocqtop responds. This means:
+- No visual feedback while a sentence is being checked
+- `go_to_cursor` freezes the entire UI while stepping through many sentences
+- The `Processing` status (yellow) is never visible — it goes straight to `Verified`
+
+### Lessons learned
+
+First attempt used `Spawn.Sync` with `send_call`/`try_receive` and `has_data`
+via `Unix.select`. This failed because `Xml_parser` reads from an `in_channel`
+which has its own internal buffer — `Unix.select` on the raw fd doesn't see
+buffered data, causing responses to be missed.
+
+RocqIDE uses `Spawn.Async(GlibMainLoop)` which:
+1. Sets the fd to **non-blocking** mode
+2. GLib's main loop calls a **watch callback** when data arrives on the fd
+3. The watch callback reads and parses XML, invokes stored continuations
+4. Everything is single-threaded, event-driven via a task monad
+
+We will follow the same architecture, replacing GLib with our own curses
+`select`-based event loop.
+
+### Phase 8.1: Revert current async attempt
+
+Revert `rocq_protocol.ml` and `session.ml` to synchronous operation.
+Remove `send_call`, `try_receive`, `pending_call`, `submit_next_sentence`,
+`send_goals_async`, and the `async_state` machine. Restore the sync
+`step_forward_inner` and sync `go_to_cursor`.
+
+This gives us a clean baseline that works correctly (if blockingly).
+
+### Phase 8.2: Implement CursesMainLoop
+
+Create `lib/main_loop.ml` implementing the `Spawn.MainLoopModel` signature:
+
+```ocaml
+module CursesMainLoop : Spawn.MainLoopModel = struct
+  type async_chan = Unix.file_descr
+  type condition = [`IN | `ERR | `HUP]
+  type watch_id = int
+
+  (* Registry of watched fds and their callbacks *)
+  val add_watch : callback:(condition list -> bool) -> async_chan -> watch_id
+  val remove_watch : watch_id -> unit
+  val read_all : async_chan -> string
+  val async_chan_of_file_or_socket : Unix.file_descr -> async_chan
+end
+```
+
+`add_watch` registers an fd + callback in a mutable table.
+`read_all` reads all available bytes from the fd (non-blocking).
+
+### Phase 8.3: Switch to Spawn.Async
+
+Replace `Spawn.Sync` with `Spawn.Async(CursesMainLoop)` in `rocq_protocol.ml`:
+
+- Spawn gives us `process * out_channel` (no `in_channel` — data arrives
+  via the watch callback)
+- The watch callback receives raw bytes, feeds them to an `Xml_parser`
+- When a complete XML message is parsed, dispatch it:
+  - Feedback → accumulate in `pending_feedback`
+  - Response → invoke the stored continuation
+
+The `eval_call` pattern (from RocqIDE):
+1. Store `(call, continuation)` in `handle.waiting_for`
+2. `Xml_printer.print` sends the request
+3. Return immediately (control back to main loop)
+4. When response arrives via watch callback, invoke continuation
+
+### Phase 8.4: Task monad
+
+Implement RocqIDE's task monad for chaining async operations:
+
+```ocaml
+type 'a task = handle -> ('a -> unit) -> unit
+
+val return : 'a -> 'a task
+val bind : 'a task -> ('a -> 'b task) -> 'b task
+val seq : unit task -> 'a task -> 'a task
+val lift : (unit -> 'a) -> 'a task
+```
+
+This allows chaining: `add >>= fun id -> goals >>= fun gs -> ...`
+without callback nesting.
+
+### Phase 8.5: Async session operations
+
+Rewrite session operations as tasks:
+
+- `step_forward`: `set_options >>= add >>= goals` task chain
+- `step_backward`: `edit_at >>= goals` (can stay sync since rewind is fast)
+- `go_to_cursor`: sets a target, submits first sentence; the Add callback
+  checks if more steps are needed and submits the next one
+
+Each sentence goes through: send Add → Processing → response → Verified/Error.
+The main loop renders between each step.
+
+### Phase 8.6: Main loop integration
+
+Update `bin/main.ml` main loop:
+
+```
+while running do
+  (* Check all watched fds + stdin with select *)
+  let timeout = 100ms in
+  let ready_fds = Unix.select (watched_fds @ [stdin]) [] [] timeout in
+
+  (* Dispatch watched fd callbacks *)
+  List.iter dispatch_watch ready_fds;
+
+  (* Handle keyboard input *)
+  if stdin_ready then
+    let ch = Curses.getch () in
+    handle_key ch ...;
+
+  (* Render if state changed *)
+  if state_changed then render_all ()
+done
+```
+
+Key: `select` multiplexes stdin (keyboard) and rocqtop output in one call.
+Both are handled in the same iteration, no separate timeout poll needed.
+
+### Phase 8.7: Cancellation
+
+- Editing in unverified region while stepping: cancel `go_to_cursor`
+- `^C`: send SIGINT to rocqtop, cancel pending operations
+- New `step_forward` while already stepping: queue or ignore
+
+### Notes
+
+- `select(2)` is fine for 2-3 fds. No need for epoll/pselect.
+- `set_options` and `query` can remain synchronous — they're fast and
+  don't benefit from async (and `set_options` must complete before `goals`).
+- The `Xml_parser` must work with the raw bytes from `read_all`, not an
+  `in_channel`. This avoids the buffering issue from the first attempt.
+- `edit_at` (backward stepping) can stay synchronous since rewind is fast
+  and we need the result before proceeding.

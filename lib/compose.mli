@@ -20,3 +20,10 @@ val feed : t -> int -> result
 
 (** Whether we're currently in a compose sequence. *)
 val active : t -> bool
+
+(** Get the keys pressed so far in the current compose sequence. *)
+val keys_so_far : t -> int list
+
+(** Get completions reachable from the current cursor node.
+    Returns list of (remaining_keys, output_text). *)
+val completions : t -> (int list * string) list

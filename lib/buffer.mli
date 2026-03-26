@@ -54,6 +54,9 @@ val move_page_down : t -> int -> unit
 (** Move cursor to a byte offset in the buffer text. *)
 val move_to_byte_offset : t -> int -> unit
 
+(** Move cursor to a specific (line, byte_col) position. *)
+val move_to : t -> int -> int -> unit
+
 (** Selection. *)
 
 (** Set the selection anchor at the current cursor position. *)
@@ -70,6 +73,10 @@ val selected_text : t -> string option
 
 (** Delete the selected range and return the deleted text. *)
 val delete_selection : t -> string option
+
+(** Undo/redo. *)
+val undo : t -> unit
+val redo : t -> unit
 
 (** Editing. *)
 val insert_char : t -> char -> unit
@@ -88,6 +95,9 @@ val ensure_visible : t -> int -> unit
 
 (** Get the word (identifier) under the cursor. *)
 val word_at_cursor : t -> string option
+
+(** Select the word at the cursor. *)
+val select_word_at_cursor : t -> unit
 
 (** Get the full buffer text as a single string. *)
 val text : t -> string

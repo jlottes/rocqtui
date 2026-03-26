@@ -78,7 +78,6 @@ let drain_feedback t =
   fb
 
 let poll_feedback t =
-  (* Read any available feedback without blocking *)
   while has_data t do
     let xml = Xml_parser.parse t.xml_parser in
     match Xmlprotocol.msg_kind xml with
@@ -86,5 +85,5 @@ let poll_feedback t =
       let fb = Xmlprotocol.to_feedback xml in
       t.pending_feedback <- fb :: t.pending_feedback
     | Xmlprotocol.LtacDebugInfo -> ()
-    | Xmlprotocol.Other -> ()  (* unexpected, ignore *)
+    | Xmlprotocol.Other -> ()
   done

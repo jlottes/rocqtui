@@ -1,3 +1,12 @@
+type snapshot = {
+  s_lines : string array;
+  s_num_lines : int;
+  s_cur_line : int;
+  s_cur_col : int;
+}
+
+type edit_kind = Insert | Delete | Newline | Cut | Other
+
 type t = {
   mutable lines : string array;
   mutable num_lines : int;
@@ -10,7 +19,12 @@ type t = {
   mutable filename : string option;
   mutable cut_buf : string list;
   mutable anchor : (int * int) option;  (* (line, col) or None *)
+  mutable undo_stack : snapshot list;
+  mutable redo_stack : snapshot list;
+  mutable last_edit : edit_kind;
 }
+
+let max_undo = 500
 
 let create () =
   { lines = Array.make 64 "";
@@ -23,7 +37,10 @@ let create () =
     modified = false;
     filename = None;
     cut_buf = [];
-    anchor = None }
+    anchor = None;
+    undo_stack = [];
+    redo_stack = [];
+    last_edit = Other }
 
 let ensure_capacity buf n =
   if n > Array.length buf.lines then begin
@@ -32,6 +49,58 @@ let ensure_capacity buf n =
     Array.blit buf.lines 0 new_arr 0 buf.num_lines;
     buf.lines <- new_arr
   end
+
+let take_snapshot buf =
+  { s_lines = Array.sub buf.lines 0 buf.num_lines;
+    s_num_lines = buf.num_lines;
+    s_cur_line = buf.cur_line;
+    s_cur_col = buf.cur_col }
+
+let restore_snapshot buf snap =
+  let n = snap.s_num_lines in
+  ensure_capacity buf n;
+  Array.blit snap.s_lines 0 buf.lines 0 n;
+  for i = n to buf.num_lines - 1 do buf.lines.(i) <- "" done;
+  buf.num_lines <- n;
+  buf.cur_line <- snap.s_cur_line;
+  buf.cur_col <- snap.s_cur_col
+
+(* Push an undo snapshot. Called before an edit that starts a new undo group. *)
+let push_undo buf kind =
+  (* Coalesce consecutive inserts or consecutive deletes *)
+  let coalesce = match buf.last_edit, kind with
+    | Insert, Insert -> true
+    | Delete, Delete -> true
+    | _ -> false
+  in
+  if not coalesce then begin
+    let snap = take_snapshot buf in
+    buf.undo_stack <- snap :: (if List.length buf.undo_stack >= max_undo
+      then List.filteri (fun i _ -> i < max_undo - 1) buf.undo_stack
+      else buf.undo_stack);
+    buf.redo_stack <- []
+  end;
+  buf.last_edit <- kind
+
+let undo buf =
+  match buf.undo_stack with
+  | [] -> ()
+  | snap :: rest ->
+    buf.redo_stack <- take_snapshot buf :: buf.redo_stack;
+    restore_snapshot buf snap;
+    buf.undo_stack <- rest;
+    buf.last_edit <- Other;
+    buf.modified <- true
+
+let redo buf =
+  match buf.redo_stack with
+  | [] -> ()
+  | snap :: rest ->
+    buf.undo_stack <- take_snapshot buf :: buf.undo_stack;
+    restore_snapshot buf snap;
+    buf.redo_stack <- rest;
+    buf.last_edit <- Other;
+    buf.modified <- true
 
 let update_desired_vcol buf =
   buf.desired_vcol <- Utf8.byte_to_col buf.lines.(buf.cur_line) buf.cur_col
@@ -163,6 +232,11 @@ let move_to_byte_offset buf offset =
   buf.cur_col <- min (offset - !found_off) (String.length buf.lines.(!found_line));
   update_desired_vcol buf
 
+let move_to buf line col =
+  buf.cur_line <- max 0 (min line (buf.num_lines - 1));
+  buf.cur_col <- min col (String.length buf.lines.(buf.cur_line));
+  update_desired_vcol buf
+
 let text buf =
   let parts = Array.to_list (Array.sub buf.lines 0 buf.num_lines) in
   String.concat "\n" parts ^ "\n"
@@ -201,6 +275,7 @@ let delete_selection buf =
   match selection buf with
   | None -> None
   | Some (s, e) ->
+    push_undo buf Other;
     let t = text buf in
     let deleted = String.sub t s (e - s) in
     (* Rebuild lines from the text with the selection removed *)
@@ -220,6 +295,7 @@ let delete_selection buf =
     Some deleted
 
 let insert_char buf ch =
+  push_undo buf Insert;
   let line = buf.lines.(buf.cur_line) in
   let len = String.length line in
   let col = min buf.cur_col len in
@@ -233,6 +309,7 @@ let insert_char buf ch =
   buf.modified <- true
 
 let insert_newline buf =
+  push_undo buf Newline;
   let line = buf.lines.(buf.cur_line) in
   let len = String.length line in
   let col = min buf.cur_col len in
@@ -251,6 +328,7 @@ let insert_newline buf =
   buf.modified <- true
 
 let delete_char_before buf =
+  push_undo buf Delete;
   if buf.cur_col > 0 then begin
     let line = buf.lines.(buf.cur_line) in
     let len = String.length line in
@@ -280,6 +358,7 @@ let delete_char_before buf =
   end
 
 let delete_char_at buf =
+  push_undo buf Delete;
   let line = buf.lines.(buf.cur_line) in
   let len = String.length line in
   let col = min buf.cur_col len in
@@ -301,6 +380,9 @@ let delete_char_at buf =
   end
 
 let cut_line buf =
+  (* Reset cut buffer if last action wasn't also a cut *)
+  if buf.last_edit <> Cut then buf.cut_buf <- [];
+  push_undo buf Cut;
   let line = buf.lines.(buf.cur_line) in
   buf.cut_buf <- buf.cut_buf @ [line];
   if buf.num_lines > 1 then begin
@@ -322,6 +404,7 @@ let paste buf =
   match buf.cut_buf with
   | [] -> ()
   | lines ->
+    push_undo buf Other;
     let n = List.length lines in
     ensure_capacity buf (buf.num_lines + n);
     (* Shift lines down to make room at current line *)
@@ -333,8 +416,7 @@ let paste buf =
     ) lines;
     buf.num_lines <- buf.num_lines + n;
     clamp_col buf;
-    buf.modified <- true;
-    buf.cut_buf <- []
+    buf.modified <- true
 
 let is_ident_char c =
   (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
@@ -358,6 +440,25 @@ let word_at_cursor buf =
     let word = if String.length word > 0 && word.[String.length word - 1] = '.'
       then String.sub word 0 (String.length word - 1) else word in
     if word = "" then None else Some word
+  end
+
+let select_word_at_cursor buf =
+  let line = buf.lines.(buf.cur_line) in
+  let len = String.length line in
+  let col = min buf.cur_col len in
+  if col < len && is_ident_char line.[col] then begin
+    let l = ref col in
+    while !l > 0 && is_ident_char line.[!l - 1] do decr l done;
+    let r = ref col in
+    while !r < len && is_ident_char line.[!r] do incr r done;
+    (* Trim trailing dot *)
+    if !r > !l && line.[!r - 1] = '.' then decr r;
+    if !r > !l then begin
+      buf.cur_col <- !l;
+      buf.anchor <- Some (buf.cur_line, !l);
+      buf.cur_col <- !r;
+      update_desired_vcol buf
+    end
   end
 
 let ensure_visible buf visible_rows =

@@ -2,15 +2,13 @@
 
 type t
 
-(** Spawn coqidetop and establish the XML protocol connection.
-    Optional [args] are passed to coqidetop (e.g. ["-R"; "dir"; "Lib"]). *)
+(** Spawn coqidetop and establish the XML protocol connection. *)
 val spawn : ?prog:string -> ?args:string list -> unit -> t
 
 (** Send the Init call. Returns the initial state id. *)
 val init : t -> string option -> Stateid.t
 
-(** Add a sentence. Returns (new_state_id, closing_info).
-    [add t ~state_id ~edit_id ~verbose ~bp ~line ~bol phrase] *)
+(** Add a sentence. *)
 val add : t -> state_id:Stateid.t -> edit_id:int ->
   verbose:bool -> bp:int -> line:int -> bol:int ->
   string -> Interface.add_rty Interface.value

@@ -14,19 +14,25 @@ type sentence_display = {
 val create : ?prog:string -> ?args:string list -> Buffer.t -> t
 val step_forward : t -> unit
 val step_backward : t -> unit
-val go_to_cursor : t -> unit
+
+(** Go to cursor. [~render] is called between steps to update the display. *)
+val go_to_cursor : ?render:(unit -> unit) -> t -> unit
 
 (** Poll for asynchronous feedback from Rocq (non-blocking). *)
 val poll : t -> unit
 
 val verified_end : t -> int
 val error_range : t -> (int * int) option
+val clear_error : t -> unit
 val goals_text : ?all_hyps:bool -> t -> string option
 val messages : t -> string list
 val clear_messages : t -> unit
 
 (** Per-sentence status info for rendering, in document order. *)
 val sentence_ranges : t -> sentence_display list
+
+(** Whether an async call is in flight. *)
+val is_busy : t -> bool
 
 (** Get the PID of the coqidetop process (for sending signals). *)
 val pid : t -> int

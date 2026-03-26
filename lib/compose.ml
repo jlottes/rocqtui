@@ -16,6 +16,7 @@ type t = {
   root : trie_node;
   mutable cursor : trie_node;
   mutable is_active : bool;
+  mutable pressed : int list;  (* keys pressed so far, in order *)
 }
 
 let new_node () = { children = []; output = None }
@@ -191,13 +192,15 @@ let load () =
   let home = try Sys.getenv "HOME" with Not_found -> "." in
   let user_path = Filename.concat home ".XCompose" in
   load_file root user_path;
-  { root; cursor = root; is_active = false }
+  { root; cursor = root; is_active = false; pressed = [] }
 
 let start t =
   t.cursor <- t.root;
-  t.is_active <- true
+  t.is_active <- true;
+  t.pressed <- []
 
 let feed t key =
+  t.pressed <- t.pressed @ [key];
   match find_child t.cursor key with
   | Some child ->
     t.cursor <- child;
@@ -221,3 +224,19 @@ let feed t key =
     | None -> NoMatch
 
 let active t = t.is_active
+
+let keys_so_far t = t.pressed
+
+(* Collect all completions reachable from a node, with remaining key paths *)
+let completions t =
+  let result = ref [] in
+  let rec walk node path =
+    (match node.output with
+     | Some text -> result := (List.rev path, text) :: !result
+     | None -> ());
+    List.iter (fun (key, child) ->
+      walk child (key :: path)
+    ) node.children
+  in
+  walk t.cursor [];
+  List.rev !result

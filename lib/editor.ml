@@ -27,6 +27,77 @@ let compose_state : Compose.t option ref = ref None
 let init_compose () =
   compose_state := Some (Compose.load ())
 
+(* When true, skip ensure_visible on next render (mouse scroll) *)
+let suppress_ensure_visible = ref false
+
+(* Drag state for resizing pane borders *)
+type drag_mode = NoDrag | DragV | DragH
+let dragging = ref NoDrag
+
+(* Mouse selection drag state *)
+let mouse_selecting = ref false
+
+(* Right pane selection: stored as (start_line, start_col, end_line, end_col)
+   in wrapped-line coordinates *)
+type pane_selection = {
+  mutable ps_anchor_line : int;
+  mutable ps_anchor_col : int;
+  mutable ps_cursor_line : int;
+  mutable ps_cursor_col : int;
+  mutable ps_active : bool;
+}
+
+let goals_sel = { ps_anchor_line = 0; ps_anchor_col = 0;
+                  ps_cursor_line = 0; ps_cursor_col = 0; ps_active = false }
+let messages_sel = { ps_anchor_line = 0; ps_anchor_col = 0;
+                     ps_cursor_line = 0; ps_cursor_col = 0; ps_active = false }
+
+(* The last rendered wrapped lines for each pane, for extracting selection text *)
+let goals_lines_cache : string list ref = ref []
+let messages_lines_cache : string list ref = ref []
+
+let clear_pane_selection ps =
+  ps.ps_active <- false
+
+let pane_selection_text ps lines_cache scroll =
+  if not ps.ps_active then None
+  else begin
+    let lines = !lines_cache in
+    let n = List.length lines in
+    let al = ps.ps_anchor_line + scroll in
+    let ac = ps.ps_anchor_col in
+    let cl = ps.ps_cursor_line + scroll in
+    let cc = ps.ps_cursor_col in
+    let (sl, sc, el, ec) =
+      if al < cl || (al = cl && ac <= cc) then (al, ac, cl, cc)
+      else (cl, cc, al, ac)
+    in
+    let buf = Stdlib.Buffer.create 128 in
+    for i = sl to min el (n - 1) do
+      let line = List.nth lines i in
+      let len = String.length line in
+      let s = if i = sl then min sc len else 0 in
+      let e = if i = el then min ec len else len in
+      if e > s then
+        Stdlib.Buffer.add_string buf (String.sub line s (e - s));
+      if i < el then Stdlib.Buffer.add_char buf '\n'
+    done;
+    let text = Stdlib.Buffer.contents buf in
+    if text = "" then None else Some text
+  end
+
+let [@warning "-32"] select_all_pane ps lines_cache scroll =
+  let lines = !lines_cache in
+  let n = List.length lines in
+  if n = 0 then ()
+  else begin
+    ps.ps_anchor_line <- 0 - scroll;
+    ps.ps_anchor_col <- 0;
+    ps.ps_cursor_line <- (n - 1) - scroll;
+    ps.ps_cursor_col <- String.length (List.nth lines (n - 1));
+    ps.ps_active <- true
+  end
+
 (* Print options mode *)
 let in_options_mode = ref false
 
@@ -128,12 +199,13 @@ let wrap_lines width lines_list =
   ) lines_list;
   List.rev !result
 
-(* Render a scrollable text pane *)
-let render_text_pane win scroll_ref lines_list =
+(* Render a scrollable text pane with optional selection highlight *)
+let render_text_pane ?sel ?lines_cache win scroll_ref lines_list =
   let _ = Curses.werase win in
   let (rows, cols) = Curses.getmaxyx win in
   Curses.scrollok win false;
   let wrapped = wrap_lines cols lines_list in
+  (match lines_cache with Some r -> r := wrapped | None -> ());
   let n = List.length wrapped in
   scroll_ref := max 0 (min !scroll_ref (max 0 (n - rows)));
   List.iteri (fun i line ->
@@ -141,6 +213,34 @@ let render_text_pane win scroll_ref lines_list =
     if row >= 0 && row < rows then
       ignore (Curses.mvwaddstr win row 1 line)
   ) wrapped;
+  (* Highlight selection if any *)
+  (match sel with
+   | Some ps when ps.ps_active ->
+     let scroll = !scroll_ref in
+     let al = ps.ps_anchor_line + scroll in
+     let ac = ps.ps_anchor_col in
+     let cl = ps.ps_cursor_line + scroll in
+     let cc = ps.ps_cursor_col in
+     let (sl, sc, el, ec) =
+       if al < cl || (al = cl && ac <= cc) then (al, ac, cl, cc)
+       else (cl, cc, al, ac)
+     in
+     for i = sl to min el (n - 1) do
+       let row = i - scroll in
+       if row >= 0 && row < rows then begin
+         let line = List.nth wrapped i in
+         let len = String.length line in
+         let s = if i = sl then min sc len else 0 in
+         let e = if i = el then min ec len else len in
+         let s_col = Utf8.byte_to_col line s + 1 in (* +1 for margin *)
+         let e_col = Utf8.byte_to_col line e + 1 in
+         let w = e_col - s_col in
+         if w > 0 && s_col < cols then
+           Curses.mvwchgat win row s_col (min w (cols - s_col))
+             Curses.A.normal Theme.pair_selection
+       end
+     done
+   | _ -> ());
   Curses.scrollok win true;
   let _ = Curses.wnoutrefresh win in
   ()
@@ -157,7 +257,8 @@ let render_goals display session =
       | None -> ["No proof in progress."]
       | Some text -> String.split_on_char '\n' text
   in
-  render_text_pane win goals_scroll lines
+  render_text_pane ~sel:goals_sel ~lines_cache:goals_lines_cache
+    win goals_scroll lines
 
 let render_messages display session =
   let win = Display.messages_win display in
@@ -169,7 +270,8 @@ let render_messages display session =
         String.split_on_char '\n' msg
       ) (Session.messages sess)
   in
-  render_text_pane win messages_scroll lines
+  render_text_pane ~sel:messages_sel ~lines_cache:messages_lines_cache
+    win messages_scroll lines
 
 (* Extract the visible substring of a line given horizontal scroll.
    Returns (display_string, byte_offset_of_first_visible_char). *)
@@ -186,7 +288,10 @@ let visible_portion line hscroll cols =
 let render_script display buf session =
   let win = Display.script_win display in
   let (rows, cols) = Display.script_dims display in
-  Buffer.ensure_visible_h buf rows cols;
+  if !suppress_ensure_visible then
+    suppress_ensure_visible := false
+  else
+    Buffer.ensure_visible_h buf rows cols;
   let scroll = Buffer.scroll_top buf in
   let hscroll = Buffer.hscroll buf in
   let _ = Curses.werase win in
@@ -244,26 +349,111 @@ let render_script display buf session =
      overlay_range sel_start sel_end Curses.A.normal Theme.pair_selection
    | None -> ());
   let (cl, cc) = Buffer.cursor buf in
-  let line = Buffer.get_line buf cl in
   let cursor_row = cl - scroll in
-  let cursor_col = min (Utf8.byte_to_col line cc - hscroll) (cols - 1) in
-  let cursor_col = max 0 cursor_col in
-  Display.place_cursor display ~row:cursor_row ~col:cursor_col
+  if cursor_row >= 0 && cursor_row < rows then begin
+    let line = Buffer.get_line buf cl in
+    let cursor_col = min (Utf8.byte_to_col line cc - hscroll) (cols - 1) in
+    let cursor_col = max 0 cursor_col in
+    Display.place_cursor display ~row:cursor_row ~col:cursor_col
+  end else
+    (* Cursor is off-screen — place it at 0,0 but it will be hidden by curs_set *)
+    Display.place_cursor display ~row:0 ~col:0
 
-let cursor_in_verified buf session =
+(* Check if cursor is in the verified region.
+   [for_backspace] uses <= to also block editing at the boundary
+   (since backspace reaches backward into verified text). *)
+let cursor_byte_offset buf =
+  let (cl, cc) = Buffer.cursor buf in
+  let off = ref 0 in
+  for i = 0 to cl - 1 do
+    off := !off + String.length (Buffer.get_line buf i) + 1
+  done;
+  !off + cc
+
+let cursor_in_verified ?(for_backspace=false) buf session =
   match session with
   | None -> false
   | Some sess ->
     let vend = Session.verified_end sess in
     if vend = 0 then false
+    else
+      let off = cursor_byte_offset buf in
+      if for_backspace then off <= vend
+      else off < vend
+
+(* After undo/redo, rewind Rocq session if the edit touched the verified region *)
+let rewind_if_needed buf session =
+  match session with
+  | None -> ()
+  | Some sess ->
+    let vend = Session.verified_end sess in
+    if vend = 0 then ()
     else begin
+      (* Compute cursor byte offset *)
       let (cl, cc) = Buffer.cursor buf in
       let off = ref 0 in
       for i = 0 to cl - 1 do
         off := !off + String.length (Buffer.get_line buf i) + 1
       done;
-      !off + cc < vend
+      let cursor_off = !off + cc in
+      if cursor_off < vend then begin
+        (* Rewind to before the cursor position *)
+        let keep_going = ref true in
+        while !keep_going do
+          let ve = Session.verified_end sess in
+          if ve <= cursor_off || ve = 0 then
+            keep_going := false
+          else begin
+            Session.step_backward sess;
+            if Session.verified_end sess = ve then
+              keep_going := false  (* no progress *)
+          end
+        done
+      end
     end
+
+(* Format a key code as a readable character *)
+let key_to_string k =
+  if k = 27 then "␛"  (* Compose/Escape *)
+  else if k >= 32 && k < 127 then String.make 1 (Char.chr k)
+  else Printf.sprintf "<%d>" k
+
+let format_compose_status cs =
+  let pressed = Compose.keys_so_far cs in
+  let completions = Compose.completions cs in
+  let (_, status_cols) = Curses.getmaxyx (Curses.stdscr ()) in
+  let avail = status_cols - 2 in
+  let buf = Stdlib.Buffer.create 64 in
+  let col = ref 0 in
+  let truncated = ref false in
+  let n = ref 0 in
+  List.iter (fun (remaining, output) ->
+    if !truncated then ()
+    else begin
+      let entry_buf = Stdlib.Buffer.create 16 in
+      List.iter (fun k ->
+        Stdlib.Buffer.add_string entry_buf (key_to_string k)
+      ) pressed;
+      List.iter (fun k ->
+        Stdlib.Buffer.add_string entry_buf (key_to_string k)
+      ) remaining;
+      Stdlib.Buffer.add_char entry_buf ':';
+      Stdlib.Buffer.add_string entry_buf output;
+      let entry = Stdlib.Buffer.contents entry_buf in
+      let entry_w = Utf8.string_width entry in
+      let sep = if !n > 0 then 1 else 0 in
+      if !col + sep + entry_w + 3 > avail && !n > 0 then begin
+        Stdlib.Buffer.add_string buf " …";
+        truncated := true
+      end else begin
+        if !n > 0 then Stdlib.Buffer.add_char buf ' ';
+        Stdlib.Buffer.add_string buf entry;
+        col := !col + sep + entry_w;
+        incr n
+      end
+    end
+  ) completions;
+  Stdlib.Buffer.contents buf
 
 let render_options_bar display =
   let parts = List.map (fun (e : Printopts.entry) ->
@@ -278,7 +468,10 @@ let render_options_bar display =
 let update_status display buf session =
   if !in_options_mode then
     render_options_bar display
-  else begin
+  else match !compose_state with
+  | Some cs when Compose.active cs ->
+    Display.set_status display (format_compose_status cs)
+  | _ -> begin
     let (cl, cc) = Buffer.cursor buf in
     let line = Buffer.get_line buf cl in
     let vcol = Utf8.byte_to_col line cc in
@@ -300,9 +493,9 @@ let update_status display buf session =
         else ""
     in
     let focus_info = match !focused_pane with
-      | Script -> "  ^O:Save ^X:Exit ^T:Opts ^W:Pane"
-      | Goals -> "  [Goals] ^W:Pane"
-      | Messages -> "  [Messages] ^W:Pane"
+      | Script -> "  F1:Help ^O:Save ^X:Exit"
+      | Goals -> "  [Goals] ^W:Pane F1:Help"
+      | Messages -> "  [Messages] ^W:Pane F1:Help"
     in
     (* Horizontal scroll indicator *)
     let hscroll_ind =
@@ -347,9 +540,92 @@ let render_all display buf session =
   render_goals display session;
   render_messages display session;
   update_status display buf session;
-  (* Hide cursor when not in Script pane *)
-  ignore (Curses.curs_set (if !focused_pane = Script then 1 else 0));
+  (* Hide cursor when not in Script pane or when cursor is scrolled off-screen *)
+  let cursor_visible =
+    if !focused_pane <> Script then false
+    else
+      let (cl, _) = Buffer.cursor buf in
+      let scroll = Buffer.scroll_top buf in
+      let (rows, _) = Display.script_dims display in
+      cl >= scroll && cl < scroll + rows
+  in
+  ignore (Curses.curs_set (if cursor_visible then 1 else 0));
   Display.refresh_all display
+
+(* Convert screen coordinates to buffer (line, byte_col) position.
+   Returns None if the coordinates are outside the script pane content. *)
+let screen_to_buffer_pos display buf ~x ~y =
+  let (rows, cols) = Display.script_dims display in
+  let scroll = Buffer.scroll_top buf in
+  let hscroll = Buffer.hscroll buf in
+  (* x,y are absolute screen coords; script pane starts at (0,0) *)
+  let row = y in  (* script pane starts at row 0 *)
+  let col = x in  (* script pane starts at col 0 *)
+  if row < 0 || row >= rows || col < 0 || col >= cols then None
+  else begin
+    let line_idx = scroll + row in
+    if line_idx >= Buffer.line_count buf then None
+    else begin
+      let line = Buffer.get_line buf line_idx in
+      let vcol = hscroll + col in
+      let byte_col = Utf8.col_to_byte line vcol in
+      Some (line_idx, byte_col)
+    end
+  end
+
+(* Convert screen coords to a right-pane (line, byte_col) relative to the pane *)
+let screen_to_pane_pos display ~x ~y pane_id =
+  let win = match pane_id with
+    | `Goals -> Display.goals_win display
+    | `Messages -> Display.messages_win display
+  in
+  let (begy, begx) = Curses.getbegyx win in
+  let (rows, cols) = Curses.getmaxyx win in
+  let row = y - begy in
+  let col = x - begx - 1 in (* -1 for margin *)
+  if row < 0 || row >= rows || col < 0 || col >= cols then None
+  else begin
+    let scroll_ref, lines_cache = match pane_id with
+      | `Goals -> (goals_scroll, goals_lines_cache)
+      | `Messages -> (messages_scroll, messages_lines_cache)
+    in
+    let line_idx = !scroll_ref + row in
+    let lines = !lines_cache in
+    let n = List.length lines in
+    if line_idx >= n then None
+    else begin
+      let line = List.nth lines line_idx in
+      let byte_col = Utf8.col_to_byte line (max 0 col) in
+      Some (row, byte_col)  (* row is relative to visible area *)
+    end
+  end
+
+(* Select word at position in a pane's cached lines *)
+let pane_select_word ps lines_cache scroll row byte_col =
+  let lines = !lines_cache in
+  let line_idx = scroll + row in
+  if line_idx >= List.length lines then ()
+  else begin
+    let line = List.nth lines line_idx in
+    let len = String.length line in
+    let col = min byte_col len in
+    let is_id c = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+                  || (c >= '0' && c <= '9') || c = '_' || c = '\'' || c = '.' in
+    if col < len && is_id line.[col] then begin
+      let l = ref col in
+      while !l > 0 && is_id line.[!l - 1] do decr l done;
+      let r = ref col in
+      while !r < len && is_id line.[!r] do incr r done;
+      if !r > !l && line.[!r - 1] = '.' then decr r;
+      if !r > !l then begin
+        ps.ps_anchor_line <- row;
+        ps.ps_anchor_col <- !l;
+        ps.ps_cursor_line <- row;
+        ps.ps_cursor_col <- !r;
+        ps.ps_active <- true
+      end
+    end
+  end
 
 let insert_string buf session s =
   if not (cursor_in_verified buf session) then
@@ -365,7 +641,7 @@ let handle_key ch buf display session =
       let result = Compose.feed cs ch in
       (match result with
        | Compose.Pending ->
-         Display.set_status display "Compose...";
+         Display.set_status display (format_compose_status cs);
          Display.refresh_all display
        | Compose.Composed text ->
          ignore (Buffer.delete_selection buf);
@@ -374,7 +650,7 @@ let handle_key ch buf display session =
          (* If the key that broke compose was Escape, restart compose *)
          if ch = 27 then begin
            Compose.start cs;
-           Display.set_status display "Compose:";
+           Display.set_status display (format_compose_status cs);
            Display.refresh_all display
          end);
       true
@@ -410,7 +686,11 @@ let handle_key ch buf display session =
     end
     else if ch = 5 then begin (* ^E — go to cursor *)
       goals_scroll := 0; messages_scroll := 0;
-      (match session with Some s -> Session.go_to_cursor s | None -> ());
+      (match session with
+       | Some s ->
+         Session.go_to_cursor s
+           ~render:(fun () -> render_all display buf session)
+       | None -> ());
       Some Continue
     end
     else if ch = 27 then begin (* Escape *)
@@ -418,13 +698,93 @@ let handle_key ch buf display session =
         in_options_mode := false;
         (match session with Some s -> Session.sync_options_and_refresh s | None -> ())
       end else begin
-        match !compose_state with
-        | Some cs ->
-          Compose.start cs;
-          Curses.timeout (-1);
-          Display.set_status display "Compose:";
-          Display.refresh_all display
-        | None -> ()
+        (* Peek at next char to distinguish bracketed paste from compose *)
+        Curses.timeout 25;
+        let next = Curses.getch () in
+        Curses.timeout 100;
+        if next = Char.code '[' then begin
+          (* Could be bracketed paste \e[200~ or other escape sequence *)
+          Curses.timeout 25;
+          let c1 = Curses.getch () in
+          let c2 = Curses.getch () in
+          let c3 = Curses.getch () in
+          let c4 = Curses.getch () in
+          Curses.timeout 100;
+          if c1 = Char.code '2' && c2 = Char.code '0'
+             && c3 = Char.code '0' && c4 = Char.code '~' then begin
+            (* Bracketed paste — read until \e[201~ *)
+            let paste_buf = Stdlib.Buffer.create 256 in
+            let done_ = ref false in
+            while not !done_ do
+              let c = Curses.getch () in
+              if c = 27 then begin
+                (* Check for [201~ *)
+                Curses.timeout 25;
+                let n1 = Curses.getch () in
+                if n1 = Char.code '[' then begin
+                  let n2 = Curses.getch () in
+                  let n3 = Curses.getch () in
+                  let n4 = Curses.getch () in
+                  let n5 = Curses.getch () in
+                  Curses.timeout 100;
+                  if n2 = Char.code '2' && n3 = Char.code '0'
+                     && n4 = Char.code '1' && n5 = Char.code '~' then
+                    done_ := true
+                  else begin
+                    (* Not end marker — add chars to paste buffer *)
+                    Stdlib.Buffer.add_char paste_buf '\x1b';
+                    Stdlib.Buffer.add_char paste_buf '[';
+                    if n2 >= 0 then Stdlib.Buffer.add_char paste_buf (Char.chr n2);
+                    if n3 >= 0 then Stdlib.Buffer.add_char paste_buf (Char.chr n3);
+                    if n4 >= 0 then Stdlib.Buffer.add_char paste_buf (Char.chr n4);
+                    if n5 >= 0 then Stdlib.Buffer.add_char paste_buf (Char.chr n5)
+                  end
+                end else begin
+                  Curses.timeout 100;
+                  Stdlib.Buffer.add_char paste_buf '\x1b';
+                  if n1 >= 0 then Stdlib.Buffer.add_char paste_buf (Char.chr n1)
+                end
+              end else if c >= 0 then
+                Stdlib.Buffer.add_char paste_buf (Char.chr c)
+              else
+                done_ := true  (* timeout, shouldn't happen *)
+            done;
+            let text = Stdlib.Buffer.contents paste_buf in
+            if text <> "" then begin
+              ignore (Buffer.delete_selection buf);
+              insert_string buf session text;
+              clipboard := text
+            end
+          end
+          (* else: some other escape sequence, ignore *)
+        end else if next = -1 then begin
+          (* Plain Escape with no following char — start compose *)
+          match !compose_state with
+          | Some cs ->
+            Compose.start cs;
+            Curses.timeout (-1);
+            Display.set_status display (format_compose_status cs);
+            Display.refresh_all display
+          | None -> ()
+        end else begin
+          (* Escape + some other char — start compose and feed the char *)
+          match !compose_state with
+          | Some cs ->
+            Compose.start cs;
+            Curses.timeout (-1);
+            let result = Compose.feed cs next in
+            (match result with
+             | Compose.Pending ->
+               Display.set_status display (format_compose_status cs);
+               Display.refresh_all display
+             | Compose.Composed text ->
+               Curses.timeout 100;
+               ignore (Buffer.delete_selection buf);
+               insert_string buf session text
+             | Compose.NoMatch ->
+               Curses.timeout 100)
+          | None -> ()
+        end
       end;
       Some Continue
     end
@@ -453,22 +813,222 @@ let handle_key ch buf display session =
     else if ch = Curses.Key.resize then begin
       Display.resize display; Some Continue
     end
-    else if ch = 1 then begin (* ^A — About *)
-      let subject = match Buffer.selected_text buf with
-        | Some text -> Some text | None -> Buffer.word_at_cursor buf in
+    else if ch = Curses.Key.mouse then begin
+      let (_ok, x, y, bstate) = Display.get_mouse () in
+      let b1_release = bstate land 0x1 <> 0 in
+      let b1_press = bstate land 0x2 <> 0 in
+      let b1_click = bstate land 0x4 <> 0 in
+      let b1_dblclick = bstate land 0x8 <> 0 in
+      let has_shift = bstate land 0x4000000 <> 0 in
+      let has_cmd = bstate land 0x8000000 <> 0 in
+      let is_motion = bstate land 0x10000000 <> 0 in
+      let b1_any = b1_click || b1_dblclick || b1_press in
+      if !dragging <> NoDrag then begin
+        (* Active border drag *)
+        (match !dragging with
+         | DragV -> Display.move_split_v display x
+         | DragH -> Display.move_split_h display y
+         | NoDrag -> ());
+        if b1_release then dragging := NoDrag
+      end
+      else if !mouse_selecting then begin
+        (* Active text selection drag *)
+        let pane = Display.pane_at display ~x ~y in
+        if pane = Display.PScript then begin
+          match screen_to_buffer_pos display buf ~x ~y with
+          | Some (line, byte_col) -> Buffer.move_to buf line byte_col
+          | None -> ()
+        end else if pane = Display.PGoals || pane = Display.PMessages then begin
+          let (ps, pane_id) =
+            if pane = Display.PGoals then (goals_sel, `Goals)
+            else (messages_sel, `Messages)
+          in
+          (match screen_to_pane_pos display ~x ~y pane_id with
+           | Some (row, byte_col) ->
+             ps.ps_cursor_line <- row;
+             ps.ps_cursor_col <- byte_col
+           | None -> ())
+        end;
+        if b1_release then
+          mouse_selecting := false
+      end
+      else begin
+        let pane = Display.pane_at display ~x ~y in
+        let scroll_up = bstate land 0x10000 <> 0 && not b1_any in
+        let scroll_down = bstate land 0x200000 <> 0 && not b1_any in
+        let scroll_amt = 3 in
+        if scroll_up || scroll_down then begin
+          let delta = if scroll_up then -scroll_amt else scroll_amt in
+          match pane with
+          | Display.PScript ->
+            let (rows, _) = Display.script_dims display in
+            let max_scroll = max 0 (Buffer.line_count buf - rows) in
+            Buffer.set_scroll_top buf (max 0 (min max_scroll (Buffer.scroll_top buf + delta)));
+            suppress_ensure_visible := true
+          | Display.PGoals ->
+            goals_scroll := max 0 (!goals_scroll + delta)
+          | Display.PMessages ->
+            messages_scroll := max 0 (!messages_scroll + delta)
+          | _ -> ()
+        end
+        else if (pane = Display.PBorderV || pane = Display.PBorderH)
+                && b1_press then
+          dragging := (if pane = Display.PBorderV then DragV else DragH)
+        else if (pane = Display.PGoals || pane = Display.PMessages)
+                && (b1_click || b1_dblclick || b1_press) then begin
+          (* Click in right pane — focus it *)
+          let target_pane = if pane = Display.PGoals then Goals else Messages in
+          focused_pane := target_pane;
+          let (ps, lines_cache, scroll_ref, pane_id) =
+            if pane = Display.PGoals then
+              (goals_sel, goals_lines_cache, goals_scroll, `Goals)
+            else
+              (messages_sel, messages_lines_cache, messages_scroll, `Messages)
+          in
+          if b1_dblclick then begin
+            match screen_to_pane_pos display ~x ~y pane_id with
+            | Some (row, byte_col) ->
+              pane_select_word ps lines_cache !scroll_ref row byte_col
+            | None -> ()
+          end
+          else if b1_press then begin
+            match screen_to_pane_pos display ~x ~y pane_id with
+            | Some (row, byte_col) ->
+              clear_pane_selection ps;
+              ps.ps_anchor_line <- row;
+              ps.ps_anchor_col <- byte_col;
+              ps.ps_cursor_line <- row;
+              ps.ps_cursor_col <- byte_col;
+              ps.ps_active <- true;
+              mouse_selecting := true
+            | None -> ()
+          end
+          else begin (* b1_click *)
+            match screen_to_pane_pos display ~x ~y pane_id with
+            | Some (_, _) -> clear_pane_selection ps
+            | None -> ()
+          end
+        end
+        else if pane = Display.PScript && (b1_click || b1_dblclick || b1_press) then begin
+          focused_pane := Script;
+          clear_pane_selection goals_sel;
+          clear_pane_selection messages_sel;
+          if has_cmd then begin
+            match screen_to_buffer_pos display buf ~x ~y with
+            | Some (line, byte_col) ->
+              Buffer.move_to buf line byte_col;
+              (match session with
+               | Some s ->
+                 Session.go_to_cursor s
+                   ~render:(fun () -> render_all display buf session)
+               | None -> ())
+            | None -> ()
+          end
+          else if b1_dblclick then begin
+            match screen_to_buffer_pos display buf ~x ~y with
+            | Some (line, byte_col) ->
+              Buffer.clear_selection buf;
+              Buffer.move_to buf line byte_col;
+              Buffer.select_word_at_cursor buf
+            | None -> ()
+          end
+          else if has_shift && (b1_click || b1_press) then begin
+            match screen_to_buffer_pos display buf ~x ~y with
+            | Some (line, byte_col) ->
+              if Buffer.selection buf = None then Buffer.set_anchor buf;
+              Buffer.move_to buf line byte_col
+            | None -> ()
+          end
+          else if b1_press && not is_motion then begin
+            (* Start drag selection *)
+            match screen_to_buffer_pos display buf ~x ~y with
+            | Some (line, byte_col) ->
+              Buffer.clear_selection buf;
+              Buffer.move_to buf line byte_col;
+              Buffer.set_anchor buf;
+              mouse_selecting := true
+            | None -> ()
+          end
+          else if b1_click then begin
+            (* Simple click — just position cursor *)
+            match screen_to_buffer_pos display buf ~x ~y with
+            | Some (line, byte_col) ->
+              Buffer.clear_selection buf;
+              Buffer.move_to buf line byte_col
+            | None -> ()
+          end
+        end
+      end;
+      Some Continue
+    end
+    else if ch = Curses.Key.f 1 then begin
+      (* Show help screen *)
+      let win = Display.script_win display in
+      let (rows, cols) = Curses.getmaxyx win in
+      let _ = Curses.werase win in
+      Curses.scrollok win false;
+      let lines = String.split_on_char '\n' Help.text in
+      List.iteri (fun i line ->
+        if i < rows then
+          ignore (Curses.mvwaddnstr win i 0 line 0 (min (String.length line) cols))
+      ) lines;
+      let _ = Curses.wnoutrefresh win in
+      Display.set_status display "F1:Help  Press any key to close.";
+      Display.refresh_all display;
+      Curses.timeout (-1);
+      ignore (Curses.getch ());
+      Curses.timeout 100;
+      Some Continue
+    end
+    else if ch = 1 then begin (* ^A — About query from any pane *)
+      let subject = match !focused_pane with
+        | Goals -> pane_selection_text goals_sel goals_lines_cache !goals_scroll
+        | Messages -> pane_selection_text messages_sel messages_lines_cache !messages_scroll
+        | Script ->
+          match Buffer.selected_text buf with
+          | Some text -> Some text | None -> Buffer.word_at_cursor buf
+      in
       (match subject, session with
        | Some word, Some s ->
          Session.query s ("About " ^ word ^ "."); focused_pane := Messages
        | _ -> ());
       Some Continue
     end
-    else if ch = 4 then begin (* ^D — Print *)
-      let subject = match Buffer.selected_text buf with
-        | Some text -> Some text | None -> Buffer.word_at_cursor buf in
+    else if ch = 4 then begin (* ^D — Print query from any pane *)
+      let subject = match !focused_pane with
+        | Goals -> pane_selection_text goals_sel goals_lines_cache !goals_scroll
+        | Messages -> pane_selection_text messages_sel messages_lines_cache !messages_scroll
+        | Script ->
+          match Buffer.selected_text buf with
+          | Some text -> Some text | None -> Buffer.word_at_cursor buf
+      in
       (match subject, session with
        | Some word, Some s ->
          Session.query s ("Print " ^ word ^ "."); focused_pane := Messages
        | _ -> ());
+      Some Continue
+    end
+    else if ch = 25 then begin (* ^Y — copy from any pane *)
+      let text = match !focused_pane with
+        | Goals -> pane_selection_text goals_sel goals_lines_cache !goals_scroll
+        | Messages -> pane_selection_text messages_sel messages_lines_cache !messages_scroll
+        | Script -> Buffer.selected_text buf
+      in
+      (match text with
+       | Some t ->
+         clipboard := t;
+         Clipboard.copy_to_system t
+       | None -> ());
+      Some Continue
+    end
+    else if ch = 26 then begin (* ^Z — undo *)
+      Buffer.undo buf;
+      rewind_if_needed buf session;
+      Some Continue
+    end
+    else if ch = 18 then begin (* ^R — redo *)
+      Buffer.redo buf;
+      rewind_if_needed buf session;
       Some Continue
     end
     else None
@@ -554,21 +1114,22 @@ let handle_key ch buf display session =
       Buffer.move_page_up buf (rows - 1); Some Continue
     end
     (* Clipboard *)
-    else if ch = 25 then begin (* ^Y — copy *)
-      (match Buffer.selected_text buf with
-       | Some text -> clipboard := text | None -> ());
-      Some Continue
-    end
     else if ch = 11 then begin (* ^K — cut *)
       if not (cursor_in_verified buf session) then begin
+        (match session with Some s -> Session.clear_error s | None -> ());
         match Buffer.delete_selection buf with
-        | Some text -> clipboard := text
-        | None -> Buffer.cut_line buf
+        | Some text ->
+          clipboard := text;
+          Clipboard.copy_to_system text
+        | None ->
+          clipboard := "";
+          Buffer.cut_line buf
       end;
       Some Continue
     end
     else if ch = 21 then begin (* ^U — paste *)
       if not (cursor_in_verified buf session) then begin
+        (match session with Some s -> Session.clear_error s | None -> ());
         ignore (Buffer.delete_selection buf);
         if !clipboard <> "" then
           String.iter (fun c ->
@@ -579,21 +1140,27 @@ let handle_key ch buf display session =
       end;
       Some Continue
     end
-    (* Editing *)
+    (* Editing — clear error region on any edit *)
     else if ch = Curses.Key.dc then begin
-      if not (cursor_in_verified buf session) then
+      let clear_err () = match session with Some s -> Session.clear_error s | None -> () in
+      if not (cursor_in_verified buf session) then begin
+        clear_err ();
         (match Buffer.delete_selection buf with
-         | Some _ -> () | None -> Buffer.delete_char_at buf);
+         | Some _ -> () | None -> Buffer.delete_char_at buf)
+      end;
       Some Continue
     end
     else if ch = Curses.Key.backspace || ch = 127 || ch = 8 then begin
-      if not (cursor_in_verified buf session) then
+      if not (cursor_in_verified ~for_backspace:true buf session) then begin
+        (match session with Some s -> Session.clear_error s | None -> ());
         (match Buffer.delete_selection buf with
-         | Some _ -> () | None -> Buffer.delete_char_before buf);
+         | Some _ -> () | None -> Buffer.delete_char_before buf)
+      end;
       Some Continue
     end
     else if ch = 10 || ch = 13 || ch = Curses.Key.enter then begin
       if not (cursor_in_verified buf session) then begin
+        (match session with Some s -> Session.clear_error s | None -> ());
         ignore (Buffer.delete_selection buf);
         Buffer.insert_newline buf
       end;
@@ -601,6 +1168,7 @@ let handle_key ch buf display session =
     end
     else if ch >= 32 && ch < 127 then begin
       if not (cursor_in_verified buf session) then begin
+        (match session with Some s -> Session.clear_error s | None -> ());
         ignore (Buffer.delete_selection buf);
         Buffer.insert_char buf (Char.chr ch)
       end;
