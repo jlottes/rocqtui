@@ -18,6 +18,7 @@ type t = {
   mutable err_range : (int * int) option;
   mutable target_end : int;  (* user's target boundary *)
   mutable goals_dirty : bool;  (* goals need refresh when idle *)
+  mutable needs_rewind : Stateid.t option;  (* deferred rewind from callback *)
   mutable state_changed : bool;
 }
 
@@ -27,7 +28,7 @@ let create ?(prog="coqidetop") ?(args=[]) buf =
   { rocq; buf; tip = init_id; sentences = [];
     next_edit_id = -1; goals_cache = None; msgs = [];
     err_range = None; target_end = 0;
-    goals_dirty = false; state_changed = false }
+    goals_dirty = false; needs_rewind = None; state_changed = false }
 
 (* Find a sentence by state_id *)
 let find_sentence t sid =
@@ -152,7 +153,7 @@ let format_goals ?(all_hyps=true) (gs : Interface.goals) =
   end;
   Stdlib.Buffer.contents ob
 
-let refresh_goals t =
+let [@warning "-32"] refresh_goals t =
   let opts = Printopts.to_set_options () in
   ignore (Rocq_protocol.set_options t.rocq opts);
   process_feedback t;
@@ -180,7 +181,8 @@ let rewind_to_state t safe_id =
   t.tip <- safe_id;
   t.target_end <- verified_end t;
   Buffer.move_to_byte_offset t.buf (verified_end t);
-  refresh_goals t
+  t.goals_dirty <- true;
+  t.state_changed <- true
 
 (* Compute byte offset and line/bol info for the Add call *)
 let line_info_at buf byte_off =
@@ -222,20 +224,22 @@ let submit_next_sentence t =
           ((((phrase, eid), (prev_tip, true)), vend), (line, bol)) in
         Rocq_protocol.send_call t.rocq call
           (fun result ->
+             (* Set state_id BEFORE processing feedback so Processed
+                feedback can find the sentence *)
+             (match result with
+              | Interface.Good (new_id, _) -> s.state_id <- new_id
+              | _ -> ());
              process_feedback t;
              match result with
              | Interface.Good (new_id, _) ->
-               s.state_id <- new_id;
                t.tip <- new_id;
                t.state_changed <- true;
                t.goals_dirty <- true;
-               process_feedback t;
-               let has_error = List.exists (fun si ->
-                 match si.status with Error _ -> true | _ -> false
-               ) t.sentences in
-               if has_error then
-                 rewind_errors t
+               (* Don't call rewind_errors here — it uses eval_call
+                  which would deadlock inside the watch callback.
+                  Errors will be detected and handled in poll. *)
              | Interface.Fail (safe_id, _, msg) ->
+               (* Remove the Processing sentence *)
                (match t.sentences with
                 | hd :: rest when hd == s -> t.sentences <- rest
                 | _ -> ());
@@ -243,9 +247,11 @@ let submit_next_sentence t =
                t.err_range <- Some (vend, end_off);
                t.target_end <- verified_end t;
                t.state_changed <- true;
+               (* Don't call rewind_to_state here — defer to poll.
+                  Just record that we need to rewind. *)
                if not (Stateid.equal safe_id t.tip
                        || Stateid.equal safe_id Stateid.dummy) then
-                 rewind_to_state t safe_id
+                 t.needs_rewind <- Some safe_id
                else
                  t.tip <- (match t.sentences with
                            | si :: _ -> si.state_id
@@ -291,21 +297,55 @@ let sentence_start_before t off =
 (* Poll: process feedback and drive async stepping.
    Returns true if state changed. *)
 let poll t =
-  t.state_changed <- false;
   Rocq_protocol.poll t.rocq;
   process_feedback t;
-  (* If verified < target and not busy, submit next sentence *)
   if not (Rocq_protocol.is_busy t.rocq) then begin
-    let vend = verified_end t in
-    if vend < t.target_end then
-      submit_next_sentence t
-    else if t.goals_dirty then begin
-      (* Caught up — refresh goals *)
-      t.goals_dirty <- false;
-      refresh_goals t
+    (* Handle deferred rewind from callback *)
+    (match t.needs_rewind with
+     | Some safe_id ->
+       t.needs_rewind <- None;
+       rewind_to_state t safe_id
+     | None -> ());
+    let has_error = List.exists (fun si ->
+      match si.status with Error _ -> true | _ -> false
+    ) t.sentences in
+    if has_error then
+      rewind_errors t
+    else if verified_end t > t.target_end then begin
+      (* Deferred rewind from step_backward/go_to_cursor *)
+      rewind_to_target t;
+      t.goals_dirty <- true
+    end
+    else if not (Rocq_protocol.is_busy t.rocq) then begin
+      let vend = verified_end t in
+      if vend < t.target_end then
+        submit_next_sentence t
+      else if t.goals_dirty then begin
+        t.goals_dirty <- false;
+        let opts = Printopts.to_set_options () in
+        Rocq_protocol.send_call t.rocq
+          (Xmlprotocol.set_options opts)
+          (fun _result ->
+             process_feedback t;
+             Rocq_protocol.send_call t.rocq
+               (Xmlprotocol.goals ())
+               (fun result ->
+                  process_feedback t;
+                  (match result with
+                   | Interface.Good (Some gs) ->
+                     t.goals_cache <- Some gs
+                   | Interface.Good None ->
+                     t.goals_cache <- None
+                   | Interface.Fail (_, _, msg) ->
+                     t.msgs <- t.msgs @ [Pp.string_of_ppcmds msg];
+                     t.goals_cache <- None);
+                  t.state_changed <- true))
+      end
     end
   end;
-  t.state_changed
+  let changed = t.state_changed in
+  t.state_changed <- false;
+  changed
 
 (* --- Public API --- *)
 
@@ -347,17 +387,15 @@ let step_backward t =
     if cursor_off = old_target then
       Buffer.move_to_byte_offset t.buf new_target;
     t.state_changed <- true;
-    (* If verified > target, need to rewind synchronously.
-       Wait for any in-flight call first. *)
+    (* If verified > target, rewind. If busy, defer to poll. *)
     if verified_end t > t.target_end then begin
-      if Rocq_protocol.is_busy t.rocq then begin
-        while Rocq_protocol.is_busy t.rocq do
-          ignore (Main_loop.select_with_watches [] 0.01)
-        done;
-        process_feedback t
-      end;
-      rewind_to_target t;
-      t.goals_dirty <- true
+      if Rocq_protocol.is_busy t.rocq then
+        (* Can't rewind yet — poll will handle it when the in-flight call completes *)
+        ()
+      else begin
+        rewind_to_target t;
+        t.goals_dirty <- true
+      end
     end
   end
 
@@ -384,16 +422,14 @@ let go_to_cursor t =
   done;
   t.target_end <- !snapped;
   t.state_changed <- true;
-  (* If verified > target, rewind synchronously *)
+  (* If verified > target, rewind. If busy, defer to poll. *)
   if verified_end t > t.target_end then begin
-    if Rocq_protocol.is_busy t.rocq then begin
-      while Rocq_protocol.is_busy t.rocq do
-        ignore (Main_loop.select_with_watches [] 0.01)
-      done;
-      process_feedback t
-    end;
-    rewind_to_target t;
-    t.goals_dirty <- true
+    if Rocq_protocol.is_busy t.rocq then
+      ()  (* poll will handle rewind when in-flight call completes *)
+    else begin
+      rewind_to_target t;
+      t.goals_dirty <- true
+    end
   end
 
 (* Per-sentence status info for rendering *)
@@ -420,6 +456,7 @@ let clear_messages t = t.msgs <- []
 
 let is_busy t =
   Rocq_protocol.is_busy t.rocq || verified_end t < t.target_end
+  || t.goals_dirty || t.needs_rewind <> None
 
 let query t phrase =
   t.msgs <- [];
@@ -430,10 +467,8 @@ let query t phrase =
   process_feedback t
 
 let sync_options_and_refresh t =
-  let opts = Printopts.to_set_options () in
-  ignore (Rocq_protocol.set_options t.rocq opts);
-  process_feedback t;
-  refresh_goals t
+  t.goals_dirty <- true;
+  t.state_changed <- true
 
 let pid t = Rocq_protocol.pid t.rocq
 

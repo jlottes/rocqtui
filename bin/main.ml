@@ -48,6 +48,11 @@ let () =
   Theme.apply theme;
   Editor.init_compose ();
   Clipboard.enable_bracketed_paste ();
+  (* Allow ^C to interrupt blocking Rocq calls *)
+  Rocq_protocol.set_interrupt_hook (fun t ->
+    let ch = Curses.getch () in
+    if ch = 3 then
+      (try Unix.kill (Rocq_protocol.pid t) Sys.sigint with _ -> ()));
   (* Find project file args and start Rocq session *)
   let (_project_dir, project_args) = Project.find_args filename in
   let all_args = project_args @ extra_args in
@@ -99,15 +104,11 @@ let () =
       running := false
   in
   while !running do
-    (* Select on stdin + watched fds (rocqtop), 100ms timeout.
-       Watch callbacks fire for rocqtop data inside select_with_watches. *)
     let timeout = if (match session with
       | Some s -> Session.is_busy s | None -> false)
-      then 0.01  (* 10ms when actively stepping *)
-      else 0.1   (* 100ms when idle *)
+      then 0.01 else 0.1
     in
     let ready = Main_loop.select_with_watches [stdin_fd] timeout in
-    (* Poll session to process feedback and drive async stepping *)
     (match session with
      | Some s ->
        if Session.poll s then needs_render := true

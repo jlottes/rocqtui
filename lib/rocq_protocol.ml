@@ -26,7 +26,7 @@ let handle_final_answer t xml =
     let answer = Xmlprotocol.to_answer call xml in
     k answer
 
-let handle_input t ~read_all =
+let [@warning "-32"] handle_input t ~read_all =
   let s = read_all () in
   if String.length s = 0 then false  (* EOF / empty *)
   else begin
@@ -66,10 +66,10 @@ let spawn ?(prog="coqidetop") ?(args=[]) () =
   let process, cout = RocqAsync.spawn prog all_args
     (fun conds ~read_all ->
        match !t_ref with
-       | None -> true  (* not initialized yet *)
+       | None -> true
        | Some t ->
          try
-           let _ = conds in  (* ignore conditions for now *)
+           let _ = conds in
            handle_input t ~read_all
          with e ->
            ignore e; false)
@@ -91,11 +91,20 @@ let send_call t call k =
 
 (* Send a call and block until the response arrives.
    Uses select_with_watches to keep processing other watches. *)
+(* Interrupt callback — set by the application to handle ^C during blocking calls *)
+let interrupt_hook : (t -> unit) option ref = ref None
+
+let set_interrupt_hook f = interrupt_hook := Some f
+
 let eval_call t call =
   let result = ref None in
   send_call t call (fun v -> result := Some v);
   while !result = None do
-    ignore (Main_loop.select_with_watches [] 0.1)
+    (* Include stdin so we don't block when user presses keys *)
+    let ready = Main_loop.select_with_watches [Unix.stdin] 0.1 in
+    (* If stdin is ready, check for ^C via the hook *)
+    if List.mem Unix.stdin ready then
+      (match !interrupt_hook with Some f -> f t | None -> ())
   done;
   match !result with
   | Some v -> v

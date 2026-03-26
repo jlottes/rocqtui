@@ -34,4 +34,8 @@ val poll : t -> unit
 (** {2 Utility} *)
 
 val pid : t -> int
+
+(** Set a hook called when stdin has data during a blocking eval_call.
+    Used to allow ^C to interrupt. *)
+val set_interrupt_hook : (t -> unit) -> unit
 val drain_feedback : t -> Feedback.feedback list
