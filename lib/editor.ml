@@ -121,6 +121,9 @@ let [@warning "-32"] select_all_pane ps lines_cache scroll =
 (* Print options mode *)
 let in_options_mode = ref false
 
+(* Query mode *)
+let in_query_mode = ref false
+
 (* Apply a chgat to a byte range within a line, adjusting for hscroll *)
 let chgat_byte_range win line row hscroll cols byte_start byte_end attr color =
   let scol = Utf8.byte_to_col line byte_start - hscroll in
@@ -482,6 +485,25 @@ let format_compose_status cs =
   ) completions;
   Stdlib.Buffer.contents buf
 
+(* Get the subject for a query from whichever pane is focused *)
+let query_subject buf =
+  match !focused_pane with
+  | Goals -> pane_selection_text goals_sel goals_lines_cache !goals_scroll
+  | Messages -> pane_selection_text messages_sel messages_lines_cache !messages_scroll
+  | Script ->
+    match Buffer.selected_text buf with
+    | Some text -> Some text
+    | None -> Buffer.word_at_cursor buf
+
+let run_query session phrase =
+  match session with
+  | Some s -> Session.query s phrase
+  | None -> ()
+
+let render_query_bar display =
+  let text = "[a]About [d]Print [p]Show Proof [e]Show Existentials  ^Q:close" in
+  Display.set_status display text
+
 let render_options_bar display =
   let parts = List.map (fun (e : Printopts.entry) ->
     if e.enabled then
@@ -495,6 +517,8 @@ let render_options_bar display =
 let update_status display buf session =
   if !in_options_mode then
     render_options_bar display
+  else if !in_query_mode then
+    render_query_bar display
   else match !compose_state with
   | Some cs when Compose.active cs ->
     Display.set_status display (format_compose_status cs)
@@ -520,9 +544,9 @@ let update_status display buf session =
         else ""
     in
     let focus_info = match !focused_pane with
-      | Script -> "  F1:Help ^O:Save ^X:Exit"
-      | Goals -> "  [Goals] ^W:Pane F1:Help"
-      | Messages -> "  [Messages] ^W:Pane F1:Help"
+      | Script -> "  ^O:Save ^X:Exit ^T:Opts ^Q:Query F1:Help"
+      | Goals -> "  [Goals] ^W:Pane ^Q:Query F1:Help"
+      | Messages -> "  [Messages] ^W:Pane ^Q:Query F1:Help"
     in
     (* Horizontal scroll indicator *)
     let hscroll_ind =
@@ -809,12 +833,43 @@ let handle_key ch buf display session =
     end
     else if !in_options_mode then begin
       let c = Char.lowercase_ascii (Char.chr (ch land 0xFF)) in
-      (match List.find_opt (fun (e : Printopts.entry) -> e.key = c) Printopts.entries with
-       | Some entry ->
-         Printopts.toggle entry;
-         (match session with Some s -> Session.sync_options_and_refresh s | None -> ())
-       | None -> ());
+      match List.find_opt (fun (e : Printopts.entry) -> e.key = c) Printopts.entries with
+      | Some entry ->
+        Printopts.toggle entry;
+        (match session with Some s -> Session.sync_options_and_refresh s | None -> ());
+        Some Continue
+      | None ->
+        (* Not a valid option key — exit options mode and fall through *)
+        in_options_mode := false;
+        (match session with Some s -> Session.sync_options_and_refresh s | None -> ());
+        None
+    end
+    else if ch = 17 then begin (* ^Q — query mode toggle *)
+      in_query_mode := not !in_query_mode;
       Some Continue
+    end
+    else if !in_query_mode then begin
+      in_query_mode := false;
+      let c = Char.lowercase_ascii (Char.chr (ch land 0xFF)) in
+      let handled =
+        if c = 'a' then begin
+          let subject = query_subject buf in
+          (match subject with
+           | Some word -> run_query session ("About " ^ word ^ ".")
+           | None -> ()); true
+        end else if c = 'd' then begin
+          let subject = query_subject buf in
+          (match subject with
+           | Some word -> run_query session ("Print " ^ word ^ ".")
+           | None -> ()); true
+        end else if c = 'p' then begin
+          run_query session "Show Proof."; true
+        end else if c = 'e' then begin
+          run_query session "Show Existentials."; true
+        end else false
+      in
+      if handled then Some Continue
+      else None  (* fall through to normal handling *)
     end
     else if ch = 23 then begin (* ^W *)
       focused_pane := (match !focused_pane with
@@ -998,8 +1053,7 @@ let handle_key ch buf display session =
       in
       (match subject, session with
        | Some word, Some s ->
-         Session.query s ("About " ^ word ^ "."); focused_pane := Messages
-       | _ -> ());
+         Session.query s ("About " ^ word ^ ".")       | _ -> ());
       Some Continue
     end
     else if ch = 4 then begin (* ^D — Print query from any pane *)
@@ -1012,8 +1066,7 @@ let handle_key ch buf display session =
       in
       (match subject, session with
        | Some word, Some s ->
-         Session.query s ("Print " ^ word ^ "."); focused_pane := Messages
-       | _ -> ());
+         Session.query s ("Print " ^ word ^ ".")       | _ -> ());
       Some Continue
     end
     else if ch = 25 then begin (* ^Y — copy from any pane *)
