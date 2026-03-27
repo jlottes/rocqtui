@@ -12,7 +12,24 @@ type t = {
   server_fd : Unix.file_descr;
   path : string;
   mutable clients : client list;
+  mutable active_tab_ids : int list;  (* tab IDs Claude is working on *)
+  mutable spinner_frame : int;
 }
+
+let spinner_chars = [| "·"; "✶"; "✢"; "✻" |]
+
+let spinner_char t =
+  t.spinner_frame <- (t.spinner_frame + 1) mod Array.length spinner_chars;
+  spinner_chars.(t.spinner_frame)
+
+let is_tab_active t idx = List.mem idx t.active_tab_ids
+
+let mark_tab_active t idx =
+  if not (List.mem idx t.active_tab_ids) then
+    t.active_tab_ids <- idx :: t.active_tab_ids
+
+let [@warning "-32"] unmark_tab_active t idx =
+  t.active_tab_ids <- List.filter (fun i -> i <> idx) t.active_tab_ids
 
 (* --- JSON-RPC helpers --- *)
 
@@ -141,6 +158,14 @@ let tool_defs = [
        ];
      ];
    ]);
+  ("switch_tab", "Switch to a specific tab by ID",
+   `Assoc [
+     "type", `String "object";
+     "properties", `Assoc [
+       "tab", `Assoc ["type", `String "integer"; "description", `String "Unique tab ID"];
+     ];
+     "required", `List [`String "tab"];
+   ]);
   ("is_busy", "Check if rocqtui is busy (stepping in progress)",
    `Assoc [
      "type", `String "object";
@@ -260,6 +285,7 @@ let handle_resource uri mgr =
   | "rocqtui://tabs" ->
     let tabs = List.mapi (fun i (t : Tab.t) ->
       `Assoc [
+        "id", `Int t.id;
         "index", `Int i;
         "filename", (match Buffer.filename t.buf with
           | Some f -> `String f | None -> `Null);
@@ -280,8 +306,20 @@ let handle_resource uri mgr =
 
 (* --- Tool handlers --- *)
 
-let handle_tool name args mgr =
-  let tab = Tab.active_tab mgr in
+let resolve_tab args mgr =
+  let open Yojson.Safe.Util in
+  match args |> member "tab" with
+  | `Int id ->
+    (match Tab.find_by_id mgr id with
+     | Some tab -> tab, id
+     | None -> Tab.active_tab mgr, (Tab.active_tab mgr).Tab.id)
+  | _ ->
+    let tab = Tab.active_tab mgr in
+    tab, tab.Tab.id
+
+let handle_tool t name args mgr =
+  let (tab, tab_idx) = resolve_tab args mgr in
+  mark_tab_active t tab_idx;
   match name with
   | "step_forward" ->
     (match tab.session with
@@ -423,6 +461,18 @@ let handle_tool name args mgr =
        (false, `Assoc ["content", `List [
          `Assoc ["type", `String "text"; "text", `String "No session."]
        ]]))
+  | "switch_tab" ->
+    let id = args |> Yojson.Safe.Util.member "tab" |> Yojson.Safe.Util.to_int in
+    (match Tab.index_of_id mgr id with
+     | Some idx ->
+       mgr.Tab.active <- idx;
+       (true, `Assoc ["content", `List [
+         `Assoc ["type", `String "text"; "text", `String "OK"]
+       ]])
+     | None ->
+       (false, `Assoc ["content", `List [
+         `Assoc ["type", `String "text"; "text", `String "Unknown tab ID"]
+       ]; "isError", `Bool true]))
   | "is_busy" ->
     let busy = match tab.session with
       | Some s -> Session.is_busy s | None -> false in
@@ -437,7 +487,7 @@ let handle_tool name args mgr =
 
 (* --- Message dispatch --- *)
 
-let dispatch_message client msg mgr =
+let dispatch_message t client msg mgr =
   let open Yojson.Safe.Util in
   let id = msg |> member "id" in
   let method_ = msg |> member "method" |> to_string_option in
@@ -464,7 +514,7 @@ let dispatch_message client msg mgr =
     let params = msg |> member "params" in
     let name = params |> member "name" |> to_string in
     let args = params |> member "arguments" in
-    let (_, result) = handle_tool name args mgr in
+    let (_, result) = handle_tool t name args mgr in
     Some (json_result id result)
   | Some "resources/list" ->
     let resources = List.map (fun (uri, desc, mime) ->
@@ -496,7 +546,7 @@ let send_to_client client json =
   try ignore (Unix.write_substring client.fd s 0 (String.length s))
   with _ -> ()
 
-let process_client_data client mgr =
+let process_client_data t client mgr =
   let state_changed = ref false in
   (* Split on newlines — each line is a JSON-RPC message *)
   let rec process () =
@@ -509,7 +559,7 @@ let process_client_data client mgr =
       if String.length line > 0 then begin
         (try
            let msg = Yojson.Safe.from_string line in
-           match dispatch_message client msg mgr with
+           match dispatch_message t client msg mgr with
            | Some response ->
              send_to_client client response
            | None -> ()
@@ -535,7 +585,8 @@ let create ?(socket_path="") () =
   Unix.bind fd (Unix.ADDR_UNIX path);
   Unix.listen fd 5;
   Unix.set_nonblock fd;
-  { server_fd = fd; path; clients = [] }
+  { server_fd = fd; path; clients = [];
+    active_tab_ids = []; spinner_frame = 0 }
 
 let server_fd t = t.server_fd
 
@@ -564,7 +615,7 @@ let handle_ready t ready_fds mgr =
            dead := client :: !dead
          else begin
            client.buf <- client.buf ^ Bytes.sub_string chunk 0 n;
-           if process_client_data client mgr then
+           if process_client_data t client mgr then
              state_changed := true
          end
        with
@@ -578,6 +629,9 @@ let handle_ready t ready_fds mgr =
     (try Unix.close c.fd with _ -> ());
     t.clients <- List.filter (fun c2 -> c2.fd != c.fd) t.clients
   ) !dead;
+  (* Clear active tabs if no clients remain *)
+  if t.clients = [] then
+    t.active_tab_ids <- [];
   !state_changed
 
 let notify t method_ params =
@@ -593,3 +647,5 @@ let shutdown t =
   (try Unix.unlink t.path with _ -> ())
 
 let socket_path t = t.path
+
+let has_clients t = t.clients <> []

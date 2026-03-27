@@ -1,4 +1,7 @@
+let next_id = ref 0
+
 type t = {
+  id : int;
   buf : Buffer.t;
   mutable session : Session.t option;
   session_args : string list;
@@ -9,6 +12,11 @@ type t = {
   mutable mouse_selecting : bool;
   mutable suppress_ensure_visible : bool;
 }
+
+let fresh_id () =
+  let id = !next_id in
+  incr next_id;
+  id
 
 type manager = {
   mutable tabs : t list;
@@ -22,7 +30,7 @@ let create_blank ?(args=[]) () =
     try Some (Session.create ~args buf)
     with _ -> None
   in
-  { buf; session; session_args = args;
+  { id = fresh_id (); buf; session; session_args = args;
     goals_scroll = 0;
     messages_scroll = 0;
     focused_pane = `Script;
@@ -43,7 +51,7 @@ let create_from_file ?(args=[]) filename =
     try Some (Session.create ~args buf)
     with _ -> None
   in
-  { buf; session; session_args = args;
+  { id = fresh_id (); buf; session; session_args = args;
     goals_scroll = 0;
     messages_scroll = 0;
     focused_pane = `Script;
@@ -53,6 +61,17 @@ let create_from_file ?(args=[]) filename =
 
 let active_tab mgr =
   List.nth mgr.tabs mgr.active
+
+let find_by_id mgr id =
+  List.find_opt (fun t -> t.id = id) mgr.tabs
+
+let index_of_id mgr id =
+  let rec find i = function
+    | [] -> None
+    | t :: _ when t.id = id -> Some i
+    | _ :: rest -> find (i + 1) rest
+  in
+  find 0 mgr.tabs
 
 let count mgr = List.length mgr.tabs
 

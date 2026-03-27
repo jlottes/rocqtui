@@ -6,6 +6,10 @@ type action =
 let init_error_msg = ref ""
 let set_init_error msg = init_error_msg := msg
 
+(* Extra status text (e.g., MCP spinner) set by main.ml *)
+let status_extra = ref ""
+let set_status_extra s = status_extra := s
+
 (* Blocking getch that works with our select-based main loop.
    Waits for stdin via select (which also dispatches watch callbacks)
    then calls non-blocking getch. *)
@@ -602,8 +606,9 @@ let update_status display buf session =
         Stdlib.Buffer.contents b
       else ""
     in
-    let status = Printf.sprintf "%s%s  Ln %d, Col %d%s%s%s"
-      fname mod_flag (cl + 1) (vcol + 1) rocq_status hscroll_ind focus_info
+    let extra = if !status_extra <> "" then "  " ^ !status_extra else "" in
+    let status = Printf.sprintf "%s%s  Ln %d, Col %d%s%s%s%s"
+      fname mod_flag (cl + 1) (vcol + 1) rocq_status extra hscroll_ind focus_info
     in
     Display.set_status display status
   end

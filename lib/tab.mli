@@ -1,6 +1,7 @@
 (** Tab management for multi-file editing. *)
 
 type t = {
+  id : int;
   buf : Buffer.t;
   mutable session : Session.t option;
   session_args : string list;
@@ -26,6 +27,12 @@ val create_from_file : ?args:string list -> string -> t
 
 (** Get the active tab. *)
 val active_tab : manager -> t
+
+(** Find a tab by its unique ID. *)
+val find_by_id : manager -> int -> t option
+
+(** Get the index of a tab by its ID. *)
+val index_of_id : manager -> int -> int option
 
 (** Number of tabs. *)
 val count : manager -> int

@@ -14,6 +14,9 @@ val init_compose : unit -> unit
 (** Set callback for tab bar clicks. Called with x coordinate. *)
 val set_tab_bar_click_handler : (int -> unit) -> unit
 
+(** Set extra text to append to the status bar (e.g., MCP spinner). *)
+val set_status_extra : string -> unit
+
 (** Render the active tab's display. *)
 val render_all : Display.t -> Buffer.t -> Session.t option -> unit
 

@@ -63,24 +63,35 @@ let () =
     match Tab.tab_at_x mgr x with
     | Some i -> mgr.active <- i; needs_render := true
     | None -> ());
+  (* Start MCP server *)
+  let mcp = Mcp_server.create () in
   (* Render helper *)
   let render () =
+    (* Set MCP status indicator *)
+    let active = Tab.active_tab mgr in
+    (if Mcp_server.has_clients mcp && Mcp_server.is_tab_active mcp active.id then
+       Editor.set_status_extra (Mcp_server.spinner_char mcp ^ " Claude")
+     else
+       Editor.set_status_extra "");
     let tab = Tab.active_tab mgr in
     if Tab.count mgr > 1 then begin
+      let spinner = if Mcp_server.has_clients mcp then
+        Some (Mcp_server.spinner_char mcp) else None in
       let tabs = List.map (fun (t : Tab.t) ->
         let name = match Buffer.filename t.buf with
           | Some f -> Filename.basename f | None -> "[new]"
         in
-        (name, Buffer.modified t.buf)
+        let prefix = if Buffer.modified t.buf then "*" else "" in
+        let suffix = match spinner with
+          | Some s when Mcp_server.is_tab_active mcp t.id -> " " ^ s
+          | _ -> ""
+        in
+        (prefix ^ name ^ suffix, false)
       ) mgr.tabs in
       Display.draw_tab_bar display tabs mgr.active
     end;
     Editor.render_all display tab.buf tab.session
   in
-  (* Start MCP server *)
-  let mcp = Mcp_server.create () in
-  (* Show MCP socket path in messages on startup *)
-  let _mcp_info = Printf.sprintf "MCP: %s" (Mcp_server.socket_path mcp) in
   (* Non-blocking getch *)
   Curses.timeout 0;
   let stdin_fd = Unix.stdin in

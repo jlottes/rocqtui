@@ -26,3 +26,12 @@ val shutdown : t -> unit
 
 (** Get the socket path (for display/connection info). *)
 val socket_path : t -> string
+
+(** Whether Claude is working on a specific tab. *)
+val is_tab_active : t -> int -> bool
+
+(** Get the next spinner character (advances the frame). *)
+val spinner_char : t -> string
+
+(** Whether any client is connected. *)
+val has_clients : t -> bool
