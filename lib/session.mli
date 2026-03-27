@@ -46,5 +46,7 @@ val is_busy : t -> bool
 val is_busy_opt : t option -> bool
 val pid : t -> int
 val query : t -> string -> unit
+val with_options : t -> (string list * Interface.option_value) list -> (unit -> unit) -> unit
+val fetch_goals_text : ?all_hyps:bool -> t -> string option
 val sync_options_and_refresh : t -> unit
 val quit : t -> unit

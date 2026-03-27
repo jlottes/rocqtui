@@ -470,6 +470,29 @@ let query t phrase =
   Rocq_protocol.query t.rocq ~state_id:t.tip phrase;
   process_feedback t
 
+(* Synchronously fetch goals and format them *)
+let fetch_goals_text ?(all_hyps=true) t =
+  let opts = Printopts.to_set_options () in
+  ignore (Rocq_protocol.set_options t.rocq opts);
+  process_feedback t;
+  match Rocq_protocol.goals t.rocq with
+  | Interface.Good (Some gs) ->
+    process_feedback t;
+    Some (format_goals ~all_hyps gs)
+  | Interface.Good None ->
+    process_feedback t; None
+  | Interface.Fail _ ->
+    process_feedback t; None
+
+let with_options t temp_opts f =
+  ignore (Rocq_protocol.set_options t.rocq temp_opts);
+  process_feedback t;
+  f ();
+  (* Restore user's options *)
+  let user_opts = Printopts.to_set_options () in
+  ignore (Rocq_protocol.set_options t.rocq user_opts);
+  process_feedback t
+
 let sync_options_and_refresh t =
   t.goals_dirty <- true;
   t.state_changed <- true

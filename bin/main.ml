@@ -77,6 +77,10 @@ let () =
     end;
     Editor.render_all display tab.buf tab.session
   in
+  (* Start MCP server *)
+  let mcp = Mcp_server.create () in
+  (* Show MCP socket path in messages on startup *)
+  let _mcp_info = Printf.sprintf "MCP: %s" (Mcp_server.socket_path mcp) in
   (* Non-blocking getch *)
   Curses.timeout 0;
   let stdin_fd = Unix.stdin in
@@ -148,7 +152,12 @@ let () =
     let timeout =
       if Session.is_busy_opt tab.session then 0.01 else 0.1
     in
-    let ready = Main_loop.select_with_watches [stdin_fd] timeout in
+    let mcp_fds = Mcp_server.server_fd mcp :: Mcp_server.client_fds mcp in
+    let extra_fds = stdin_fd :: mcp_fds in
+    let ready = Main_loop.select_with_watches extra_fds timeout in
+    (* Handle MCP connections/messages *)
+    if Mcp_server.handle_ready mcp ready mgr then
+      needs_render := true;
     (* Poll ALL sessions *)
     if Tab.poll_all mgr then needs_render := true;
     (* Handle keyboard input *)
@@ -198,6 +207,7 @@ let () =
       needs_render := false
     end
   done;
+  Mcp_server.shutdown mcp;
   Clipboard.disable_bracketed_paste ();
   List.iter (fun (tab : Tab.t) ->
     match tab.session with Some s -> Session.quit s | None -> ()
