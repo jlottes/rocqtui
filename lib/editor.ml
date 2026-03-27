@@ -118,11 +118,18 @@ let [@warning "-32"] select_all_pane ps lines_cache scroll =
     ps.ps_active <- true
   end
 
+(* Tab bar click callback *)
+let tab_bar_click_handler : (int -> unit) option ref = ref None
+let set_tab_bar_click_handler f = tab_bar_click_handler := Some f
+
 (* Print options mode *)
 let in_options_mode = ref false
 
 (* Query mode *)
 let in_query_mode = ref false
+
+(* Help screen mode *)
+let in_help_mode = ref false
 
 (* Apply a chgat to a byte range within a line, adjusting for hscroll *)
 let chgat_byte_range win line row hscroll cols byte_start byte_end attr color =
@@ -308,7 +315,23 @@ let visible_portion line hscroll cols =
   if start_byte >= len then ("", len)
   else (String.sub line start_byte (end_byte - start_byte), start_byte)
 
+let render_help_screen display =
+  let win = Display.script_win display in
+  let (rows, cols) = Curses.getmaxyx win in
+  let _ = Curses.werase win in
+  Curses.scrollok win false;
+  let lines = String.split_on_char '\n' Help.text in
+  List.iteri (fun i line ->
+    if i < rows then
+      ignore (Curses.mvwaddnstr win i 0 line 0 (min (String.length line) cols))
+  ) lines;
+  let _ = Curses.wnoutrefresh win in
+  ()
+
 let render_script display buf session =
+  if !in_help_mode then
+    render_help_screen display
+  else begin
   let win = Display.script_win display in
   let (rows, cols) = Display.script_dims display in
   if !suppress_ensure_visible then
@@ -405,6 +428,7 @@ let render_script display buf session =
   end else
     (* Cursor is off-screen — place it at 0,0 but it will be hidden by curs_set *)
     Display.place_cursor display ~row:0 ~col:0
+  end (* if not in_help_mode *)
 
 (* Check if cursor is in the verified region.
    [for_backspace] uses <= to also block editing at the boundary
@@ -515,7 +539,9 @@ let render_options_bar display =
   Display.set_status display text
 
 let update_status display buf session =
-  if !in_options_mode then
+  if !in_help_mode then
+    Display.set_status display "F1:Help  Press any key to close."
+  else if !in_options_mode then
     render_options_bar display
   else if !in_query_mode then
     render_query_bar display
@@ -707,13 +733,9 @@ let handle_key ch buf display session =
       true
     | _ -> false
   in
-  if compose_handled then begin
-    (match !compose_state with
-     | Some cs when not (Compose.active cs) ->
-       render_all display buf session
-     | _ -> ());
+  if compose_handled then
     Continue
-  end else
+  else
   (* --- Global keys (work in any pane) --- *)
   let handle_global () =
     if ch = 24 then Some Quit
@@ -937,6 +959,12 @@ let handle_key ch buf display session =
             messages_scroll := max 0 (!messages_scroll + delta)
           | _ -> ()
         end
+        else if pane = Display.PTabBar && (b1_click || b1_press) then begin
+          (* Tab bar click — delegate to callback *)
+          (match !tab_bar_click_handler with
+           | Some f -> f x
+           | None -> ())
+        end
         else if (pane = Display.PBorderV || pane = Display.PBorderH)
                 && b1_press then
           dragging := (if pane = Display.PBorderV then DragV else DragH)
@@ -1027,20 +1055,12 @@ let handle_key ch buf display session =
       Some Continue
     end
     else if ch = Curses.Key.f 1 then begin
-      (* Show help screen *)
-      let win = Display.script_win display in
-      let (rows, cols) = Curses.getmaxyx win in
-      let _ = Curses.werase win in
-      Curses.scrollok win false;
-      let lines = String.split_on_char '\n' Help.text in
-      List.iteri (fun i line ->
-        if i < rows then
-          ignore (Curses.mvwaddnstr win i 0 line 0 (min (String.length line) cols))
-      ) lines;
-      let _ = Curses.wnoutrefresh win in
-      Display.set_status display "F1:Help  Press any key to close.";
-      Display.refresh_all display;
-      ignore (blocking_getch ());
+      in_help_mode := not !in_help_mode;
+      Some Continue
+    end
+    else if !in_help_mode then begin
+      (* Any key exits help mode *)
+      in_help_mode := false;
       Some Continue
     end
     else if ch = 1 then begin (* ^A — About query from any pane *)
@@ -1252,5 +1272,4 @@ let handle_key ch buf display session =
         (match handle_script () with
          | Some a -> a | None -> Continue)
   in
-  render_all display buf session;
   action

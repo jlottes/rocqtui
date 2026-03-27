@@ -11,4 +11,10 @@ val set_init_error : string -> unit
 (** Load XCompose sequences for input. *)
 val init_compose : unit -> unit
 
+(** Set callback for tab bar clicks. Called with x coordinate. *)
+val set_tab_bar_click_handler : (int -> unit) -> unit
+
+(** Render the active tab's display. *)
+val render_all : Display.t -> Buffer.t -> Session.t option -> unit
+
 val handle_key : int -> Buffer.t -> Display.t -> Session.t option -> action

@@ -43,6 +43,7 @@ val messages : t -> string list
 val clear_messages : t -> unit
 val sentence_ranges : t -> sentence_display list
 val is_busy : t -> bool
+val is_busy_opt : t option -> bool
 val pid : t -> int
 val query : t -> string -> unit
 val sync_options_and_refresh : t -> unit

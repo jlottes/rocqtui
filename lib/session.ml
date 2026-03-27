@@ -458,6 +458,10 @@ let is_busy t =
   Rocq_protocol.is_busy t.rocq || verified_end t < t.target_end
   || t.goals_dirty || t.needs_rewind <> None
 
+let is_busy_opt = function
+  | Some t -> is_busy t
+  | None -> false
+
 let query t phrase =
   t.msgs <- [];
   let opts = Printopts.to_set_options () in

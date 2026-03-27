@@ -3,13 +3,13 @@ type t = {
   mutable goals : Curses.window;
   mutable messages : Curses.window;
   mutable status : Curses.window;
-  (* Stored layout parameters for resize *)
   mutable term_h : int;
   mutable term_w : int;
-  mutable split_col : int;  (* x position of vertical divider *)
-  mutable split_row : int;  (* y position of horizontal divider on right side *)
+  mutable split_col : int;
+  mutable split_row : int;
   mutable cursor_row : int;
   mutable cursor_col : int;
+  mutable has_tab_bar : bool;  (* whether tab bar is shown *)
 }
 
 (* Color pair IDs *)
@@ -19,19 +19,18 @@ let color_error = 3
 let color_status = 4
 let color_border = 5
 
-let compute_layout h w =
+let compute_layout h w ~tab_bar =
+  let top = if tab_bar then 1 else 0 in
+  let content_h = h - top - 1 in  (* minus status bar *)
   let split_col = w * 60 / 100 in
-  let split_row = h / 2 in
+  let split_row = top + content_h / 2 in
   (split_col, split_row)
 
-let create_windows h w split_col split_row =
-  (* Script pane: left side, leaving room for border column and status bar *)
-  let script = Curses.newwin (h - 1) split_col 0 0 in
-  (* Goals pane: right top, after the border column *)
-  let goals = Curses.newwin split_row (w - split_col - 1) 0 (split_col + 1) in
-  (* Messages pane: right bottom, after the horizontal divider *)
+let create_windows h w split_col split_row ~tab_bar =
+  let top = if tab_bar then 1 else 0 in
+  let script = Curses.newwin (h - 1 - top) split_col top 0 in
+  let goals = Curses.newwin (split_row - top) (w - split_col - 1) top (split_col + 1) in
   let messages = Curses.newwin (h - 1 - split_row - 1) (w - split_col - 1) (split_row + 1) (split_col + 1) in
-  (* Status bar: bottom row *)
   let status = Curses.newwin 1 w (h - 1) 0 in
   (script, goals, messages, status)
 
@@ -48,9 +47,10 @@ let init_colors () =
 let draw_chrome_on ?(goals_focused=false) ?(messages_focused=false) t =
   let acs = Curses.get_acs_codes () in
   let stdscr = Curses.stdscr () in
+  let top = if t.has_tab_bar then 1 else 0 in
   Curses.wattron stdscr (Curses.A.color_pair color_border);
   (* Vertical divider *)
-  for row = 0 to t.term_h - 2 do
+  for row = top to t.term_h - 2 do
     let _ = Curses.mvwaddch stdscr row t.split_col acs.Curses.Acs.vline in
     ()
   done;
@@ -68,7 +68,7 @@ let draw_chrome_on ?(goals_focused=false) ?(messages_focused=false) t =
   let goals_label = if goals_focused then "[ Goals ]" else " Goals " in
   let messages_label = if messages_focused then "[ Messages ]" else " Messages " in
   Curses.wattron stdscr (Curses.A.color_pair color_border lor Curses.A.bold);
-  let _ = Curses.mvwaddstr stdscr 0 (t.split_col + 2) goals_label in
+  let _ = Curses.mvwaddstr stdscr top (t.split_col + 2) goals_label in
   let _ = Curses.mvwaddstr stdscr t.split_row (t.split_col + 2) messages_label in
   Curses.wattroff stdscr (Curses.A.color_pair color_border lor Curses.A.bold);
   let _ = Curses.wnoutrefresh stdscr in
@@ -91,11 +91,12 @@ let init () =
   ignore (Unix.write_substring Unix.stdout "\x1b[?1002h" 0 8);
   init_colors ();
   let (h, w) = Curses.getmaxyx (Curses.stdscr ()) in
-  let (split_col, split_row) = compute_layout h w in
-  let (script, goals, messages, status) = create_windows h w split_col split_row in
+  let tab_bar = false in  (* enabled later via set_tab_bar *)
+  let (split_col, split_row) = compute_layout h w ~tab_bar in
+  let (script, goals, messages, status) = create_windows h w split_col split_row ~tab_bar in
   let t = { script; goals; messages; status;
             term_h = h; term_w = w; split_col; split_row;
-            cursor_row = 0; cursor_col = 0 } in
+            cursor_row = 0; cursor_col = 0; has_tab_bar = tab_bar } in
   (* Enable scrolling on content panes *)
   Curses.scrollok script true;
   Curses.scrollok goals true;
@@ -119,14 +120,13 @@ let destroy_windows t =
 
 let resize t =
   destroy_windows t;
-  (* get_size reads the actual terminal dimensions from the OS *)
   let (h, w) = Curses.get_size () in
   let stdscr = Curses.stdscr () in
   let _ = Curses.wresize stdscr h w in
   let _ = Curses.werase stdscr in
   let _ = Curses.keypad stdscr true in
-  let (split_col, split_row) = compute_layout h w in
-  let (script, goals, messages, status) = create_windows h w split_col split_row in
+  let (split_col, split_row) = compute_layout h w ~tab_bar:t.has_tab_bar in
+  let (script, goals, messages, status) = create_windows h w split_col split_row ~tab_bar:t.has_tab_bar in
   t.script <- script;
   t.goals <- goals;
   t.messages <- messages;
@@ -155,10 +155,11 @@ let draw_chrome ?goals_focused ?messages_focused t =
   draw_chrome_on ?goals_focused ?messages_focused t
 
 type pane_id = PScript | PGoals | PMessages | PStatus | PNone
-              | PBorderV | PBorderH
+              | PBorderV | PBorderH | PTabBar
 
 let pane_at t ~x ~y =
-  if y >= t.term_h - 1 then PStatus
+  if t.has_tab_bar && y = 0 then PTabBar
+  else if y >= t.term_h - 1 then PStatus
   else if x < t.split_col then PScript
   else if x = t.split_col then PBorderV
   else if y < t.split_row then PGoals
@@ -173,7 +174,7 @@ let move_split_v t col =
     let split_col = col in
     let split_row = t.split_row in
     let (script, goals, messages, status) =
-      create_windows t.term_h t.term_w split_col split_row in
+      create_windows t.term_h t.term_w split_col split_row ~tab_bar:t.has_tab_bar in
     t.script <- script; t.goals <- goals;
     t.messages <- messages; t.status <- status;
     t.split_col <- split_col;
@@ -194,7 +195,7 @@ let move_split_h t row =
     let split_col = t.split_col in
     let split_row = row in
     let (script, goals, messages, status) =
-      create_windows t.term_h t.term_w split_col split_row in
+      create_windows t.term_h t.term_w split_col split_row ~tab_bar:t.has_tab_bar in
     t.script <- script; t.goals <- goals;
     t.messages <- messages; t.status <- status;
     t.split_row <- split_row;
@@ -205,6 +206,50 @@ let move_split_h t row =
     Curses.wbkgdset status (Curses.A.color_pair color_status);
     let _ = Curses.werase status in
     draw_chrome_on t
+  end
+
+let set_tab_bar t enabled =
+  if t.has_tab_bar <> enabled then begin
+    t.has_tab_bar <- enabled;
+    resize t
+  end
+
+let color_tab_active = 32
+let color_tab_inactive = 33
+
+let draw_tab_bar t tabs active =
+  if not t.has_tab_bar then ()
+  else begin
+    let stdscr = Curses.stdscr () in
+    (* Clear tab bar row *)
+    let _ = Curses.move 0 0 in
+    Curses.wattron stdscr (Curses.A.color_pair color_tab_inactive);
+    for _ = 0 to t.term_w - 1 do
+      ignore (Curses.waddch stdscr (Char.code ' '))
+    done;
+    Curses.wattroff stdscr (Curses.A.color_pair color_tab_inactive);
+    (* Draw tabs *)
+    let col = ref 1 in
+    List.iteri (fun i (name, modified) ->
+      let label = (if modified then "*" else "") ^ name in
+      let is_active = (i = active) in
+      let pair = if is_active then color_tab_active else color_tab_inactive in
+      let attr = if is_active then Curses.A.bold else Curses.A.normal in
+      if !col + String.length label + 3 < t.term_w then begin
+        Curses.wattron stdscr (Curses.A.color_pair pair lor attr);
+        let _ = Curses.mvwaddstr stdscr 0 !col (Printf.sprintf " %s " label) in
+        Curses.wattroff stdscr (Curses.A.color_pair pair lor attr);
+        col := !col + String.length label + 2;
+        if i < List.length tabs - 1 then begin
+          Curses.wattron stdscr (Curses.A.color_pair color_tab_inactive);
+          let _ = Curses.mvwaddstr stdscr 0 !col "│" in
+          Curses.wattroff stdscr (Curses.A.color_pair color_tab_inactive);
+          col := !col + 1
+        end
+      end
+    ) tabs;
+    let _ = Curses.wnoutrefresh stdscr in
+    ()
   end
 
 let get_mouse () = getmouse ()

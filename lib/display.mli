@@ -40,7 +40,7 @@ val draw_chrome : ?goals_focused:bool -> ?messages_focused:bool -> t -> unit
 
 (** Pane identification for mouse events. *)
 type pane_id = PScript | PGoals | PMessages | PStatus | PNone
-              | PBorderV | PBorderH
+              | PBorderV | PBorderH | PTabBar
 
 (** Determine which pane a screen coordinate falls in. *)
 val pane_at : t -> x:int -> y:int -> pane_id
@@ -53,6 +53,13 @@ val move_split_v : t -> int -> unit
 
 (** Move the horizontal split (goals/messages border) to row [row]. *)
 val move_split_h : t -> int -> unit
+
+(** Draw the tab bar. [tabs] is a list of (name, is_modified) pairs.
+    [active] is the 0-based index of the active tab. *)
+val draw_tab_bar : t -> (string * bool) list -> int -> unit
+
+(** Whether the display has a tab bar (affects pane layout). *)
+val set_tab_bar : t -> bool -> unit
 
 (** Set the status bar text. *)
 val set_status : t -> string -> unit

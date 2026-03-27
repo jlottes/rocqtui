@@ -233,4 +233,7 @@ let apply theme =
   let _ = Curses.init_pair pair_number_p theme.number_fg theme.processing_bg in
   let _ = Curses.init_pair pair_default_p theme.processing_fg theme.processing_bg in
   let _ = Curses.init_pair pair_selection theme.selection_fg theme.selection_bg in
+  (* Tab bar colors *)
+  let _ = Curses.init_pair 32 theme.status_fg theme.status_bg in  (* active tab *)
+  let _ = Curses.init_pair 33 theme.border_fg theme.bg in  (* inactive tab *)
   ()

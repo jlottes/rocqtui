@@ -41,6 +41,11 @@ let text = {|
   F1             This help screen
   Drag borders   Resize panes
 
+  ─── Tabs ─────────────────────────────
+  ^B             New blank tab
+  ^X             Close tab (exit if last)
+  Click tab bar  Switch tabs
+
   ─── Compose (ESC) ────────────────────────────
   ESC then key sequence from ~/.XCompose
   Completions shown in status bar as you type.
