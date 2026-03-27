@@ -1,0 +1,29 @@
+#!/bin/sh
+# Bridge between stdio (Claude Code MCP client) and a rocqtui Unix socket.
+# Usage: rocqtui-mcp-bridge [socket-path]
+# If no path given, walks up from cwd looking for .rocqtui-mcp.sock
+
+if [ -n "$1" ]; then
+  SOCK="$1"
+else
+  d="$(pwd)"
+  while true; do
+    if [ -e "$d/.rocqtui-mcp.sock" ]; then
+      SOCK="$(readlink -f "$d/.rocqtui-mcp.sock")"
+      break
+    fi
+    parent="$(dirname "$d")"
+    if [ "$parent" = "$d" ]; then
+      echo "Error: no .rocqtui-mcp.sock found" >&2
+      exit 1
+    fi
+    d="$parent"
+  done
+fi
+
+if [ ! -e "$SOCK" ]; then
+  echo "Error: socket $SOCK does not exist" >&2
+  exit 1
+fi
+
+exec socat STDIO UNIX-CONNECT:"$SOCK"

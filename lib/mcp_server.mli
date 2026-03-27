@@ -35,3 +35,12 @@ val spinner_char : t -> string
 
 (** Whether any client is connected. *)
 val has_clients : t -> bool
+
+(** Create a .rocqtui-mcp.sock symlink in the given directory,
+    pointing to the actual socket. Idempotent. *)
+val create_project_symlink : t -> string -> unit
+
+(** Poll for state changes and send notifications to clients.
+    Called automatically from handle_ready, but can also be called
+    separately (e.g., after session polling). *)
+val poll_notifications : t -> Tab.manager -> unit

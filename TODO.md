@@ -2,14 +2,16 @@
 
 ## MCP Server
 
-- [ ] Implement `replace_range` properly (currently a stub)
-- [ ] Add MCP notifications (goals_changed, verified_changed, error, message)
-- [ ] Add `open_file` tool (open a named file in a new tab)
-- [ ] Add `delete_range` tool
+- [x] Implement `replace_range` properly (was a stub)
+- [x] Add MCP notifications (goals_changed, verified_changed, messages via resource updated)
+- [x] Add `open_file` tool (open a named file in a new tab)
+- [x] Add `delete_range` tool
+- [x] Timeout/clear active tab indicator after inactivity (5s)
+- [x] Stale MCP socket cleanup on startup
+- [x] State-changed bool properly threaded from tool handlers through dispatch
 - [ ] Wire up Claude Code as an actual MCP client and test end-to-end
 - [ ] Handle concurrency: Claude editing while user is typing
 - [ ] Group Claude's edits into single undo units
-- [ ] Timeout/clear active tab indicator after inactivity
 
 ## Per-tab State Refactor (Phase 9 remaining)
 
@@ -63,7 +65,6 @@
 - [ ] Handle broken pipe on rocqtop fd
 - [ ] Recover from MCP client sending malformed JSON
 - [ ] Session tests (test async stepping, error recovery, rewind)
-- [ ] Stale MCP socket cleanup on startup
 
 ## Documentation
 

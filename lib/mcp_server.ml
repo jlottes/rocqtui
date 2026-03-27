@@ -14,6 +14,11 @@ type t = {
   mutable clients : client list;
   mutable active_tab_ids : int list;  (* tab IDs Claude is working on *)
   mutable spinner_frame : int;
+  mutable last_activity : float;  (* timestamp of last tool call *)
+  mutable last_goals : string;
+  mutable last_verified_end : int;
+  mutable last_messages : string list;
+  mutable symlinks : string list;  (* symlink paths to clean up *)
 }
 
 let spinner_chars = [| "·"; "✶"; "✢"; "✻" |]
@@ -166,6 +171,23 @@ let tool_defs = [
      ];
      "required", `List [`String "tab"];
    ]);
+  ("delete_range", "Delete text between two byte offsets",
+   `Assoc [
+     "type", `String "object";
+     "properties", `Assoc [
+       "start", `Assoc ["type", `String "integer"];
+       "end", `Assoc ["type", `String "integer"];
+     ];
+     "required", `List [`String "start"; `String "end"];
+   ]);
+  ("open_file", "Open a file in a new tab",
+   `Assoc [
+     "type", `String "object";
+     "properties", `Assoc [
+       "filename", `Assoc ["type", `String "string"; "description", `String "Path to the .v file"];
+     ];
+     "required", `List [`String "filename"];
+   ]);
   ("is_busy", "Check if rocqtui is busy (stepping in progress)",
    `Assoc [
      "type", `String "object";
@@ -304,6 +326,17 @@ let handle_resource uri mgr =
     ])
   | _ -> None
 
+let symlink_name = ".rocqtui-mcp.sock"
+
+let create_project_symlink t dir =
+  let link = Filename.concat dir symlink_name in
+  (try Unix.unlink link with _ -> ());
+  (try
+     Unix.symlink t.path link;
+     if not (List.mem link t.symlinks) then
+       t.symlinks <- link :: t.symlinks
+   with _ -> ())
+
 (* --- Tool handlers --- *)
 
 let resolve_tab args mgr =
@@ -320,6 +353,7 @@ let resolve_tab args mgr =
 let handle_tool t name args mgr =
   let (tab, tab_idx) = resolve_tab args mgr in
   mark_tab_active t tab_idx;
+  t.last_activity <- Unix.gettimeofday ();
   match name with
   | "step_forward" ->
     (match tab.session with
@@ -357,18 +391,17 @@ let handle_tool t name args mgr =
     let s = args |> Yojson.Safe.Util.member "start" |> Yojson.Safe.Util.to_int in
     let e = args |> Yojson.Safe.Util.member "end" |> Yojson.Safe.Util.to_int in
     let text = args |> Yojson.Safe.Util.member "text" |> Yojson.Safe.Util.to_string in
-    (* Delete range then insert *)
-    let full = Buffer.text tab.buf in
-    let before = String.sub full 0 s in
-    let after = String.sub full e (String.length full - e) in
-    let new_text = before ^ text ^ after in
-    (* Reload buffer from new text *)
-    Buffer.move_to_byte_offset tab.buf 0;
-    (* Simple approach: clear and reload *)
-    let lines = String.split_on_char '\n' new_text in
-    ignore lines; (* TODO: proper replace *)
+    (* Select the range and delete it, then insert replacement *)
+    Buffer.move_to_byte_offset tab.buf s;
+    Buffer.set_anchor tab.buf;
+    Buffer.move_to_byte_offset tab.buf e;
+    ignore (Buffer.delete_selection tab.buf);
+    String.iter (fun c ->
+      if c = '\n' then Buffer.insert_newline tab.buf
+      else Buffer.insert_char tab.buf c
+    ) text;
     (true, `Assoc ["content", `List [
-      `Assoc ["type", `String "text"; "text", `String "OK (replace_range TODO)"]
+      `Assoc ["type", `String "text"; "text", `String "OK"]
     ]])
   | "move_cursor" ->
     let line = args |> Yojson.Safe.Util.member "line" |> Yojson.Safe.Util.to_int in
@@ -473,6 +506,44 @@ let handle_tool t name args mgr =
        (false, `Assoc ["content", `List [
          `Assoc ["type", `String "text"; "text", `String "Unknown tab ID"]
        ]; "isError", `Bool true]))
+  | "delete_range" ->
+    let s = args |> Yojson.Safe.Util.member "start" |> Yojson.Safe.Util.to_int in
+    let e = args |> Yojson.Safe.Util.member "end" |> Yojson.Safe.Util.to_int in
+    Buffer.move_to_byte_offset tab.buf s;
+    Buffer.set_anchor tab.buf;
+    Buffer.move_to_byte_offset tab.buf e;
+    ignore (Buffer.delete_selection tab.buf);
+    (true, `Assoc ["content", `List [
+      `Assoc ["type", `String "text"; "text", `String "OK"]
+    ]])
+  | "open_file" ->
+    let filename = args |> Yojson.Safe.Util.member "filename"
+                   |> Yojson.Safe.Util.to_string in
+    (* Check if already open *)
+    let existing = List.find_opt (fun (t : Tab.t) ->
+      Buffer.filename t.buf = Some filename
+    ) mgr.Tab.tabs in
+    (match existing with
+     | Some t ->
+       (* Switch to existing tab *)
+       (match Tab.index_of_id mgr t.id with
+        | Some idx -> mgr.Tab.active <- idx
+        | None -> ());
+       (true, `Assoc ["content", `List [
+         `Assoc ["type", `String "text"; "text",
+           `String (Printf.sprintf "Switched to existing tab %d" t.id)]
+       ]])
+     | None ->
+       let (project_dir, project_args) = Project.find_args (Some filename) in
+       let new_tab = Tab.create_from_file ~args:project_args filename in
+       Tab.add_tab mgr new_tab;
+       (match project_dir with
+        | Some d -> create_project_symlink t d
+        | None -> ());
+       (true, `Assoc ["content", `List [
+         `Assoc ["type", `String "text"; "text",
+           `String (Printf.sprintf "Opened in tab %d" new_tab.id)]
+       ]]))
   | "is_busy" ->
     let busy = match tab.session with
       | Some s -> Session.is_busy s | None -> false in
@@ -493,14 +564,14 @@ let dispatch_message t client msg mgr =
   let method_ = msg |> member "method" |> to_string_option in
   match method_ with
   | Some "initialize" ->
-    Some (json_result id (`Assoc [
+    (false, Some (json_result id (`Assoc [
       "protocolVersion", `String "2024-11-05";
       "capabilities", capabilities;
       "serverInfo", server_info;
-    ]))
+    ])))
   | Some "initialized" ->
     client.initialized <- true;
-    None  (* notification, no response *)
+    (false, None)  (* notification, no response *)
   | Some "tools/list" ->
     let tools = List.map (fun (name, desc, schema) ->
       `Assoc [
@@ -509,13 +580,13 @@ let dispatch_message t client msg mgr =
         "inputSchema", schema;
       ]
     ) tool_defs in
-    Some (json_result id (`Assoc ["tools", `List tools]))
+    (false, Some (json_result id (`Assoc ["tools", `List tools])))
   | Some "tools/call" ->
     let params = msg |> member "params" in
     let name = params |> member "name" |> to_string in
     let args = params |> member "arguments" in
-    let (_, result) = handle_tool t name args mgr in
-    Some (json_result id result)
+    let (changed, result) = handle_tool t name args mgr in
+    (changed, Some (json_result id result))
   | Some "resources/list" ->
     let resources = List.map (fun (uri, desc, mime) ->
       `Assoc [
@@ -525,19 +596,19 @@ let dispatch_message t client msg mgr =
         "mimeType", `String mime;
       ]
     ) resource_defs in
-    Some (json_result id (`Assoc ["resources", `List resources]))
+    (false, Some (json_result id (`Assoc ["resources", `List resources])))
   | Some "resources/read" ->
     let params = msg |> member "params" in
     let uri = params |> member "uri" |> to_string in
     (match handle_resource uri mgr with
-     | Some result -> Some (json_result id result)
-     | None -> Some (json_error id (-32602) ("Unknown resource: " ^ uri)))
+     | Some result -> (false, Some (json_result id result))
+     | None -> (false, Some (json_error id (-32602) ("Unknown resource: " ^ uri))))
   | Some "ping" ->
-    Some (json_result id (`Assoc []))
+    (false, Some (json_result id (`Assoc [])))
   | Some m ->
-    Some (json_error id (-32601) ("Method not found: " ^ m))
+    (false, Some (json_error id (-32601) ("Method not found: " ^ m)))
   | None ->
-    Some (json_error id (-32600) "Invalid request")
+    (false, Some (json_error id (-32600) "Invalid request"))
 
 (* --- I/O --- *)
 
@@ -545,6 +616,13 @@ let send_to_client client json =
   let s = Yojson.Safe.to_string json ^ "\n" in
   try ignore (Unix.write_substring client.fd s 0 (String.length s))
   with _ -> ()
+
+let notify t method_ params =
+  let msg = json_notification method_ params in
+  List.iter (fun client ->
+    if client.initialized then
+      send_to_client client msg
+  ) t.clients
 
 let process_client_data t client mgr =
   let state_changed = ref false in
@@ -559,10 +637,11 @@ let process_client_data t client mgr =
       if String.length line > 0 then begin
         (try
            let msg = Yojson.Safe.from_string line in
-           match dispatch_message t client msg mgr with
-           | Some response ->
-             send_to_client client response
-           | None -> ()
+           let (changed, response) = dispatch_message t client msg mgr in
+           if changed then state_changed := true;
+           (match response with
+            | Some r -> send_to_client client r
+            | None -> ())
          with e ->
            let err = json_error `Null (-32700)
              ("Parse error: " ^ Printexc.to_string e) in
@@ -573,9 +652,78 @@ let process_client_data t client mgr =
   process ();
   !state_changed
 
+(* --- Notifications --- *)
+
+let activity_timeout = 5.0  (* seconds of inactivity before clearing indicator *)
+
+let poll_notifications t mgr =
+  if t.clients = [] then ()
+  else begin
+    let tab = Tab.active_tab mgr in
+    (* Check for goals changes *)
+    let cur_goals = match tab.session with
+      | Some s -> (match Session.goals_text s with Some g -> g | None -> "")
+      | None -> ""
+    in
+    if cur_goals <> t.last_goals then begin
+      t.last_goals <- cur_goals;
+      notify t "notifications/resources/updated"
+        (`Assoc ["uri", `String "rocqtui://goals"])
+    end;
+    (* Check for verified region changes *)
+    let cur_vend = match tab.session with
+      | Some s -> Session.verified_end s | None -> 0 in
+    if cur_vend <> t.last_verified_end then begin
+      t.last_verified_end <- cur_vend;
+      notify t "notifications/resources/updated"
+        (`Assoc ["uri", `String "rocqtui://regions"])
+    end;
+    (* Check for message changes *)
+    let cur_msgs = match tab.session with
+      | Some s -> Session.messages s | None -> [] in
+    if cur_msgs <> t.last_messages then begin
+      t.last_messages <- cur_msgs;
+      notify t "notifications/resources/updated"
+        (`Assoc ["uri", `String "rocqtui://messages"])
+    end;
+    (* Timeout active tab indicator *)
+    if t.active_tab_ids <> [] then begin
+      let now = Unix.gettimeofday () in
+      if now -. t.last_activity > activity_timeout then
+        t.active_tab_ids <- []
+    end
+  end
+
+(* --- Stale socket cleanup --- *)
+
+let cleanup_stale_sockets () =
+  let prefix = "rocqtui-mcp-" in
+  let prefix_len = String.length prefix in
+  try
+    let dir = Unix.opendir "/tmp" in
+    (try while true do
+       let entry = Unix.readdir dir in
+       if String.length entry > prefix_len
+          && String.sub entry 0 prefix_len = prefix
+          && Filename.check_suffix entry ".sock" then begin
+         let base = Filename.chop_suffix entry ".sock" in
+         let pid_str = String.sub base prefix_len
+                         (String.length base - prefix_len) in
+         match int_of_string_opt pid_str with
+         | Some pid ->
+           let alive = try Unix.kill pid 0; true with _ -> false in
+           if not alive then
+             (try Unix.unlink ("/tmp/" ^ entry) with _ -> ())
+         | None -> ()
+       end
+     done with End_of_file -> ());
+    Unix.closedir dir
+  with _ -> ()
+
 (* --- Public API --- *)
 
 let create ?(socket_path="") () =
+  cleanup_stale_sockets ();
   let path = if socket_path = "" then
     Printf.sprintf "/tmp/rocqtui-mcp-%d.sock" (Unix.getpid ())
   else socket_path
@@ -586,7 +734,10 @@ let create ?(socket_path="") () =
   Unix.listen fd 5;
   Unix.set_nonblock fd;
   { server_fd = fd; path; clients = [];
-    active_tab_ids = []; spinner_frame = 0 }
+    active_tab_ids = []; spinner_frame = 0;
+    last_activity = 0.0;
+    last_goals = ""; last_verified_end = 0; last_messages = [];
+    symlinks = [] }
 
 let server_fd t = t.server_fd
 
@@ -632,19 +783,15 @@ let handle_ready t ready_fds mgr =
   (* Clear active tabs if no clients remain *)
   if t.clients = [] then
     t.active_tab_ids <- [];
+  (* Send notifications for state changes *)
+  poll_notifications t mgr;
   !state_changed
-
-let notify t method_ params =
-  let msg = json_notification method_ params in
-  List.iter (fun client ->
-    if client.initialized then
-      send_to_client client msg
-  ) t.clients
 
 let shutdown t =
   List.iter (fun c -> try Unix.close c.fd with _ -> ()) t.clients;
   (try Unix.close t.server_fd with _ -> ());
-  (try Unix.unlink t.path with _ -> ())
+  (try Unix.unlink t.path with _ -> ());
+  List.iter (fun link -> try Unix.unlink link with _ -> ()) t.symlinks
 
 let socket_path t = t.path
 

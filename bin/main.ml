@@ -42,8 +42,14 @@ let () =
       (try Unix.kill (Rocq_protocol.pid t) Sys.sigint with _ -> ()));
   Printexc.record_backtrace true;
   (* Create tabs *)
+  let project_dirs = ref [] in
   let create_tab_for_file filename =
-    let (_project_dir, project_args) = Project.find_args (Some filename) in
+    let (project_dir, project_args) = Project.find_args (Some filename) in
+    (match project_dir with
+     | Some d ->
+       if not (List.mem d !project_dirs) then
+         project_dirs := d :: !project_dirs
+     | None -> ());
     let all_args = project_args @ extra_args in
     Tab.create_from_file ~args:all_args filename
   in
@@ -65,6 +71,8 @@ let () =
     | None -> ());
   (* Start MCP server *)
   let mcp = Mcp_server.create () in
+  (* Create MCP socket symlinks in project directories *)
+  List.iter (Mcp_server.create_project_symlink mcp) !project_dirs;
   (* Render helper *)
   let render () =
     (* Set MCP status indicator *)
@@ -167,10 +175,18 @@ let () =
     let extra_fds = stdin_fd :: mcp_fds in
     let ready = Main_loop.select_with_watches extra_fds timeout in
     (* Handle MCP connections/messages *)
-    if Mcp_server.handle_ready mcp ready mgr then
+    if Mcp_server.handle_ready mcp ready mgr then begin
       needs_render := true;
+      (* MCP may have opened new tabs *)
+      if Tab.count mgr > 1 then
+        Display.set_tab_bar display true
+    end;
     (* Poll ALL sessions *)
-    if Tab.poll_all mgr then needs_render := true;
+    if Tab.poll_all mgr then begin
+      needs_render := true;
+      (* Send MCP notifications for state changes driven by session polling *)
+      Mcp_server.poll_notifications mcp mgr
+    end;
     (* Handle keyboard input *)
     if List.mem stdin_fd ready then begin
       let rec drain () =
