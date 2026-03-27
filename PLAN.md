@@ -339,3 +339,148 @@ Both are handled in the same iteration, no separate timeout poll needed.
   `in_channel`. This avoids the buffering issue from the first attempt.
 - `edit_at` (backward stepping) can stay synchronous since rewind is fast
   and we need the result before proceeding.
+
+---
+
+## Phase 9: Multi-file Tabs
+
+**Goal**: Support multiple files open simultaneously, each with its own
+Rocq session, in a tabbed interface.
+
+### Architecture
+
+Each open file gets a **tab** containing:
+- Its own `Buffer.t`
+- Its own `Session.t` (separate coqidetop process)
+- Its own goals pane scroll, messages pane scroll, pane focus state
+- Its own editor state (selection, compose, etc.)
+
+A **tab manager** holds the list of tabs and tracks the active tab.
+The main loop polls ALL sessions but only renders the active tab.
+
+### Phase 9.1: Tab data structure
+
+Create `lib/tab.ml`:
+
+```ocaml
+type t = {
+  buf : Buffer.t;
+  session : Session.t option;
+  mutable goals_scroll : int;
+  mutable messages_scroll : int;
+  mutable focused_pane : pane;
+  (* ... other per-tab state currently in editor.ml globals *)
+}
+
+type manager = {
+  mutable tabs : t list;
+  mutable active : int;  (* index into tabs *)
+  mutable tab_scroll : int;  (* scroll offset for tab bar *)
+}
+```
+
+Move all per-tab mutable state out of `editor.ml` globals and into `tab.t`.
+This includes: `goals_scroll`, `messages_scroll`, `focused_pane`,
+`show_all_hyps`, `goals_sel`, `messages_sel`, `goals_lines_cache`,
+`messages_lines_cache`, `clipboard` (shared across tabs),
+`mouse_selecting`, `dragging`, `suppress_ensure_visible`.
+
+### Phase 9.2: Tab bar rendering
+
+Add a tab bar at the top of the screen (row 0), shifting the script/goals/
+messages panes down by one row.
+
+Tab bar layout:
+```
+◀ file1.v │ file2.v │ *file3.v │ file4.v ▶
+```
+
+- Active tab is highlighted (bold, different background)
+- Scroll arrows (`◀` `▶`) appear when tabs overflow the width
+- Tab names show `filename.v` (basename only), with `*` prefix if modified
+- Clicking a tab switches to it
+- Scroll arrows respond to clicks
+
+### Phase 9.3: Tab management keybindings
+
+| Key              | Action                              |
+|------------------|-------------------------------------|
+| Alt+Left         | Previous tab                        |
+| Alt+Right        | Next tab                            |
+| ^B               | New blank tab                       |
+| ^X               | Close tab (exit if last)            |
+
+Uses the same modifier (Alt) as step forward/back (Alt+Up/Down)
+but on left/right instead. ^T remains for printing options.
+
+Opening named files will be addressed separately (file picker, etc).
+
+### Phase 9.4: Refactor editor.ml
+
+`handle_key` currently takes a single `Buffer.t` and `Session.t option`.
+Refactor to take a `Tab.t` (or `Tab.manager`):
+
+- All editor state reads/writes go through the active tab
+- `render_all` renders only the active tab's content
+- Global state (clipboard, compose) stays global
+
+### Phase 9.5: Multi-session poll loop
+
+Update the main loop:
+
+```
+while running do
+  let timeout = ... in
+  let ready = Main_loop.select_with_watches [stdin_fd] timeout in
+
+  (* Poll ALL sessions, not just the active one *)
+  List.iter (fun tab ->
+    match tab.session with
+    | Some s -> ignore (Session.poll s)
+    | None -> ()
+  ) manager.tabs;
+
+  (* But only re-render the active tab *)
+  let active = active_tab manager in
+  if state_changed_any then
+    render active;
+
+  (* Handle keyboard input for active tab *)
+  if stdin_ready then handle_key active_tab ...
+done
+```
+
+Each session's watch callback is already registered with
+`Main_loop` via `Spawn.Async`. `select_with_watches` dispatches
+ALL watch callbacks for all sessions, so background tabs keep
+processing sentences even when not visible.
+
+### Phase 9.6: Opening files
+
+- Command line: `rocqtui file1.v file2.v ...` opens each in a tab
+- `^B` opens a new blank tab
+- Named file opening (file picker, etc.) to be designed later
+- Each tab gets its own `_RocqProject` lookup based on the file's
+  directory (different files may be in different projects)
+- Session args are per-tab
+
+### Phase 9.7: Tab interactions
+
+- Status bar shows tab-relevant info (filename from active tab)
+- `^O` saves the active tab's file
+- `^X` with multiple tabs: close active tab (prompt if unsaved)
+- `^X` with one tab: exit (prompt if unsaved)
+- Unsaved changes prompt is per-tab
+- Mouse click on tab bar switches tabs
+
+### Notes
+
+- `select` with many fds is fine — we'll have at most ~10 tabs,
+  each with one fd. Well within `select`'s limits.
+- Memory: each tab has a full buffer, session, and coqidetop process.
+  This is fine — coqidetop processes are lightweight until they
+  load large libraries.
+- The tab bar takes one row from the terminal. On small terminals
+  this matters. Could make it hideable.
+- Consider: should closing the last tab exit, or show an empty
+  tab / welcome screen?
