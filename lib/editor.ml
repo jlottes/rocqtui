@@ -30,19 +30,7 @@ let peek_getch timeout_sec =
   if List.mem Unix.stdin ready then Curses.getch ()
   else -1
 
-(* Pane focus *)
-type pane = Script | Goals | Messages
-
-let focused_pane = ref Script
-
-(* Scroll state for right panes *)
-let goals_scroll = ref 0
-let messages_scroll = ref 0
-
-(* Goals display mode *)
-let show_all_hyps = ref false
-
-(* Clipboard for copy/paste (separate from cut-line buffer) *)
+(* Clipboard — shared across tabs *)
 let clipboard = ref ""
 
 (* Compose input method *)
@@ -51,42 +39,17 @@ let compose_state : Compose.t option ref = ref None
 let init_compose () =
   compose_state := Some (Compose.load ())
 
-(* When true, skip ensure_visible on next render (mouse scroll) *)
-let suppress_ensure_visible = ref false
-
-(* Drag state for resizing pane borders *)
+(* Drag state for resizing pane borders — global since it's display-level *)
 type drag_mode = NoDrag | DragV | DragH
 let dragging = ref NoDrag
 
-(* Mouse selection drag state *)
-let mouse_selecting = ref false
-
-(* Right pane selection: stored as (start_line, start_col, end_line, end_col)
-   in wrapped-line coordinates *)
-type pane_selection = {
-  mutable ps_anchor_line : int;
-  mutable ps_anchor_col : int;
-  mutable ps_cursor_line : int;
-  mutable ps_cursor_col : int;
-  mutable ps_active : bool;
-}
-
-let goals_sel = { ps_anchor_line = 0; ps_anchor_col = 0;
-                  ps_cursor_line = 0; ps_cursor_col = 0; ps_active = false }
-let messages_sel = { ps_anchor_line = 0; ps_anchor_col = 0;
-                     ps_cursor_line = 0; ps_cursor_col = 0; ps_active = false }
-
-(* The last rendered wrapped lines for each pane, for extracting selection text *)
-let goals_lines_cache : string list ref = ref []
-let messages_lines_cache : string list ref = ref []
-
-let clear_pane_selection ps =
+let clear_pane_selection (ps : Tab.pane_selection) =
   ps.ps_active <- false
 
-let pane_selection_text ps lines_cache scroll =
+let pane_selection_text (ps : Tab.pane_selection) lines_cache scroll =
   if not ps.ps_active then None
   else begin
-    let lines = !lines_cache in
+    let lines = lines_cache in
     let n = List.length lines in
     let al = ps.ps_anchor_line + scroll in
     let ac = ps.ps_anchor_col in
@@ -110,7 +73,7 @@ let pane_selection_text ps lines_cache scroll =
     if text = "" then None else Some text
   end
 
-let [@warning "-32"] select_all_pane ps lines_cache scroll =
+let [@warning "-32"] select_all_pane (ps : Tab.pane_selection) lines_cache scroll =
   let lines = !lines_cache in
   let n = List.length lines in
   if n = 0 then ()
@@ -234,12 +197,12 @@ let wrap_lines width lines_list =
   List.rev !result
 
 (* Render a scrollable text pane with optional selection highlight *)
-let render_text_pane ?sel ?lines_cache win scroll_ref lines_list =
+let render_text_pane ?(sel : Tab.pane_selection option) ?set_cache win scroll_ref lines_list =
   let _ = Curses.werase win in
   let (rows, cols) = Curses.getmaxyx win in
   Curses.scrollok win false;
   let wrapped = wrap_lines cols lines_list in
-  (match lines_cache with Some r -> r := wrapped | None -> ());
+  (match set_cache with Some f -> f wrapped | None -> ());
   let n = List.length wrapped in
   scroll_ref := max 0 (min !scroll_ref (max 0 (n - rows)));
   List.iteri (fun i line ->
@@ -279,7 +242,8 @@ let render_text_pane ?sel ?lines_cache win scroll_ref lines_list =
   let _ = Curses.wnoutrefresh win in
   ()
 
-let render_goals display session =
+let render_goals display (tab : Tab.t) =
+  let session = tab.session in
   let win = Display.goals_win display in
   let lines = match session with
     | None ->
@@ -287,14 +251,18 @@ let render_goals display session =
                 else "No Rocq session." in
       String.split_on_char '\n' msg
     | Some sess ->
-      match Session.goals_text ~all_hyps:!show_all_hyps sess with
+      match Session.goals_text ~all_hyps:tab.show_all_hyps sess with
       | None -> ["No proof in progress."]
       | Some text -> String.split_on_char '\n' text
   in
-  render_text_pane ~sel:goals_sel ~lines_cache:goals_lines_cache
-    win goals_scroll lines
+  let gs = ref tab.goals_scroll in
+  render_text_pane ~sel:tab.goals_sel
+    ~set_cache:(fun l -> tab.goals_lines_cache <- l)
+    win gs lines;
+  tab.goals_scroll <- !gs
 
-let render_messages display session =
+let render_messages display (tab : Tab.t) =
+  let session = tab.session in
   let win = Display.messages_win display in
   let lines = match session with
     | None -> []
@@ -304,8 +272,11 @@ let render_messages display session =
         String.split_on_char '\n' msg
       ) (Session.messages sess)
   in
-  render_text_pane ~sel:messages_sel ~lines_cache:messages_lines_cache
-    win messages_scroll lines
+  let ms = ref tab.messages_scroll in
+  render_text_pane ~sel:tab.messages_sel
+    ~set_cache:(fun l -> tab.messages_lines_cache <- l)
+    win ms lines;
+  tab.messages_scroll <- !ms
 
 (* Extract the visible substring of a line given horizontal scroll.
    Returns (display_string, byte_offset_of_first_visible_char). *)
@@ -332,14 +303,16 @@ let render_help_screen display =
   let _ = Curses.wnoutrefresh win in
   ()
 
-let render_script display buf session =
+let render_script display (tab : Tab.t) =
+  let buf = tab.buf in
+  let session = tab.session in
   if !in_help_mode then
     render_help_screen display
   else begin
   let win = Display.script_win display in
   let (rows, cols) = Display.script_dims display in
-  if !suppress_ensure_visible then
-    suppress_ensure_visible := false
+  if tab.suppress_ensure_visible then
+    tab.suppress_ensure_visible <- false
   else
     Buffer.ensure_visible_h buf rows cols;
   let scroll = Buffer.scroll_top buf in
@@ -445,7 +418,9 @@ let cursor_byte_offset buf =
   done;
   !off + cc
 
-let cursor_in_target ?(for_backspace=false) buf session =
+let cursor_in_target ?(for_backspace=false) (tab : Tab.t) =
+  let buf = tab.buf in
+  let session = tab.session in
   match session with
   | None -> false
   | Some sess ->
@@ -457,7 +432,9 @@ let cursor_in_target ?(for_backspace=false) buf session =
       else off < tend
 
 (* After undo/redo, retract target if the edit is inside the target region *)
-let rewind_if_needed buf session =
+let rewind_if_needed (tab : Tab.t) =
+  let buf = tab.buf in
+  let session = tab.session in
   match session with
   | None -> ()
   | Some sess ->
@@ -514,11 +491,12 @@ let format_compose_status cs =
   Stdlib.Buffer.contents buf
 
 (* Get the subject for a query from whichever pane is focused *)
-let query_subject buf =
-  match !focused_pane with
-  | Goals -> pane_selection_text goals_sel goals_lines_cache !goals_scroll
-  | Messages -> pane_selection_text messages_sel messages_lines_cache !messages_scroll
-  | Script ->
+let query_subject (tab : Tab.t) =
+  let buf = tab.buf in
+  match tab.focused_pane with
+  | `Goals -> pane_selection_text tab.goals_sel tab.goals_lines_cache tab.goals_scroll
+  | `Messages -> pane_selection_text tab.messages_sel tab.messages_lines_cache tab.messages_scroll
+  | `Script ->
     match Buffer.selected_text buf with
     | Some text -> Some text
     | None -> Buffer.word_at_cursor buf
@@ -542,7 +520,9 @@ let render_options_bar display =
   let text = String.concat " " parts in
   Display.set_status display text
 
-let update_status display buf session =
+let update_status display (tab : Tab.t) =
+  let buf = tab.buf in
+  let session = tab.session in
   if !in_help_mode then
     Display.set_status display "F1:Help  Press any key to close."
   else if !in_options_mode then
@@ -573,10 +553,10 @@ let update_status display buf session =
         else if n_verified > 0 then Printf.sprintf " [%d verified]" n_verified
         else ""
     in
-    let focus_info = match !focused_pane with
-      | Script -> "  ^O:Save ^X:Exit ^T:Opts ^Q:Query F1:Help"
-      | Goals -> "  [Goals] ^W:Pane ^Q:Query F1:Help"
-      | Messages -> "  [Messages] ^W:Pane ^Q:Query F1:Help"
+    let focus_info = match tab.focused_pane with
+      | `Script -> "  ^O:Save ^X:Exit ^T:Opts ^Q:Query F1:Help"
+      | `Goals -> "  [Goals] ^W:Pane ^Q:Query F1:Help"
+      | `Messages -> "  [Messages] ^W:Pane ^Q:Query F1:Help"
     in
     (* Horizontal scroll indicator *)
     let hscroll_ind =
@@ -613,21 +593,22 @@ let update_status display buf session =
     Display.set_status display status
   end
 
-let render_all display buf session =
+let render_all display (tab : Tab.t) =
+  ignore (tab.buf, tab.session);
   Display.draw_chrome
-    ~goals_focused:(!focused_pane = Goals)
-    ~messages_focused:(!focused_pane = Messages)
+    ~goals_focused:(tab.focused_pane = `Goals)
+    ~messages_focused:(tab.focused_pane = `Messages)
     display;
-  render_script display buf session;
-  render_goals display session;
-  render_messages display session;
-  update_status display buf session;
+  render_script display tab;
+  render_goals display tab;
+  render_messages display tab;
+  update_status display tab;
   (* Hide cursor when not in Script pane or when cursor is scrolled off-screen *)
   let cursor_visible =
-    if !focused_pane <> Script then false
+    if tab.focused_pane <> `Script then false
     else
-      let (cl, _) = Buffer.cursor buf in
-      let scroll = Buffer.scroll_top buf in
+      let (cl, _) = Buffer.cursor tab.buf in
+      let scroll = Buffer.scroll_top tab.buf in
       let (rows, _) = Display.script_dims display in
       cl >= scroll && cl < scroll + rows
   in
@@ -656,7 +637,7 @@ let screen_to_buffer_pos display buf ~x ~y =
   end
 
 (* Convert screen coords to a right-pane (line, byte_col) relative to the pane *)
-let screen_to_pane_pos display ~x ~y pane_id =
+let screen_to_pane_pos (tab : Tab.t) display ~x ~y pane_id =
   let win = match pane_id with
     | `Goals -> Display.goals_win display
     | `Messages -> Display.messages_win display
@@ -667,12 +648,12 @@ let screen_to_pane_pos display ~x ~y pane_id =
   let col = x - begx - 1 in (* -1 for margin *)
   if row < 0 || row >= rows || col < 0 || col >= cols then None
   else begin
-    let scroll_ref, lines_cache = match pane_id with
-      | `Goals -> (goals_scroll, goals_lines_cache)
-      | `Messages -> (messages_scroll, messages_lines_cache)
+    let scroll, lines_cache = match pane_id with
+      | `Goals -> (tab.goals_scroll, tab.goals_lines_cache)
+      | `Messages -> (tab.messages_scroll, tab.messages_lines_cache)
     in
-    let line_idx = !scroll_ref + row in
-    let lines = !lines_cache in
+    let line_idx = scroll + row in
+    let lines = lines_cache in
     let n = List.length lines in
     if line_idx >= n then None
     else begin
@@ -683,8 +664,8 @@ let screen_to_pane_pos display ~x ~y pane_id =
   end
 
 (* Select word at position in a pane's cached lines *)
-let pane_select_word ps lines_cache scroll row byte_col =
-  let lines = !lines_cache in
+let pane_select_word (ps : Tab.pane_selection) lines_cache scroll row byte_col =
+  let lines = lines_cache in
   let line_idx = scroll + row in
   if line_idx >= List.length lines then ()
   else begin
@@ -709,14 +690,17 @@ let pane_select_word ps lines_cache scroll row byte_col =
     end
   end
 
-let insert_string buf session s =
-  if not (cursor_in_target buf session) then
+let insert_string (tab : Tab.t) s =
+  if not (cursor_in_target tab) then
+    let buf = tab.buf in
     String.iter (fun c ->
       if c = '\n' then Buffer.insert_newline buf
       else Buffer.insert_char buf c
     ) s
 
-let handle_key ch buf display session =
+let handle_key ch (tab : Tab.t) display =
+  let buf = tab.buf in
+  let session = tab.session in
   (* Handle compose mode first *)
   let compose_handled = match !compose_state with
     | Some cs when Compose.active cs ->
@@ -727,7 +711,7 @@ let handle_key ch buf display session =
          Display.refresh_all display
        | Compose.Composed text ->
          ignore (Buffer.delete_selection buf);
-         insert_string buf session text
+         insert_string tab text
        | Compose.NoMatch ->
          (* If the key that broke compose was Escape, restart compose *)
          if ch = 27 then begin
@@ -752,17 +736,17 @@ let handle_key ch buf display session =
       Some Continue
     end
     else if ch = 14 || ch = 526 || ch = 532 || ch = 517 then begin
-      goals_scroll := 0; messages_scroll := 0;
+      tab.goals_scroll <- 0; tab.messages_scroll <- 0;
       (match session with Some s -> Session.step_forward s | None -> ());
       Some Continue
     end
     else if ch = 16 || ch = 567 || ch = 573 || ch = 558 then begin
-      goals_scroll := 0; messages_scroll := 0;
+      tab.goals_scroll <- 0; tab.messages_scroll <- 0;
       (match session with Some s -> Session.step_backward s | None -> ());
       Some Continue
     end
     else if ch = 5 then begin (* ^E — go to cursor *)
-      goals_scroll := 0; messages_scroll := 0;
+      tab.goals_scroll <- 0; tab.messages_scroll <- 0;
       (match session with Some s -> Session.go_to_cursor s | None -> ());
       Some Continue
     end
@@ -818,7 +802,7 @@ let handle_key ch buf display session =
             let text = Stdlib.Buffer.contents paste_buf in
             if text <> "" then begin
               ignore (Buffer.delete_selection buf);
-              insert_string buf session text;
+              insert_string tab text;
               clipboard := text
             end
           end
@@ -843,14 +827,14 @@ let handle_key ch buf display session =
                Display.refresh_all display
              | Compose.Composed text ->
                ignore (Buffer.delete_selection buf);
-               insert_string buf session text
+               insert_string tab text
              | Compose.NoMatch -> ())
           | None -> ()
         end
       end;
       Some Continue
     end
-    else if ch = 7 then begin show_all_hyps := not !show_all_hyps; Some Continue end
+    else if ch = 7 then begin tab.show_all_hyps <- not tab.show_all_hyps; Some Continue end
     else if ch = 20 then begin (* ^T *)
       if !in_options_mode then begin
         in_options_mode := false;
@@ -880,12 +864,12 @@ let handle_key ch buf display session =
       let c = Char.lowercase_ascii (Char.chr (ch land 0xFF)) in
       let handled =
         if c = 'a' then begin
-          let subject = query_subject buf in
+          let subject = query_subject tab in
           (match subject with
            | Some word -> run_query session ("About " ^ word ^ ".")
            | None -> ()); true
         end else if c = 'd' then begin
-          let subject = query_subject buf in
+          let subject = query_subject tab in
           (match subject with
            | Some word -> run_query session ("Print " ^ word ^ ".")
            | None -> ()); true
@@ -899,8 +883,8 @@ let handle_key ch buf display session =
       else None  (* fall through to normal handling *)
     end
     else if ch = 23 then begin (* ^W *)
-      focused_pane := (match !focused_pane with
-        | Script -> Goals | Goals -> Messages | Messages -> Script);
+      tab.focused_pane <- (match tab.focused_pane with
+        | `Script -> `Goals | `Goals -> `Messages | `Messages -> `Script);
       Some Continue
     end
     else if ch = Curses.Key.resize then begin
@@ -924,7 +908,7 @@ let handle_key ch buf display session =
          | NoDrag -> ());
         if b1_release then dragging := NoDrag
       end
-      else if !mouse_selecting then begin
+      else if tab.mouse_selecting then begin
         (* Active text selection drag *)
         let pane = Display.pane_at display ~x ~y in
         if pane = Display.PScript then begin
@@ -933,17 +917,17 @@ let handle_key ch buf display session =
           | None -> ()
         end else if pane = Display.PGoals || pane = Display.PMessages then begin
           let (ps, pane_id) =
-            if pane = Display.PGoals then (goals_sel, `Goals)
-            else (messages_sel, `Messages)
+            if pane = Display.PGoals then (tab.goals_sel, `Goals)
+            else (tab.messages_sel, `Messages)
           in
-          (match screen_to_pane_pos display ~x ~y pane_id with
+          (match screen_to_pane_pos tab display ~x ~y pane_id with
            | Some (row, byte_col) ->
              ps.ps_cursor_line <- row;
              ps.ps_cursor_col <- byte_col
            | None -> ())
         end;
         if b1_release then
-          mouse_selecting := false
+          tab.mouse_selecting <- false
       end
       else begin
         let pane = Display.pane_at display ~x ~y in
@@ -957,11 +941,11 @@ let handle_key ch buf display session =
             let (rows, _) = Display.script_dims display in
             let max_scroll = max 0 (Buffer.line_count buf - rows) in
             Buffer.set_scroll_top buf (max 0 (min max_scroll (Buffer.scroll_top buf + delta)));
-            suppress_ensure_visible := true
+            tab.suppress_ensure_visible <- true
           | Display.PGoals ->
-            goals_scroll := max 0 (!goals_scroll + delta)
+            tab.goals_scroll <- max 0 (tab.goals_scroll + delta)
           | Display.PMessages ->
-            messages_scroll := max 0 (!messages_scroll + delta)
+            tab.messages_scroll <- max 0 (tab.messages_scroll + delta)
           | _ -> ()
         end
         else if pane = Display.PTabBar && (b1_click || b1_press) then begin
@@ -976,22 +960,21 @@ let handle_key ch buf display session =
         else if (pane = Display.PGoals || pane = Display.PMessages)
                 && (b1_click || b1_dblclick || b1_press) then begin
           (* Click in right pane — focus it *)
-          let target_pane = if pane = Display.PGoals then Goals else Messages in
-          focused_pane := target_pane;
+          tab.focused_pane <- (if pane = Display.PGoals then `Goals else `Messages);
           let (ps, lines_cache, scroll_ref, pane_id) =
             if pane = Display.PGoals then
-              (goals_sel, goals_lines_cache, goals_scroll, `Goals)
+              (tab.goals_sel, tab.goals_lines_cache, tab.goals_scroll, `Goals)
             else
-              (messages_sel, messages_lines_cache, messages_scroll, `Messages)
+              (tab.messages_sel, tab.messages_lines_cache, tab.messages_scroll, `Messages)
           in
           if b1_dblclick then begin
-            match screen_to_pane_pos display ~x ~y pane_id with
+            match screen_to_pane_pos tab display ~x ~y pane_id with
             | Some (row, byte_col) ->
-              pane_select_word ps lines_cache !scroll_ref row byte_col
+              pane_select_word ps lines_cache scroll_ref row byte_col
             | None -> ()
           end
           else if b1_press then begin
-            match screen_to_pane_pos display ~x ~y pane_id with
+            match screen_to_pane_pos tab display ~x ~y pane_id with
             | Some (row, byte_col) ->
               clear_pane_selection ps;
               ps.ps_anchor_line <- row;
@@ -999,19 +982,19 @@ let handle_key ch buf display session =
               ps.ps_cursor_line <- row;
               ps.ps_cursor_col <- byte_col;
               ps.ps_active <- true;
-              mouse_selecting := true
+              tab.mouse_selecting <- true
             | None -> ()
           end
           else begin (* b1_click *)
-            match screen_to_pane_pos display ~x ~y pane_id with
+            match screen_to_pane_pos tab display ~x ~y pane_id with
             | Some (_, _) -> clear_pane_selection ps
             | None -> ()
           end
         end
         else if pane = Display.PScript && (b1_click || b1_dblclick || b1_press) then begin
-          focused_pane := Script;
-          clear_pane_selection goals_sel;
-          clear_pane_selection messages_sel;
+          tab.focused_pane <- `Script;
+          clear_pane_selection tab.goals_sel;
+          clear_pane_selection tab.messages_sel;
           if has_cmd then begin
             match screen_to_buffer_pos display buf ~x ~y with
             | Some (line, byte_col) ->
@@ -1044,7 +1027,7 @@ let handle_key ch buf display session =
               Buffer.clear_selection buf;
               Buffer.move_to buf line byte_col;
               Buffer.set_anchor buf;
-              mouse_selecting := true
+              tab.mouse_selecting <- true
             | None -> ()
           end
           else if b1_click then begin
@@ -1069,10 +1052,10 @@ let handle_key ch buf display session =
       Some Continue
     end
     else if ch = 1 then begin (* ^A — About query from any pane *)
-      let subject = match !focused_pane with
-        | Goals -> pane_selection_text goals_sel goals_lines_cache !goals_scroll
-        | Messages -> pane_selection_text messages_sel messages_lines_cache !messages_scroll
-        | Script ->
+      let subject = match tab.focused_pane with
+        | `Goals -> pane_selection_text tab.goals_sel tab.goals_lines_cache tab.goals_scroll
+        | `Messages -> pane_selection_text tab.messages_sel tab.messages_lines_cache tab.messages_scroll
+        | `Script ->
           match Buffer.selected_text buf with
           | Some text -> Some text | None -> Buffer.word_at_cursor buf
       in
@@ -1082,10 +1065,10 @@ let handle_key ch buf display session =
       Some Continue
     end
     else if ch = 4 then begin (* ^D — Print query from any pane *)
-      let subject = match !focused_pane with
-        | Goals -> pane_selection_text goals_sel goals_lines_cache !goals_scroll
-        | Messages -> pane_selection_text messages_sel messages_lines_cache !messages_scroll
-        | Script ->
+      let subject = match tab.focused_pane with
+        | `Goals -> pane_selection_text tab.goals_sel tab.goals_lines_cache tab.goals_scroll
+        | `Messages -> pane_selection_text tab.messages_sel tab.messages_lines_cache tab.messages_scroll
+        | `Script ->
           match Buffer.selected_text buf with
           | Some text -> Some text | None -> Buffer.word_at_cursor buf
       in
@@ -1095,10 +1078,10 @@ let handle_key ch buf display session =
       Some Continue
     end
     else if ch = 25 then begin (* ^Y — copy from any pane *)
-      let text = match !focused_pane with
-        | Goals -> pane_selection_text goals_sel goals_lines_cache !goals_scroll
-        | Messages -> pane_selection_text messages_sel messages_lines_cache !messages_scroll
-        | Script -> Buffer.selected_text buf
+      let text = match tab.focused_pane with
+        | `Goals -> pane_selection_text tab.goals_sel tab.goals_lines_cache tab.goals_scroll
+        | `Messages -> pane_selection_text tab.messages_sel tab.messages_lines_cache tab.messages_scroll
+        | `Script -> Buffer.selected_text buf
       in
       (match text with
        | Some t ->
@@ -1109,12 +1092,12 @@ let handle_key ch buf display session =
     end
     else if ch = 26 then begin (* ^Z — undo *)
       Buffer.undo buf;
-      rewind_if_needed buf session;
+      rewind_if_needed tab;
       Some Continue
     end
     else if ch = 18 then begin (* ^R — redo *)
       Buffer.redo buf;
-      rewind_if_needed buf session;
+      rewind_if_needed tab;
       Some Continue
     end
     else None
@@ -1201,7 +1184,7 @@ let handle_key ch buf display session =
     end
     (* Clipboard *)
     else if ch = 11 then begin (* ^K — cut *)
-      if not (cursor_in_target buf session) then begin
+      if not (cursor_in_target tab) then begin
         (match session with Some s -> Session.clear_error s | None -> ());
         match Buffer.delete_selection buf with
         | Some text ->
@@ -1214,7 +1197,7 @@ let handle_key ch buf display session =
       Some Continue
     end
     else if ch = 21 then begin (* ^U — paste *)
-      if not (cursor_in_target buf session) then begin
+      if not (cursor_in_target tab) then begin
         (match session with Some s -> Session.clear_error s | None -> ());
         ignore (Buffer.delete_selection buf);
         if !clipboard <> "" then
@@ -1229,7 +1212,7 @@ let handle_key ch buf display session =
     (* Editing — clear error region on any edit *)
     else if ch = Curses.Key.dc then begin
       let clear_err () = match session with Some s -> Session.clear_error s | None -> () in
-      if not (cursor_in_target buf session) then begin
+      if not (cursor_in_target tab) then begin
         clear_err ();
         (match Buffer.delete_selection buf with
          | Some _ -> () | None -> Buffer.delete_char_at buf)
@@ -1237,7 +1220,7 @@ let handle_key ch buf display session =
       Some Continue
     end
     else if ch = Curses.Key.backspace || ch = 127 || ch = 8 then begin
-      if not (cursor_in_target ~for_backspace:true buf session) then begin
+      if not (cursor_in_target ~for_backspace:true tab) then begin
         (match session with Some s -> Session.clear_error s | None -> ());
         (match Buffer.delete_selection buf with
          | Some _ -> () | None -> Buffer.delete_char_before buf)
@@ -1245,7 +1228,7 @@ let handle_key ch buf display session =
       Some Continue
     end
     else if ch = 10 || ch = 13 || ch = Curses.Key.enter then begin
-      if not (cursor_in_target buf session) then begin
+      if not (cursor_in_target tab) then begin
         (match session with Some s -> Session.clear_error s | None -> ());
         ignore (Buffer.delete_selection buf);
         Buffer.insert_newline buf
@@ -1253,7 +1236,7 @@ let handle_key ch buf display session =
       Some Continue
     end
     else if ch >= 32 && ch < 127 then begin
-      if not (cursor_in_target buf session) then begin
+      if not (cursor_in_target tab) then begin
         (match session with Some s -> Session.clear_error s | None -> ());
         ignore (Buffer.delete_selection buf);
         Buffer.insert_char buf (Char.chr ch)
@@ -1266,14 +1249,18 @@ let handle_key ch buf display session =
     match handle_global () with
     | Some a -> a
     | None ->
-      match !focused_pane with
-      | Goals ->
-        (match handle_scroll goals_scroll (fun () -> Display.goals_win display) with
-         | Some a -> a | None -> Continue)
-      | Messages ->
-        (match handle_scroll messages_scroll (fun () -> Display.messages_win display) with
-         | Some a -> a | None -> Continue)
-      | Script ->
+      match tab.focused_pane with
+      | `Goals ->
+        let r = ref tab.goals_scroll in
+        let result = handle_scroll r (fun () -> Display.goals_win display) in
+        tab.goals_scroll <- !r;
+        (match result with Some a -> a | None -> Continue)
+      | `Messages ->
+        let r = ref tab.messages_scroll in
+        let result = handle_scroll r (fun () -> Display.messages_win display) in
+        tab.messages_scroll <- !r;
+        (match result with Some a -> a | None -> Continue)
+      | `Script ->
         (match handle_script () with
          | Some a -> a | None -> Continue)
   in

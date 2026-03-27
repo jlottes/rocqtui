@@ -90,7 +90,7 @@ let () =
       ) mgr.tabs in
       Display.draw_tab_bar display tabs mgr.active
     end;
-    Editor.render_all display tab.buf tab.session
+    Editor.render_all display tab
   in
   (* Non-blocking getch *)
   Curses.timeout 0;
@@ -148,7 +148,7 @@ let () =
             needs_render := true
           end else begin
             let t = Tab.active_tab mgr in
-            ignore (Editor.handle_key ch2 t.buf display t.session);
+            ignore (Editor.handle_key ch2 t display);
             needs_render := true
           end
         end
@@ -192,7 +192,7 @@ let () =
             needs_render := true
           end
           else begin
-            match Editor.handle_key ch tab.buf display tab.session with
+            match Editor.handle_key ch tab display with
             | Editor.Quit -> handle_quit ()
             | Editor.Save_prompt ->
               (match Buffer.filename tab.buf with

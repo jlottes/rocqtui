@@ -13,12 +13,13 @@
 
 ## Per-tab State Refactor (Phase 9 remaining)
 
-- [ ] Move `goals_scroll`, `messages_scroll`, `focused_pane`, `show_all_hyps`
-      from editor.ml globals into Tab.t (currently still global)
-- [ ] Move `goals_sel`, `messages_sel`, `goals_lines_cache`, `messages_lines_cache`
+- [x] Move `goals_scroll`, `messages_scroll`, `focused_pane`, `show_all_hyps`
+      from editor.ml globals into Tab.t
+- [x] Move `goals_sel`, `messages_sel`, `goals_lines_cache`, `messages_lines_cache`
       into Tab.t
-- [ ] Move `mouse_selecting`, `dragging`, `suppress_ensure_visible` into Tab.t
-- [ ] Editor.handle_key should take a Tab.t instead of separate buf + session
+- [x] Move `mouse_selecting`, `suppress_ensure_visible` into Tab.t
+- [x] Editor.handle_key takes Tab.t instead of separate buf + session
+- Note: `dragging` and `clipboard` remain global (display-level / shared)
 
 ## Editor Features
 

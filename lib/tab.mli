@@ -1,16 +1,28 @@
 (** Tab management for multi-file editing. *)
 
+type pane_selection = {
+  mutable ps_anchor_line : int;
+  mutable ps_anchor_col : int;
+  mutable ps_cursor_line : int;
+  mutable ps_cursor_col : int;
+  mutable ps_active : bool;
+}
+
 type t = {
   id : int;
   buf : Buffer.t;
   mutable session : Session.t option;
   session_args : string list;
+  mutable focused_pane : [`Script | `Goals | `Messages];
   mutable goals_scroll : int;
   mutable messages_scroll : int;
-  mutable focused_pane : [`Script | `Goals | `Messages];
   mutable show_all_hyps : bool;
   mutable mouse_selecting : bool;
   mutable suppress_ensure_visible : bool;
+  goals_sel : pane_selection;
+  messages_sel : pane_selection;
+  mutable goals_lines_cache : string list;
+  mutable messages_lines_cache : string list;
 }
 
 type manager = {
@@ -19,39 +31,16 @@ type manager = {
   mutable tab_scroll : int;
 }
 
-(** Create a new tab with an empty buffer and a fresh session. *)
 val create_blank : ?args:string list -> unit -> t
-
-(** Create a tab from a file, optionally starting a Rocq session. *)
 val create_from_file : ?args:string list -> string -> t
-
-(** Get the active tab. *)
 val active_tab : manager -> t
-
-(** Find a tab by its unique ID. *)
 val find_by_id : manager -> int -> t option
-
-(** Get the index of a tab by its ID. *)
 val index_of_id : manager -> int -> int option
-
-(** Number of tabs. *)
 val count : manager -> int
-
-(** Add a tab and make it active. *)
 val add_tab : manager -> t -> unit
-
-(** Close the active tab. Returns false if it was the last tab. *)
 val close_active : manager -> bool
-
-(** Switch to next/previous tab. *)
 val next_tab : manager -> unit
 val prev_tab : manager -> unit
-
-(** Create a manager with an initial tab. *)
 val create_manager : t -> manager
-
-(** Poll all sessions. Returns true if any state changed. *)
 val poll_all : manager -> bool
-
-(** Find which tab index was clicked given x coordinate on the tab bar. *)
 val tab_at_x : manager -> int -> int option

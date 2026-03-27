@@ -18,6 +18,6 @@ val set_tab_bar_click_handler : (int -> unit) -> unit
 val set_status_extra : string -> unit
 
 (** Render the active tab's display. *)
-val render_all : Display.t -> Buffer.t -> Session.t option -> unit
+val render_all : Display.t -> Tab.t -> unit
 
-val handle_key : int -> Buffer.t -> Display.t -> Session.t option -> action
+val handle_key : int -> Tab.t -> Display.t -> action
