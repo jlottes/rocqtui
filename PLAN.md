@@ -955,9 +955,254 @@ toggle" (in Kitty mode) without conflict.
 7. Add Kitty-specific key parsing
 8. Add alternative bindings for Kitty mode
 
+---
+
+## Phase 13: Replace ncurses with direct terminal I/O
+
+**Goal**: Remove the ncurses dependency entirely. Implement terminal
+output via ANSI escape sequences over a double-buffered cell grid,
+and terminal input by reading raw bytes and parsing escape sequences
+ourselves. This eliminates the conflict between ncurses' keypad mode
+and the Kitty keyboard protocol.
+
+### What ncurses currently provides
+
+1. Terminal setup: alternate screen, raw mode, cursor visibility
+2. Window compositing: newwin/wnoutrefresh/doupdate
+3. Color pairs: init_pair, color_pair attributes
+4. Text output: mvwaddstr, waddch, mvwchgat
+5. Input: getch, keypad (escape sequence → KEY_UP etc.)
+6. Query: getmaxyx, terminal size
+7. ACS line-drawing characters
+
+### Phase 13.1: Cell grid (`grid.ml`)
+
+The core data structure: a 2D array of cells, each containing:
+
+```ocaml
+type attr = {
+  fg : color;        (* -1 = default *)
+  bg : color;        (* -1 = default *)
+  bold : bool;
+  dim : bool;
+  reverse : bool;
+  underline : bool;
+}
+
+type color =
+  | Default
+  | Basic of int       (* 0-7 standard, 8-15 bright *)
+  | Color256 of int    (* 0-255 *)
+  | TrueColor of int * int * int  (* r, g, b *)
+
+type cell = {
+  text : string;      (* UTF-8 string for this cell, usually 1 codepoint
+                         but may include combining characters *)
+  width : int;         (* display width: 0 for continuation of wide char,
+                         1 for normal, 2 for CJK *)
+  attr : attr;
+}
+```
+
+Wide characters (CJK, some emoji): the first cell has `width=2` and
+holds the text; the next cell has `width=0` and empty text (it's a
+"continuation" cell). Writing to either cell clears both.
+
+Combining characters: appended to the text of the preceding cell.
+The cell's `width` stays 1 (or 2). For example, `e` followed by
+combining acute (U+0301) produces a cell with text `"é"` and
+width 1.
+
+```ocaml
+type t = {
+  mutable cells : cell array array;  (* rows × cols *)
+  mutable rows : int;
+  mutable cols : int;
+}
+
+val create : int -> int -> t
+val resize : t -> int -> int -> unit
+val set_cell : t -> row:int -> col:int -> string -> attr -> unit
+val put_str : t -> row:int -> col:int -> string -> attr -> int
+    (* returns columns consumed *)
+val fill_row : t -> row:int -> col:int -> int -> char -> attr -> unit
+val clear : t -> unit
+val clear_row : t -> int -> unit
+```
+
+### Phase 13.2: Grid diff + ANSI output (`term.ml`)
+
+Compare current grid against previous frame, emit ANSI sequences for
+only the changed cells:
+
+```ocaml
+val flush : prev:t -> curr:t -> Buffer.t -> unit
+```
+
+ANSI sequences needed:
+- Cursor position: `\e[row;colH` (1-based)
+- SGR (Select Graphic Rendition): `\e[0m` reset, `\e[1m` bold,
+  `\e[2m` dim, `\e[7m` reverse, `\e[4m` underline
+- Foreground: `\e[38;5;Nm` (256), `\e[38;2;R;G;Bm` (true color)
+- Background: `\e[48;5;Nm` (256), `\e[48;2;R;G;Bm` (true color)
+- Default fg/bg: `\e[39m` / `\e[49m`
+- Clear to end of line: `\e[K` (optimization for trailing spaces)
+
+Optimization: track current cursor position and attributes to minimize
+escape sequences. Skip cells that haven't changed.
+
+### Phase 13.3: Terminal setup/teardown (`term.ml`)
+
+```ocaml
+val init : unit -> unit    (* alternate screen, raw mode, mouse, etc. *)
+val teardown : unit -> unit
+val size : unit -> int * int  (* rows, cols *)
+```
+
+Init sequence:
+- `tcsetattr` for raw mode (no echo, no signals, no IXON)
+- `\e[?1049h` alternate screen buffer
+- `\e[?25l` hide cursor (we control cursor visibility)
+- `\e[?1002h` button-event mouse tracking
+- `\e[?2004h` bracketed paste
+- `\e[>1u` Kitty keyboard protocol (if supported)
+
+Teardown reverses all of these.
+
+Terminal size: `ioctl TIOCGWINSZ` (C stub) + `SIGWINCH` handler.
+
+### Phase 13.4: Input parser (`input.ml`)
+
+Read raw bytes from stdin, parse into key events:
+
+```ocaml
+type key_event =
+  | Char of int * modifier          (* Unicode codepoint + modifiers *)
+  | Special of special_key * modifier
+  | Mouse of mouse_event
+  | Paste of string
+  | Resize
+
+type modifier = { shift: bool; alt: bool; ctrl: bool; super: bool }
+
+type special_key =
+  | Up | Down | Left | Right
+  | Home | End | PageUp | PageDown
+  | Insert | Delete
+  | F of int
+  | Backspace | Tab | Enter | Escape
+
+val read_event : Unix.file_descr -> timeout:float -> key_event option
+```
+
+The parser handles:
+- Raw bytes → UTF-8 codepoints
+- CSI sequences (arrows, function keys, mouse)
+- CSI u sequences (Kitty keyboard protocol)
+- SS3 sequences (some terminal F1-F4)
+- Bracketed paste (ESC[200~ ... ESC[201~)
+- OSC sequences (ignored/skipped)
+
+### Phase 13.5: Rendering layer (`render.ml`)
+
+Replaces `Display.t` and the ncurses window management:
+
+```ocaml
+type pane = {
+  row : int; col : int;
+  height : int; width : int;
+}
+
+type t = {
+  grid : Grid.t;
+  prev : Grid.t;
+  mutable panes : (pane_id * pane) list;
+  mutable overlay : (pane * (Grid.t -> unit)) option;
+}
+
+val layout : t -> int -> int -> unit  (* recompute pane positions *)
+val render_to_pane : t -> pane_id -> (Grid.t -> row:int -> col:int -> int -> int -> unit) -> unit
+val set_overlay : t -> pane -> (Grid.t -> unit) -> unit
+val clear_overlay : t -> unit
+val flush : t -> unit  (* diff + write to stdout *)
+```
+
+Panes are just regions in the single grid. The overlay (file picker)
+renders on top after all panes. `flush` diffs curr vs prev and emits
+minimal ANSI output.
+
+### Phase 13.6: Migrate from ncurses
+
+Incrementally replace ncurses calls:
+1. Replace `Display.init` with `Term.init` + `Render.create`
+2. Replace `mvwaddstr`/`wchgat` with `Grid.put_str`/`Grid.set_attr`
+3. Replace `wnoutrefresh`/`doupdate` with `Render.flush`
+4. Replace `getch`/`keypad` with `Input.read_event`
+5. Remove curses dependency from dune
+
+### Phase 13.7: Unicode cell handling
+
+Correct handling of Unicode characters in the cell grid:
+
+**Wide characters** (East Asian width = 2):
+- `wcwidth()` returns 2 for CJK ideographs, some symbols
+- The character occupies 2 cells; second cell is a continuation
+- We already have `wcwidth` via our C stubs
+
+**Combining characters** (width = 0):
+- `wcwidth()` returns 0 for combining marks (U+0300-U+036F, etc.)
+- Appended to the text of the preceding base character cell
+- The cell's display width doesn't change
+
+**Zero-width characters**:
+- ZWJ (U+200D), ZWNJ (U+200C), soft hyphen, etc.
+- Appended to preceding cell like combining characters
+
+**Emoji**:
+- Many emoji are width 2
+- Emoji sequences (ZWJ sequences like 👨‍👩‍👧) may be width 2 total
+  but composed of many codepoints — all stored in one cell's text
+
+Test file: `/home/jlottes/glterm-1/test/UTF-8-demo.txt` exercises
+combining characters (Thai), wide characters, and various scripts.
+
+### Phase 13.8: Color model
+
+Support three color modes:
+- **Basic 16**: colors 0-15, SGR codes 30-37/90-97 (fg), 40-47/100-107 (bg)
+- **256 color**: `\e[38;5;Nm` / `\e[48;5;Nm`
+- **True color**: `\e[38;2;R;G;Bm` / `\e[48;2;R;G;Bm`
+
+Detect terminal capability: check `$COLORTERM` for "truecolor"/"24bit",
+or `$TERM` for "256color". Default to 256 color (safe everywhere modern).
+
+Theme colors can be specified as true color and auto-downsampled to
+256-color or 16-color as needed.
+
+### Testing
+
+- Standalone test: render UTF-8 demo file through the grid, verify
+  output matches expected (especially wide chars, combining chars)
+- Visual test: cat ANSI output to terminal, compare with reference
+- Input test: parse recorded escape sequences, verify key_event output
+
 ### Notes
 
-- The refactor should be mechanical — no behavior changes in steps 1-5.
+- The grid + ANSI approach is what most modern TUI frameworks use
+  (tui-rs, blessed, bubbletea, crossterm, notcurses)
+- Performance: full-screen diff is fast (a few hundred μs for a
+  typical terminal). Writing only changed cells minimizes I/O.
+- We keep the curses OCaml package as a dependency during migration
+  so we can switch incrementally. Remove it once migration is complete.
+- Line drawing: use Unicode box-drawing characters (U+2500-U+257F)
+  instead of ACS. We already do this for the minimap brackets.
+- No terminfo: assume a modern VT100/xterm-compatible terminal.
+  Every realistic terminal (iTerm2, Kitty, Alacritty, WezTerm, foot,
+  gnome-terminal, xterm, macOS Terminal.app) supports ANSI escapes,
+  256 colors, UTF-8, alternate screen, mouse tracking. True color
+  detected via $COLORTERM; Kitty protocol detected via query sequence.
+
+### Notes
 - The help screen generation replaces the hand-maintained `help.ml`.
 - Context-specific bindings (like query menu keys) still need their
   own dispatch logic, but the keys themselves are defined centrally.
