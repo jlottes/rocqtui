@@ -98,6 +98,7 @@ let rewind_errors t =
     let result = Rocq_protocol.edit_at t.rocq target_id in
     process_feedback t;
     (match result with Interface.Good _ -> () | Interface.Fail _ -> ());
+    t.goals_dirty <- true;
     t.state_changed <- true
 
 (* Format goals for display *)
