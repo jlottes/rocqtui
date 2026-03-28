@@ -85,6 +85,11 @@ All edit tools return a context snippet around the edit for verification.
   byte offset. Column defaults to 0. Use this to compute offsets for edits.
 - **get_context** `{offset, before?, after?}` — Get buffer text around a byte
   offset. Returns `{start, end, offset, text}`. Defaults: 500 bytes each side.
+- **get_position** `{target?, context_bytes?}` — Get the current verification
+  boundary with context. Returns `{verified_end, target_end, position, before,
+  after}` where each end has `{offset, line, col}`. `target` (default false)
+  controls whether `position`/context is around the target or verified end.
+  `context_bytes` defaults to 200.
 
 ### Querying Rocq
 

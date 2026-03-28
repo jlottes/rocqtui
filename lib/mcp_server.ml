@@ -265,6 +265,16 @@ let tool_defs = [
      ];
      "required", `List [`String "old_text"; `String "new_text"];
    ]);
+  ("get_position", "Get the current verified/target boundary with context",
+   `Assoc [
+     "type", `String "object";
+     "properties", `Assoc [
+       "target", `Assoc ["type", `String "boolean";
+         "description", `String "If true, return target boundary instead of verified (default false)"];
+       "context_bytes", `Assoc ["type", `String "integer";
+         "description", `String "Bytes of context before/after (default 200)"];
+     ];
+   ]);
   ("is_busy", "Check if rocqtui is busy (stepping in progress)",
    `Assoc [
      "type", `String "object";
@@ -475,6 +485,26 @@ let create_project_symlink t dir =
      if not (List.mem link t.symlinks) then
        t.symlinks <- link :: t.symlinks
    with _ -> ())
+
+(* Convert byte offset to (line, col), 0-based *)
+let offset_to_line_col buf offset =
+  let line = ref 0 in
+  let col = ref 0 in
+  let pos = ref 0 in
+  let n = Buffer.line_count buf in
+  let found = ref false in
+  while !line < n && not !found do
+    let l = Buffer.get_line buf !line in
+    let len = String.length l in
+    if !pos + len >= offset then begin
+      col := offset - !pos;
+      found := true
+    end else begin
+      pos := !pos + len + 1;  (* +1 for newline *)
+      incr line
+    end
+  done;
+  (!line, !col)
 
 (* Return a short context snippet around an edit for verification *)
 let edit_context buf pos len =
@@ -850,6 +880,50 @@ let handle_tool t name args mgr =
         end
       end
     end
+  | "get_position" ->
+    let use_target = match args |> Yojson.Safe.Util.member "target" with
+      | `Bool true -> true | _ -> false in
+    let ctx_bytes = match args |> Yojson.Safe.Util.member "context_bytes" with
+      | `Null -> 200 | v -> to_int_lenient v in
+    (match tab.session with
+     | Some s ->
+       let vend = Session.verified_end s in
+       let tend = Session.pending_end s in
+       let offset = if use_target then tend else vend in
+       let (line, col) = offset_to_line_col tab.buf offset in
+       let text = Buffer.text tab.buf in
+       let total = String.length text in
+       let before_start = max 0 (offset - ctx_bytes) in
+       let after_end = min total (offset + ctx_bytes) in
+       let before = String.sub text before_start (offset - before_start) in
+       let after = String.sub text offset (after_end - offset) in
+       let json = `Assoc [
+         "verified_end", `Assoc [
+           "offset", `Int vend;
+           "line", `Int (fst (offset_to_line_col tab.buf vend));
+           "col", `Int (snd (offset_to_line_col tab.buf vend));
+         ];
+         "target_end", `Assoc [
+           "offset", `Int tend;
+           "line", `Int (fst (offset_to_line_col tab.buf tend));
+           "col", `Int (snd (offset_to_line_col tab.buf tend));
+         ];
+         "position", `Assoc [
+           "offset", `Int offset;
+           "line", `Int line;
+           "col", `Int col;
+         ];
+         "before", `String before;
+         "after", `String after;
+       ] in
+       (false, `Assoc ["content", `List [
+         `Assoc ["type", `String "text"; "text",
+           `String (Yojson.Safe.to_string json)]
+       ]])
+     | None ->
+       (false, `Assoc ["content", `List [
+         `Assoc ["type", `String "text"; "text", `String "No session."]
+       ]]))
   | "is_busy" ->
     let busy = match tab.session with
       | Some s -> Session.is_busy s | None -> false in
