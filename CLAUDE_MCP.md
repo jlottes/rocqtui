@@ -42,9 +42,17 @@ specific tab. If omitted, the active tab is used.
 
 ### Stepping
 
-- **step_forward** — Advance the target by one Rocq sentence.
-- **step_backward** — Retract the target by one sentence. May rewind Rocq.
-- **go_to_end** — Set target to end of file and begin verifying everything.
+These commands are **synchronous by default** — they block until Rocq
+finishes processing, then return goals, messages, and any errors in the
+response. No need to poll `is_busy` or read resources separately.
+
+Pass `"async": true` to return immediately without waiting.
+
+- **step_forward** — Advance and verify one Rocq sentence. Returns goals.
+- **step_backward** — Retract one sentence. May rewind Rocq. Returns goals.
+- **go_to_offset** `{offset}` — Set target to a byte offset (snapped to
+  sentence boundary). Verify up to that point. Does not move the cursor.
+- **go_to_end** — Verify the entire file. Returns errors/goals on completion.
 
 ### Editing
 
@@ -78,23 +86,17 @@ specific tab. If omitted, the active tab is used.
 ## Workflow Patterns
 
 ### Verify a file end-to-end
-1. Call `go_to_end`.
-2. Poll `is_busy` until it returns `"false"`.
-3. Read `rocqtui://sentences` to check for errors.
-4. Read `rocqtui://messages` for error details.
+1. Call `go_to_end`. The response includes any errors and final goals.
 
 ### Step through and inspect goals
-1. Call `step_forward`.
-2. Wait: poll `is_busy` until `"false"`.
-3. Read `rocqtui://goals` to see the proof state.
-4. Repeat.
+1. Call `step_forward`. The response includes the current goals.
+2. Repeat.
 
 ### Edit and re-verify
 1. Use `replace_range` or `insert_text` to modify the buffer.
    Edits past the verified region don't require rewinding.
    Edits within the verified region will automatically retract Rocq.
-2. Call `go_to_end` to re-verify.
-3. Poll `is_busy`, then check `rocqtui://sentences` for errors.
+2. Call `go_to_end` to re-verify. The response shows errors if any.
 
 ### Query with custom printing
 ```json
@@ -107,9 +109,9 @@ then restores the original settings.
 
 - **Byte offsets**: All offsets (`start`, `end`, `offset`) are byte positions
   in the UTF-8 buffer text, not character positions.
-- **Async stepping**: After `step_forward` or `go_to_end`, Rocq processes
-  sentences asynchronously. Always check `is_busy` before reading goals or
-  assuming verification is complete.
+- **Sync stepping**: `step_forward`, `step_backward`, and `go_to_end` are
+  synchronous — they block until Rocq finishes and return the result.
+  No need to poll `is_busy` after these calls.
 - **Edits rewind**: If you edit text within the verified region, Rocq will
   retract to before the edit point. This is automatic.
 - **Sentence boundaries**: Rocq sentences end with `.` followed by whitespace.

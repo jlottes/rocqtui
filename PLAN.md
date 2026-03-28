@@ -681,3 +681,138 @@ Update keybindings:
   ^L (12) is free and works for "locate module".
 - Disabling IXON is safe — no modern terminal workflow depends on
   ^S/^Q flow control, and nano/vim both do this.
+
+---
+
+## Phase 10.6: Jump to Definition (^L)
+
+**Goal**: ^L opens the definition of the identifier or module under the
+cursor. On a `Require` line, open the imported file. On any other line,
+locate the identifier and jump to its definition in the source file.
+
+### Glob file parser
+
+Rocq compiles `.glob` files alongside `.vo` files. These contain byte
+offsets for every definition in the source. Format:
+
+```
+DIGEST <hex>
+F<logical_module_name>
+R<start>:<end> <module> <name> <kind>    (reference)
+def <start>:<end> <section> <name>       (definition)
+prf <start>:<end> <section> <name>       (proof)
+ind <start>:<end> <section> <name>       (inductive)
+constr <start>:<end> <section> <name>    (constructor)
+class <start>:<end> <section> <name>     (class)
+ax <start>:<end> <section> <name>        (axiom)
+sec <start>:<end> <section> <name>       (section)
+not <start>:<end> <section> <name>       (notation)
+abbrev <start>:<end> <section> <name>    (abbreviation)
+```
+
+Start/end are byte offsets in the `.v` source file. We convert to line
+numbers by counting newlines in the source.
+
+New module `glob.ml`:
+```ocaml
+type entry = { kind: string; name: string; bp: int; ep: int }
+val parse : string -> entry list
+(* Parse a .glob file, return definition entries *)
+
+val find_definition : entry list -> string -> entry option
+(* Find a definition by name *)
+```
+
+### Resolution pipeline
+
+**Case 1: Cursor on a Require/Import line**
+
+1. Parse the line: `(From <prefix>)? Require (Import|Export)? <modules>.`
+2. Identify the module name at/near cursor column
+3. `Locate Library <module>.` via Session.query → parse messages for
+   the `.vo` path
+4. Derive `.v` path (strip `.vo`, add `.v`)
+5. Open file in new tab (or switch to existing)
+
+**Case 2: Cursor on any other identifier**
+
+1. Get word at cursor (`Buffer.word_at_cursor`)
+2. `Locate <word>.` via Session.query → parse messages
+3. Response format: `<Kind> <dotted.logical.path>` where Kind is
+   `Constant`, `Inductive`, `Constructor`, `Notation`, etc.
+4. Extract module path: everything up to the last `.` component
+5. Extract definition name: the last `.` component
+6. `Locate Library <module_path>.` → get `.vo` path → derive `.v`
+7. Derive `.glob` path (strip `.vo`, add `.glob`)
+8. If `.glob` exists: parse it, find the definition by name,
+   convert byte offset to line number
+9. Open file, jump cursor to that line
+
+**Fallback chain:**
+- If `Locate` fails (identifier not in scope): show "Not found" in status
+- If `Locate Library` fails: try local `Project.resolve_module`
+- If `.glob` doesn't exist: open file at line 1 (no jump)
+- If `.v` doesn't exist (stdlib, only .vo): show path in status bar
+- If no session: try local resolution only
+
+### Require line parsing
+
+Detect lines matching (anywhere on the line, ignoring leading whitespace):
+```
+(From <prefix> )?Require (Import |Export )?<mod1> <mod2> ... .
+```
+
+Multiple modules may appear on one line. To pick the right one:
+- Find all module name spans (start col, end col) on the line
+- Select the one containing the cursor column
+- If cursor isn't on any module name, use the first one
+- If `From X` form, prepend `X.` to each module name
+
+### Locate output parsing
+
+Parse the first line of `Session.messages` after a `Locate` query.
+Expected formats:
+```
+Constant <path>
+Inductive <path>
+Constructor <path>
+Notation <path>
+```
+
+Extract the dotted path. Split on `.`: all but last = module, last = name.
+
+For `Locate Library`, expected format:
+```
+<logical_name> has been loaded from file
+<absolute_path_to_vo>
+```
+
+Or for libraries on the load path but not yet loaded:
+```
+<logical_name> has been loaded from file
+<path>
+```
+
+### Query menu additions
+
+Add to the ^Q menu:
+- `l` — Locate (word at cursor): shows where a name is defined
+- `c` — Check (word at cursor): shows the type of an expression
+
+These are queries only (display in messages pane), not jump-to actions.
+
+### Keybinding
+
+| Key | Action |
+|-----|--------|
+| ^L  | Jump to definition (Require → open file; other → locate + jump) |
+| ^Q l | Locate query (show result in messages) |
+| ^Q c | Check query (show type in messages) |
+
+### Implementation order
+
+1. Add `Locate` and `Check` to ^Q menu (trivial)
+2. Implement `glob.ml` (parse .glob files)
+3. Implement `Locate` output parsing helpers
+4. Implement Require line parsing
+5. Wire up ^L in editor.ml

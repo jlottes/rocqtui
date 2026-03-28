@@ -90,6 +90,15 @@ let tool_defs = [
      "type", `String "object";
      "properties", `Assoc [];
    ]);
+  ("go_to_offset", "Set target to a byte offset (verify up to that point)",
+   `Assoc [
+     "type", `String "object";
+     "properties", `Assoc [
+       "offset", `Assoc ["type", `String "integer";
+                         "description", `String "byte offset in the buffer"];
+     ];
+     "required", `List [`String "offset"];
+   ]);
   ("insert_text", "Insert text at a byte offset in the buffer",
    `Assoc [
      "type", `String "object";
@@ -368,11 +377,17 @@ let handle_tool t name args mgr =
       `Assoc ["type", `String "text"; "text", `String "OK"]
     ]])
   | "go_to_end" ->
-    let text = Buffer.text tab.buf in
-    let len = String.length text in
-    Buffer.move_to_byte_offset tab.buf len;
+    let len = String.length (Buffer.text tab.buf) in
     (match tab.session with
-     | Some s -> Session.go_to_cursor s | None -> ());
+     | Some s -> Session.go_to_offset s len | None -> ());
+    (true, `Assoc ["content", `List [
+      `Assoc ["type", `String "text"; "text", `String "OK"]
+    ]])
+  | "go_to_offset" ->
+    let offset = args |> Yojson.Safe.Util.member "offset"
+                 |> Yojson.Safe.Util.to_int in
+    (match tab.session with
+     | Some s -> Session.go_to_offset s offset | None -> ());
     (true, `Assoc ["content", `List [
       `Assoc ["type", `String "text"; "text", `String "OK"]
     ]])

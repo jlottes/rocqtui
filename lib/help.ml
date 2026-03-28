@@ -34,8 +34,10 @@ let text = {|
   ─── Queries ──────────────────────────────────
   ^A             About (word/selection at cursor)
   ^D             Print (word/selection at cursor)
-  ^Q             Query menu (About, Print, Show Proof,
-                   Show Existentials)
+  ^L             Jump to definition / open module
+  ^B             Jump back (return to previous location)
+  ^Q             Query menu (About, Check, Print,
+                   Locate, Show Proof, Show Existentials)
 
   ─── Display ──────────────────────────────────
   ^G             Toggle hypotheses (focused / all)
@@ -44,7 +46,7 @@ let text = {|
   Drag borders   Resize panes
 
   ─── Tabs ─────────────────────────────
-  ^B             New blank tab
+  ^N             New blank tab
   ^W             Close tab (exit if last)
   Alt+Left/Right Switch tabs
   Click tab bar  Switch tabs

@@ -399,38 +399,39 @@ let step_backward t =
     end
   end
 
-let go_to_cursor t =
+let go_to_offset t offset =
   t.err_range <- None;
   t.msgs <- [];
+  (* Snap target to the last sentence boundary at or before offset *)
+  let text = Buffer.text t.buf in
+  let pos = ref 0 in
+  let snapped = ref 0 in
+  while !pos < offset do
+    match Sentence.find_end text ~start:!pos with
+    | None -> pos := offset
+    | Some end_off ->
+      if end_off <= offset then snapped := end_off;
+      pos := end_off
+  done;
+  t.target_end <- !snapped;
+  t.state_changed <- true;
+  if verified_end t > t.target_end then begin
+    if Rocq_protocol.is_busy t.rocq then
+      ()
+    else begin
+      rewind_to_target t;
+      t.goals_dirty <- true
+    end
+  end
+
+let go_to_cursor t =
   let (cur_line, cur_col) = Buffer.cursor t.buf in
   let cursor_off = ref 0 in
   for i = 0 to cur_line - 1 do
     cursor_off := !cursor_off + String.length (Buffer.get_line t.buf i) + 1
   done;
   cursor_off := !cursor_off + cur_col;
-  let cursor = !cursor_off in
-  (* Snap target to the last sentence boundary BEFORE the cursor *)
-  let text = Buffer.text t.buf in
-  let pos = ref 0 in
-  let snapped = ref 0 in
-  while !pos < cursor do
-    match Sentence.find_end text ~start:!pos with
-    | None -> pos := cursor
-    | Some end_off ->
-      if end_off <= cursor then snapped := end_off;
-      pos := end_off
-  done;
-  t.target_end <- !snapped;
-  t.state_changed <- true;
-  (* If verified > target, rewind. If busy, defer to poll. *)
-  if verified_end t > t.target_end then begin
-    if Rocq_protocol.is_busy t.rocq then
-      ()  (* poll will handle rewind when in-flight call completes *)
-    else begin
-      rewind_to_target t;
-      t.goals_dirty <- true
-    end
-  end
+  go_to_offset t !cursor_off
 
 (* Per-sentence status info for rendering *)
 type sentence_display = {

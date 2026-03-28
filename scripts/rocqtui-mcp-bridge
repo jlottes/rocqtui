@@ -1,29 +1,240 @@
-#!/bin/sh
-# Bridge between stdio (Claude Code MCP client) and a rocqtui Unix socket.
-# Usage: rocqtui-mcp-bridge [socket-path]
-# If no path given, walks up from cwd looking for .rocqtui-mcp.sock
+#!/usr/bin/env python3
+"""MCP bridge between stdio (Claude Code) and a rocqtui Unix socket.
 
-if [ -n "$1" ]; then
-  SOCK="$1"
-else
-  d="$(pwd)"
-  while true; do
-    if [ -e "$d/.rocqtui-mcp.sock" ]; then
-      SOCK="$(readlink -f "$d/.rocqtui-mcp.sock")"
-      break
-    fi
-    parent="$(dirname "$d")"
-    if [ "$parent" = "$d" ]; then
-      echo "Error: no .rocqtui-mcp.sock found" >&2
-      exit 1
-    fi
-    d="$parent"
-  done
-fi
+Adds synchronous behavior on top of the raw MCP server:
+- Stepping commands (step_forward, step_backward, go_to_end) wait for
+  Rocq to finish processing, then return goals + messages in the response.
 
-if [ ! -e "$SOCK" ]; then
-  echo "Error: socket $SOCK does not exist" >&2
-  exit 1
-fi
+Usage: rocqtui-mcp-bridge [socket-path]
+If no socket path given, walks up from cwd looking for .rocqtui-mcp.sock
+"""
 
-exec socat STDIO UNIX-CONNECT:"$SOCK"
+import json
+import os
+import socket
+import sys
+import threading
+import time
+
+# Tools that should block until rocqtop is no longer busy
+SYNC_TOOLS = {"step_forward", "step_backward", "go_to_end", "go_to_offset"}
+
+POLL_INTERVAL = 0.05  # seconds between is_busy polls
+POLL_TIMEOUT = 60.0   # max seconds to wait
+
+
+def find_socket():
+    d = os.getcwd()
+    while True:
+        candidate = os.path.join(d, ".rocqtui-mcp.sock")
+        if os.path.exists(candidate):
+            return os.path.realpath(candidate)
+        parent = os.path.dirname(d)
+        if parent == d:
+            break
+        d = parent
+    return None
+
+
+class Bridge:
+    def __init__(self, sock_path):
+        self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self.sock.connect(sock_path)
+        self.sock_file = self.sock.makefile("rw", buffering=1)
+        self._next_id = 100000  # IDs for our internal calls
+        self._lock = threading.Lock()
+
+    def _send(self, msg):
+        """Send a JSON-RPC message to rocqtui."""
+        line = json.dumps(msg) + "\n"
+        self.sock.sendall(line.encode())
+
+    def _recv(self):
+        """Read one JSON-RPC message from rocqtui."""
+        line = self.sock_file.readline()
+        if not line:
+            return None
+        return json.loads(line)
+
+    def _call(self, method, params):
+        """Make a JSON-RPC call and return the result."""
+        self._next_id += 1
+        msg_id = self._next_id
+        self._send({
+            "jsonrpc": "2.0",
+            "id": msg_id,
+            "method": method,
+            "params": params,
+        })
+        # Read responses until we get ours (skip notifications)
+        while True:
+            resp = self._recv()
+            if resp is None:
+                return None
+            if resp.get("id") == msg_id:
+                return resp.get("result")
+            # It's a notification — could forward it, but for now skip
+
+    def _call_tool(self, name, args):
+        """Call an MCP tool and return the result."""
+        return self._call("tools/call", {"name": name, "arguments": args})
+
+    def _read_resource(self, uri):
+        """Read an MCP resource and return the text content."""
+        result = self._call("resources/read", {"uri": uri})
+        if result and "contents" in result:
+            contents = result["contents"]
+            if contents and len(contents) > 0:
+                return contents[0].get("text", "")
+        return ""
+
+    def _wait_until_idle(self, args):
+        """Poll is_busy until false or timeout."""
+        start = time.monotonic()
+        while time.monotonic() - start < POLL_TIMEOUT:
+            result = self._call_tool("is_busy", args)
+            if result:
+                text = ""
+                for item in result.get("content", []):
+                    if item.get("type") == "text":
+                        text = item.get("text", "")
+                if text == "false":
+                    return True
+            time.sleep(POLL_INTERVAL)
+        return False  # timed out
+
+    def _enrich_step_response(self, args):
+        """After stepping completes, read goals + messages + sentences."""
+        goals = self._read_resource("rocqtui://goals")
+        messages = self._read_resource("rocqtui://messages")
+        sentences_json = self._read_resource("rocqtui://sentences")
+
+        # Check for errors in sentences
+        errors = []
+        try:
+            sentences = json.loads(sentences_json)
+            for s in sentences:
+                status = s.get("status", "")
+                if status.startswith("error:"):
+                    errors.append(status)
+        except (json.JSONDecodeError, TypeError):
+            pass
+
+        parts = []
+        if errors:
+            parts.append("ERRORS:\n" + "\n".join(errors))
+        if messages.strip():
+            parts.append("Messages:\n" + messages)
+        if goals.strip():
+            parts.append("Goals:\n" + goals)
+        if not parts:
+            parts.append("OK (no goals)")
+
+        text = "\n\n".join(parts)
+        return {
+            "content": [{"type": "text", "text": text}]
+        }
+
+    def handle_client_message(self, msg):
+        """Process a message from Claude Code. Returns response or None."""
+        method = msg.get("method")
+        msg_id = msg.get("id")
+        params = msg.get("params", {})
+
+        # Intercept tools/call for sync tools
+        if method == "tools/call":
+            tool_name = params.get("name", "")
+            tool_args = params.get("arguments", {})
+
+            if tool_name in SYNC_TOOLS and not tool_args.get("async", False):
+                # Forward the stepping command, wait for completion
+                with self._lock:
+                    self._call_tool(tool_name, tool_args)
+                    busy_args = {}
+                    if "tab" in tool_args:
+                        busy_args["tab"] = tool_args["tab"]
+                    self._wait_until_idle(busy_args)
+                    result = self._enrich_step_response(tool_args)
+                return {
+                    "jsonrpc": "2.0",
+                    "id": msg_id,
+                    "result": result,
+                }
+
+        # Everything else: forward to rocqtui and return response
+        with self._lock:
+            self._send(msg)
+            while True:
+                resp = self._recv()
+                if resp is None:
+                    return None
+                if resp.get("id") == msg_id:
+                    return resp
+                # Skip notifications from the server
+
+    def run_stdin_to_server(self):
+        """Main loop: read from stdin, process, write to stdout."""
+        for line in sys.stdin:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                msg = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+
+            # Notifications (no id) get forwarded directly
+            if "id" not in msg:
+                with self._lock:
+                    self._send(msg)
+                continue
+
+            resp = self.handle_client_message(msg)
+            if resp is not None:
+                sys.stdout.write(json.dumps(resp) + "\n")
+                sys.stdout.flush()
+
+    def run_server_notifications(self):
+        """Background: forward server notifications to stdout."""
+        # The main loop handles responses inline, but the server
+        # can also send unsolicited notifications. We need to forward
+        # those. However, since we're reading from the socket in
+        # both the main thread (via _call/_recv) and here, we need
+        # to be careful. For simplicity, notifications are consumed
+        # in _call/_recv and dropped. A future version could use a
+        # queue.
+        pass
+
+
+def main():
+    if len(sys.argv) > 1:
+        sock_path = sys.argv[1]
+    else:
+        sock_path = find_socket()
+        if sock_path is None:
+            print("Error: no .rocqtui-mcp.sock found", file=sys.stderr)
+            sys.exit(1)
+
+    if not os.path.exists(sock_path):
+        print(f"Error: socket {sock_path} does not exist", file=sys.stderr)
+        sys.exit(1)
+
+    try:
+        bridge = Bridge(sock_path)
+    except Exception as e:
+        print(f"Error connecting to {sock_path}: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    try:
+        bridge.run_stdin_to_server()
+    except (BrokenPipeError, ConnectionResetError, KeyboardInterrupt):
+        pass
+    finally:
+        try:
+            bridge.sock.close()
+        except Exception:
+            pass
+
+
+if __name__ == "__main__":
+    main()

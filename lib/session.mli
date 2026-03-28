@@ -23,6 +23,9 @@ val step_forward : t -> unit
 (** Move target backward by one sentence. May rewind rocqtop. *)
 val step_backward : t -> unit
 
+(** Set target to a byte offset (snapped to sentence boundary). May rewind. *)
+val go_to_offset : t -> int -> unit
+
 (** Set target to cursor position. May rewind rocqtop. *)
 val go_to_cursor : t -> unit
 

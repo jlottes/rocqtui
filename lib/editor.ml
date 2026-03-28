@@ -1,9 +1,17 @@
+type jump_point = {
+  jp_tab_id : int;
+  jp_file : string;
+  jp_line : int;
+  jp_col : int;
+}
+
 type action =
   | Continue
   | Quit
   | Close_tab
   | Save_prompt
   | Open_file of string
+  | Jump_back of jump_point
 
 let init_error_msg = ref ""
 let set_init_error msg = init_error_msg := msg
@@ -94,6 +102,30 @@ let set_tab_bar_click_handler f = tab_bar_click_handler := Some f
 (* Callback to get list of open file paths (for file picker markers) *)
 let open_files_fn : (unit -> string list) ref = ref (fun () -> [])
 let set_open_files_fn f = open_files_fn := f
+
+(* Target position for jump-to-definition (consumed by main.ml after Open_file) *)
+let jump_target : (int * int) option ref = ref None  (* (line, col) *)
+let take_jump_target () =
+  let v = !jump_target in
+  jump_target := None;
+  v
+
+(* Jump stack for go-back. *)
+let jump_stack : jump_point list ref = ref []
+
+let push_jump (tab : Tab.t) =
+  let (line, col) = Buffer.cursor tab.buf in
+  let file = match Buffer.filename tab.buf with
+    | Some f -> f | None -> "" in
+  jump_stack := { jp_tab_id = tab.id; jp_file = file;
+                  jp_line = line; jp_col = col } :: !jump_stack
+
+let pop_jump () =
+  match !jump_stack with
+  | [] -> None
+  | jp :: rest ->
+    jump_stack := rest;
+    Some jp
 
 (* Print options mode *)
 let in_options_mode = ref false
@@ -513,7 +545,7 @@ let run_query session phrase =
   | None -> ()
 
 let render_query_bar display =
-  let text = "[a]About [d]Print [p]Show Proof [e]Show Existentials  ^Q:close" in
+  let text = "[a]About [c]Check [d]Print [l]Locate [p]Show Proof [e]Show Existentials  ^Q:close" in
   Display.set_status display text
 
 let render_options_bar display =
@@ -631,9 +663,10 @@ let screen_to_buffer_pos display buf ~x ~y =
   let (rows, cols) = Display.script_dims display in
   let scroll = Buffer.scroll_top buf in
   let hscroll = Buffer.hscroll buf in
-  (* x,y are absolute screen coords; script pane starts at (0,0) *)
-  let row = y in  (* script pane starts at row 0 *)
-  let col = x in  (* script pane starts at col 0 *)
+  (* x,y are absolute screen coords; subtract script window origin *)
+  let (wy, wx) = Curses.getbegyx (Display.script_win display) in
+  let row = y - wy in
+  let col = x - wx in
   if row < 0 || row >= rows || col < 0 || col >= cols then None
   else begin
     let line_idx = scroll + row in
@@ -764,6 +797,15 @@ let handle_key ch (tab : Tab.t) display =
     if ch = 24 then Some Quit (* ^X — exit *)
     else if ch = 23 then Some Close_tab (* ^W — close tab *)
     else if ch = 19 then Some Save_prompt (* ^S — save *)
+    else if ch = 2 then begin (* ^B — jump back *)
+      match pop_jump () with
+      | Some jp ->
+        jump_target := Some (jp.jp_line, jp.jp_col);
+        Some (Jump_back jp)
+      | None ->
+        Display.set_status display "No previous location.";
+        Some Continue
+    end
     else if ch = 15 then begin (* ^O — open file picker *)
       let filename = Buffer.filename buf in
       let dir = match filename with
@@ -920,10 +962,20 @@ let handle_key ch (tab : Tab.t) display =
           (match subject with
            | Some word -> run_query session ("About " ^ word ^ ".")
            | None -> ()); true
+        end else if c = 'c' then begin
+          let subject = query_subject tab in
+          (match subject with
+           | Some word -> run_query session ("Check " ^ word ^ ".")
+           | None -> ()); true
         end else if c = 'd' then begin
           let subject = query_subject tab in
           (match subject with
            | Some word -> run_query session ("Print " ^ word ^ ".")
+           | None -> ()); true
+        end else if c = 'l' then begin
+          let subject = query_subject tab in
+          (match subject with
+           | Some word -> run_query session ("Locate " ^ word ^ ".")
            | None -> ()); true
         end else if c = 'p' then begin
           run_query session "Show Proof."; true
@@ -1093,6 +1145,117 @@ let handle_key ch (tab : Tab.t) display =
         end
       end;
       Some Continue
+    end
+    else if ch = 12 then begin (* ^L — jump to definition *)
+      let (cl, cc) = Buffer.cursor buf in
+      let line = Buffer.get_line buf cl in
+      (* Try Require line first *)
+      let result = match Locate.parse_require_line line with
+        | Some (_, modules) ->
+          let modname = Locate.module_at_col modules cc in
+          (* Use Locate Library to find the .vo *)
+          (match modname, session with
+           | Some m, Some s ->
+             Session.query s ("Locate Library " ^ m ^ ".");
+             let msgs = String.concat "\n" (Session.messages s) in
+             (match Locate.parse_locate_library msgs with
+              | Some vo_path ->
+                let v_path = Locate.vo_to_v vo_path in
+                if Sys.file_exists v_path then Some (v_path, None)
+                else begin
+                  Display.set_status display
+                    ("Source not found: " ^ v_path);
+                  None
+                end
+              | None ->
+                (* Try local resolution *)
+                let dir = match Buffer.filename buf with
+                  | Some f -> Filename.dirname f | None -> Sys.getcwd () in
+                (match Project.find_project_file dir with
+                 | Some (_, pf) ->
+                   let lps = Project.load_paths pf in
+                   (match Project.resolve_module lps m with
+                    | Some path -> Some (path, None)
+                    | None ->
+                      Display.set_status display ("Module not found: " ^ m);
+                      None)
+                 | None ->
+                   Display.set_status display ("Module not found: " ^ m);
+                   None))
+           | Some m, None ->
+             (* No session — try local resolution *)
+             let dir = match Buffer.filename buf with
+               | Some f -> Filename.dirname f | None -> Sys.getcwd () in
+             (match Project.find_project_file dir with
+              | Some (_, pf) ->
+                let lps = Project.load_paths pf in
+                (match Project.resolve_module lps m with
+                 | Some path -> Some (path, None)
+                 | None ->
+                   Display.set_status display ("Module not found: " ^ m);
+                   None)
+              | None ->
+                Display.set_status display "No session and no project.";
+                None)
+           | None, _ ->
+             Display.set_status display "No module name at cursor.";
+             None)
+        | None ->
+          (* Not a Require line — try Locate for identifier *)
+          let word = match Buffer.selected_text buf with
+            | Some t -> Some t | None -> Buffer.word_at_cursor buf in
+          (match word, session with
+           | Some w, Some s ->
+             Session.query s ("Locate " ^ w ^ ".");
+             let msgs = String.concat "\n" (Session.messages s) in
+             (match Locate.parse_locate msgs with
+              | Some (_kind, module_path, def_name) ->
+                Session.query s ("Locate Library " ^ module_path ^ ".");
+                let msgs2 = String.concat "\n" (Session.messages s) in
+                (match Locate.parse_locate_library msgs2 with
+                 | Some vo_path ->
+                   let v_path = Locate.vo_to_v vo_path in
+                   let target_line =
+                     if Sys.file_exists v_path then begin
+                       let glob_path = Locate.vo_to_glob vo_path in
+                       if Sys.file_exists glob_path then
+                         let entries = Glob.parse glob_path in
+                         match Glob.find_definition entries def_name with
+                         | Some e -> Glob.byte_offset_to_line v_path e.bp
+                         | None -> None
+                       else None
+                     end else None
+                   in
+                   if Sys.file_exists v_path then
+                     Some (v_path, target_line)
+                   else begin
+                     Display.set_status display
+                       ("Source not found: " ^ v_path);
+                     None
+                   end
+                 | None ->
+                   Display.set_status display
+                     ("Cannot locate library for " ^ module_path);
+                   None)
+              | None ->
+                Display.set_status display
+                  ("Cannot locate: " ^ msgs);
+                None)
+           | Some _, None ->
+             Display.set_status display "No session.";
+             None
+           | None, _ ->
+             Display.set_status display "No identifier at cursor.";
+             None)
+      in
+      (match result with
+       | Some (path, line_opt) ->
+         push_jump tab;
+         (match line_opt with
+          | Some l -> jump_target := Some (l, 0)
+          | None -> jump_target := None);
+         Some (Open_file path)
+       | None -> Some Continue)
     end
     else if ch = Curses.Key.f 1 then begin
       in_help_mode := not !in_help_mode;

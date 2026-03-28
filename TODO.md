@@ -9,8 +9,16 @@
 - [x] Timeout/clear active tab indicator after inactivity (5s)
 - [x] Stale MCP socket cleanup on startup
 - [x] State-changed bool properly threaded from tool handlers through dispatch
+- [x] Sync stepping in bridge (step_forward/backward/go_to_end block, return goals+errors)
+- [x] go_to_offset tool (set target to byte offset without moving cursor)
+- [x] async flag for stepping tools
 - [ ] Wire up Claude Code as an actual MCP client and test end-to-end
 - [ ] Handle concurrency: Claude editing while user is typing
+- [ ] Line/offset conversion: `offset_of_line {line, col}` tool and/or `line_offsets` resource
+- [ ] Undo/redo tools (expose Buffer.undo/redo via MCP)
+- [ ] Batch edits: `batch_edit` tool — list of edits applied as one undo group
+- [ ] Error location in step responses — include byte range from Session.error_range
+- [ ] Get context: `get_context {offset, before, after}` — return surrounding text
 - [ ] Group Claude's edits into single undo units
 
 ## Per-tab State Refactor (Phase 9 remaining)
@@ -35,8 +43,9 @@
 
 ## Rocq Integration
 
-- [ ] "Check" query at cursor (type of expression under cursor)
-- [ ] Jump to definition (look up identifier, open file + position)
+- [x] "Check" and "Locate" queries (^Q menu)
+- [x] Jump to definition (^L — Require line opens module, identifier jumps via Locate + .glob)
+- [x] Jump back (^B — stack of previous locations)
 - [ ] Completion (suggest identifiers/tactics based on context)
 - [ ] Show proof diff (protocol supports proof_diff)
 - [ ] Debugger integration (protocol has db_cmd, db_stack, etc.)

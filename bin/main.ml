@@ -198,7 +198,7 @@ let () =
         let ch = Curses.getch () in
         if ch <> -1 && !running then begin
           let tab = Tab.active_tab mgr in
-          if ch = 2 then begin (* ^B — new blank tab *)
+          if ch = 14 then begin (* ^N — new blank tab *)
             let active = Tab.active_tab mgr in
             Tab.add_tab mgr (Tab.create_blank ~args:active.session_args ());
             Display.set_tab_bar display true;
@@ -226,7 +226,37 @@ let () =
                | None ->
                  Display.set_status display "No filename.");
               needs_render := true
+            | Editor.Jump_back jp ->
+              (* Try tab ID first, fall back to filename *)
+              let found = match Tab.find_by_id mgr jp.jp_tab_id with
+                | Some _ ->
+                  (match Tab.index_of_id mgr jp.jp_tab_id with
+                   | Some idx -> mgr.active <- idx; true
+                   | None -> false)
+                | None -> false
+              in
+              if not found && jp.jp_file <> "" then begin
+                (* Fall back to filename *)
+                let existing = List.find_opt (fun (t : Tab.t) ->
+                  Buffer.filename t.buf = Some jp.jp_file
+                ) mgr.tabs in
+                (match existing with
+                 | Some t ->
+                   (match Tab.index_of_id mgr t.id with
+                    | Some idx -> mgr.active <- idx
+                    | None -> ())
+                 | None ->
+                   let (_pd, pargs) = Project.find_args (Some jp.jp_file) in
+                   let new_tab = Tab.create_from_file
+                                   ~args:(pargs @ extra_args) jp.jp_file in
+                   Tab.add_tab mgr new_tab;
+                   Display.set_tab_bar display true)
+              end;
+              let active = Tab.active_tab mgr in
+              Buffer.move_to active.buf jp.jp_line jp.jp_col;
+              needs_render := true
             | Editor.Open_file path ->
+              let jump = Editor.take_jump_target () in
               (* Check if already open *)
               let existing = List.find_opt (fun (t : Tab.t) ->
                 Buffer.filename t.buf = Some path
@@ -241,6 +271,12 @@ let () =
                  let new_tab = Tab.create_from_file ~args:(pargs @ extra_args) path in
                  Tab.add_tab mgr new_tab;
                  Display.set_tab_bar display true);
+              (* Jump to position if requested *)
+              (match jump with
+               | Some (line, col) ->
+                 let active = Tab.active_tab mgr in
+                 Buffer.move_to active.buf line col
+               | None -> ());
               needs_render := true
             | Editor.Continue ->
               needs_render := true
