@@ -252,6 +252,19 @@ let tool_defs = [
      ];
      "required", `List [`String "edits"];
    ]);
+  ("replace_text", "Find and replace text in the buffer (no byte offsets needed)",
+   `Assoc [
+     "type", `String "object";
+     "properties", `Assoc [
+       "old_text", `Assoc ["type", `String "string"; "description",
+         `String "Exact text to find in the buffer"];
+       "new_text", `Assoc ["type", `String "string"; "description",
+         `String "Replacement text"];
+       "occurrence", `Assoc ["type", `String "integer"; "description",
+         `String "Which occurrence to replace (1-based, default 1). Use 0 for all."];
+     ];
+     "required", `List [`String "old_text"; `String "new_text"];
+   ]);
   ("is_busy", "Check if rocqtui is busy (stepping in progress)",
    `Assoc [
      "type", `String "object";
@@ -463,6 +476,15 @@ let create_project_symlink t dir =
        t.symlinks <- link :: t.symlinks
    with _ -> ())
 
+(* Return a short context snippet around an edit for verification *)
+let edit_context buf pos len =
+  let text = Buffer.text buf in
+  let total = String.length text in
+  let s = max 0 (pos - 30) in
+  let e = min total (pos + len + 30) in
+  let snippet = String.sub text s (e - s) in
+  Printf.sprintf "OK. Context:\n...%s..." snippet
+
 (* --- Tool handlers --- *)
 
 let resolve_tab args mgr =
@@ -516,14 +538,14 @@ let handle_tool t name args mgr =
       if c = '\n' then Buffer.insert_newline tab.buf
       else Buffer.insert_char tab.buf c
     ) text;
+    let ctx = edit_context tab.buf offset (String.length text) in
     (true, `Assoc ["content", `List [
-      `Assoc ["type", `String "text"; "text", `String "OK"]
+      `Assoc ["type", `String "text"; "text", `String ctx]
     ]])
   | "replace_range" ->
     let s = args |> Yojson.Safe.Util.member "start" |> to_int_lenient in
     let e = args |> Yojson.Safe.Util.member "end" |> to_int_lenient in
     let text = args |> Yojson.Safe.Util.member "text" |> Yojson.Safe.Util.to_string in
-    (* Select the range and delete it, then insert replacement *)
     Buffer.move_to_byte_offset tab.buf s;
     Buffer.set_anchor tab.buf;
     Buffer.move_to_byte_offset tab.buf e;
@@ -532,8 +554,9 @@ let handle_tool t name args mgr =
       if c = '\n' then Buffer.insert_newline tab.buf
       else Buffer.insert_char tab.buf c
     ) text;
+    let ctx = edit_context tab.buf s (String.length text) in
     (true, `Assoc ["content", `List [
-      `Assoc ["type", `String "text"; "text", `String "OK"]
+      `Assoc ["type", `String "text"; "text", `String ctx]
     ]])
   | "move_cursor" ->
     let line = args |> Yojson.Safe.Util.member "line" |> to_int_lenient in
@@ -645,8 +668,9 @@ let handle_tool t name args mgr =
     Buffer.set_anchor tab.buf;
     Buffer.move_to_byte_offset tab.buf e;
     ignore (Buffer.delete_selection tab.buf);
+    let ctx = edit_context tab.buf s 0 in
     (true, `Assoc ["content", `List [
-      `Assoc ["type", `String "text"; "text", `String "OK"]
+      `Assoc ["type", `String "text"; "text", `String ctx]
     ]])
   | "open_file" ->
     let filename = args |> Yojson.Safe.Util.member "filename"
@@ -754,6 +778,78 @@ let handle_tool t name args mgr =
     (true, `Assoc ["content", `List [
       `Assoc ["type", `String "text"; "text", `String "OK"]
     ]])
+  | "replace_text" ->
+    let old_text = args |> Yojson.Safe.Util.member "old_text"
+                   |> Yojson.Safe.Util.to_string in
+    let new_text = args |> Yojson.Safe.Util.member "new_text"
+                   |> Yojson.Safe.Util.to_string in
+    let occurrence = match args |> Yojson.Safe.Util.member "occurrence" with
+      | `Null -> 1 | v -> to_int_lenient v in
+    let buf_text = Buffer.text tab.buf in
+    let old_len = String.length old_text in
+    if old_len = 0 then
+      (false, `Assoc ["content", `List [
+        `Assoc ["type", `String "text"; "text", `String "old_text is empty"]
+      ]; "isError", `Bool true])
+    else begin
+      (* Find all occurrences *)
+      let positions = ref [] in
+      let i = ref 0 in
+      while !i <= String.length buf_text - old_len do
+        if String.sub buf_text !i old_len = old_text then begin
+          positions := !i :: !positions;
+          i := !i + old_len
+        end else
+          incr i
+      done;
+      let positions = List.rev !positions in
+      let n_found = List.length positions in
+      if n_found = 0 then
+        (false, `Assoc ["content", `List [
+          `Assoc ["type", `String "text"; "text",
+            `String "old_text not found in buffer"]
+        ]; "isError", `Bool true])
+      else begin
+        (* Select which positions to replace *)
+        let to_replace = if occurrence = 0 then positions
+          else if occurrence > 0 && occurrence <= n_found then
+            [List.nth positions (occurrence - 1)]
+          else [] in
+        if to_replace = [] then
+          (false, `Assoc ["content", `List [
+            `Assoc ["type", `String "text"; "text",
+              `String (Printf.sprintf "Occurrence %d not found (have %d)"
+                         occurrence n_found)]
+          ]; "isError", `Bool true])
+        else begin
+          (* Apply replacements in reverse order so offsets stay valid *)
+          let sorted = List.sort (fun a b -> compare b a) to_replace in
+          List.iter (fun pos ->
+            Buffer.move_to_byte_offset tab.buf pos;
+            Buffer.set_anchor tab.buf;
+            Buffer.move_to_byte_offset tab.buf (pos + old_len);
+            ignore (Buffer.delete_selection tab.buf);
+            String.iter (fun c ->
+              if c = '\n' then Buffer.insert_newline tab.buf
+              else Buffer.insert_char tab.buf c
+            ) new_text
+          ) sorted;
+          let n_replaced = List.length to_replace in
+          (* Return context around the first replacement for verification *)
+          let first_pos = List.nth (List.rev sorted) 0 in
+          let ctx_start = max 0 (first_pos - 20) in
+          let new_buf = Buffer.text tab.buf in
+          let ctx_end = min (String.length new_buf)
+                          (first_pos + String.length new_text + 20) in
+          let context = String.sub new_buf ctx_start (ctx_end - ctx_start) in
+          (true, `Assoc ["content", `List [
+            `Assoc ["type", `String "text"; "text",
+              `String (Printf.sprintf "Replaced %d occurrence(s). Context:\n...%s..."
+                         n_replaced context)]
+          ]])
+        end
+      end
+    end
   | "is_busy" ->
     let busy = match tab.session with
       | Some s -> Session.is_busy s | None -> false in

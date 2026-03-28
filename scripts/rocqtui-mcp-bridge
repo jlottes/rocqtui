@@ -104,11 +104,12 @@ class Bridge:
         return False  # timed out
 
     def _enrich_step_response(self, args):
-        """After stepping completes, read goals + messages + error + sentences."""
+        """After stepping completes, read goals + messages + error + sentences + context."""
         goals = self._read_resource("rocqtui://goals")
         messages = self._read_resource("rocqtui://messages")
         error_json = self._read_resource("rocqtui://error")
         sentences_json = self._read_resource("rocqtui://sentences")
+        regions_json = self._read_resource("rocqtui://regions")
 
         # Parse error location
         error_info = None
@@ -119,7 +120,8 @@ class Bridge:
         except (json.JSONDecodeError, TypeError):
             pass
 
-        # Check for errors in sentences
+        # Parse sentences and find the last verified one
+        sentences = []
         sentence_errors = []
         try:
             sentences = json.loads(sentences_json)
@@ -130,7 +132,48 @@ class Bridge:
         except (json.JSONDecodeError, TypeError):
             pass
 
+        # Find the last executed sentence and next sentence
+        last_sentence = None
+        next_sentence = None
+        verified_end = 0
+        try:
+            regions = json.loads(regions_json)
+            verified_end = regions.get("verified_end", 0)
+        except (json.JSONDecodeError, TypeError):
+            pass
+
+        for s in sentences:
+            if s.get("status") in ("verified", "processing"):
+                last_sentence = s
+        # Next sentence: first one after verified_end that isn't verified
+        buffer_text = self._read_resource("rocqtui://buffer")
+        if verified_end < len(buffer_text):
+            # Get a snippet of what's next
+            next_start = verified_end
+            # Skip whitespace
+            while next_start < len(buffer_text) and buffer_text[next_start] in ' \t\n\r':
+                next_start += 1
+            # Find next sentence end (. followed by whitespace)
+            next_end = next_start
+            while next_end < len(buffer_text) and next_end < next_start + 200:
+                if buffer_text[next_end] == '.' and (next_end + 1 >= len(buffer_text)
+                        or buffer_text[next_end + 1] in ' \t\n\r'):
+                    next_end += 1
+                    break
+                next_end += 1
+            if next_end > next_start:
+                next_sentence = buffer_text[next_start:next_end].strip()
+
         parts = []
+
+        # Last executed sentence
+        if last_sentence:
+            s_start = last_sentence.get("start", 0)
+            s_end = last_sentence.get("end", 0)
+            s_text = buffer_text[s_start:s_end].strip() if s_end <= len(buffer_text) else ""
+            if s_text:
+                parts.append(f"Executed: {s_text}")
+
         if error_info:
             loc = f"bytes {error_info.get('start', '?')}..{error_info.get('end', '?')}"
             parts.append(f"ERROR at {loc}:\n{error_info.get('message', '')}")
@@ -140,8 +183,13 @@ class Bridge:
             parts.append("Messages:\n" + messages)
         if goals.strip():
             parts.append("Goals:\n" + goals)
+
+        # Next sentence preview
+        if next_sentence and not error_info and not sentence_errors:
+            parts.append(f"Next: {next_sentence}")
+
         if not parts:
-            parts.append("OK (no goals)")
+            parts.append("OK (no goals, end of file)")
 
         text = "\n\n".join(parts)
         return {

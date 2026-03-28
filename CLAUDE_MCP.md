@@ -63,6 +63,10 @@ Pass `"async": true` to return immediately without waiting.
 - **insert_text** `{offset, text}` — Insert text at a byte offset.
 - **replace_range** `{start, end, text}` — Replace bytes `[start, end)` with text.
 - **delete_range** `{start, end}` — Delete bytes `[start, end)`.
+- **replace_text** `{old_text, new_text, occurrence?}` — Find exact text and
+  replace it. No byte offsets needed. `occurrence` is 1-based (default 1);
+  use 0 to replace all occurrences. Returns context around the replacement
+  for verification. **Preferred over replace_range for most edits.**
 - **batch_edit** `{edits}` — Apply multiple `{start, end, text}` edits as one
   undo group. Provide edits in document order; they are applied last-to-first
   so offsets refer to the original text.
