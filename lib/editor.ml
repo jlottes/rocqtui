@@ -138,6 +138,7 @@ let in_query_mode = ref false
 
 (* Help screen mode *)
 let in_help_mode = ref false
+let help_scroll = ref 0
 
 
 (* Apply a chgat to a byte range within a line, adjusting for hscroll *)
@@ -332,16 +333,22 @@ let visible_portion line hscroll cols =
   if start_byte >= len then ("", len)
   else (String.sub line start_byte (end_byte - start_byte), start_byte)
 
+let help_lines = String.split_on_char '\n' Help.text
+
 let render_help_screen display =
   let win = Display.script_win display in
   let (rows, cols) = Curses.getmaxyx win in
   let _ = Curses.werase win in
   Curses.scrollok win false;
-  let lines = String.split_on_char '\n' Help.text in
-  List.iteri (fun i line ->
-    if i < rows then
-      ignore (Curses.mvwaddnstr win i 0 line 0 (min (String.length line) cols))
-  ) lines;
+  let n = List.length help_lines in
+  let scroll = !help_scroll in
+  for row = 0 to rows - 1 do
+    let idx = scroll + row in
+    if idx < n then begin
+      let line = List.nth help_lines idx in
+      ignore (Curses.mvwaddnstr win row 0 line 0 (min (String.length line) cols))
+    end
+  done;
   let _ = Curses.wnoutrefresh win in
   ()
 
@@ -598,7 +605,7 @@ let update_status display (tab : Tab.t) =
   let buf = tab.buf in
   let session = tab.session in
   if !in_help_mode then
-    Display.set_status display "F1:Help  Press any key to close."
+    Display.set_status display "F1:close  ↑↓/PgUp/PgDn:scroll  any other key:close"
   else if !in_theme_mode then
     render_theme_bar display
   else if !in_options_mode then
@@ -1049,6 +1056,38 @@ let handle_key ch (tab : Tab.t) display =
     else if ch = Curses.Key.resize then begin
       Display.resize display; Some Continue
     end
+    else if !in_help_mode then begin
+      let (rows, _) = Display.script_dims display in
+      let n = List.length help_lines in
+      let max_scroll = max 0 (n - rows) in
+      let scroll_by delta =
+        help_scroll := max 0 (min max_scroll (!help_scroll + delta)) in
+      if ch = Curses.Key.up || ch = 259 then
+        (scroll_by (-1); Some Continue)
+      else if ch = Curses.Key.down || ch = 258 then
+        (scroll_by 1; Some Continue)
+      else if ch = Curses.Key.ppage || ch = 339 then
+        (scroll_by (-rows); Some Continue)
+      else if ch = Curses.Key.npage || ch = 338 then
+        (scroll_by rows; Some Continue)
+      else if ch = Curses.Key.home then
+        (help_scroll := 0; Some Continue)
+      else if ch = Curses.Key.end_ then
+        (help_scroll := max_scroll; Some Continue)
+      else if ch = Curses.Key.mouse then begin
+        let (_ok, _x, _y, bstate) = Display.get_mouse () in
+        let scroll_up = bstate land 0x10000 <> 0 in
+        let scroll_down = bstate land 0x200000 <> 0 in
+        if scroll_up then scroll_by (-3)
+        else if scroll_down then scroll_by 3;
+        Some Continue
+      end
+      else begin
+        in_help_mode := false;
+        help_scroll := 0;
+        Some Continue
+      end
+    end
     else if ch = Curses.Key.mouse then begin
       let (_ok, x, y, bstate) = Display.get_mouse () in
       let b1_release = bstate land 0x1 <> 0 in
@@ -1355,7 +1394,11 @@ let handle_key ch (tab : Tab.t) display =
        | None -> Some Continue)
     end
     else if ch = Curses.Key.f 1 then begin
-      in_help_mode := not !in_help_mode;
+      if !in_help_mode then begin
+        in_help_mode := false;
+        help_scroll := 0
+      end else
+        in_help_mode := true;
       Some Continue
     end
     else if ch = Curses.Key.f 2 then begin
@@ -1363,11 +1406,6 @@ let handle_key ch (tab : Tab.t) display =
         Display.set_minimap_width display 0
       else
         Display.set_minimap_width display Minimap.width;
-      Some Continue
-    end
-    else if !in_help_mode then begin
-      (* Any key exits help mode *)
-      in_help_mode := false;
       Some Continue
     end
     else if ch = 1 then begin (* ^A — About query from any pane *)
