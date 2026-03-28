@@ -819,6 +819,153 @@ These are queries only (display in messages pane), not jump-to actions.
 
 ---
 
+## Phase 12: Key Binding Refactor + Kitty Keyboard Protocol
+
+**Goal**: Centralize all key bindings in one module with named constants,
+display strings, and context. Enable the Kitty keyboard protocol for
+terminals that support it, disambiguating keys like ^M/Enter and ^I/Tab.
+
+### Phase 12.1: Key binding registry (`keys.ml`)
+
+A central module that defines all key bindings:
+
+```ocaml
+type context =
+  | Global        (* works everywhere *)
+  | Script        (* only in script pane *)
+  | GoalsMessages (* only in goals/messages panes *)
+  | QueryMenu     (* inside ^Q menu *)
+  | BuildMenu     (* inside F5 menu *)
+  | ThemeMenu     (* inside F3 menu *)
+  | OptionsMenu   (* inside ^T menu *)
+  | HelpScreen    (* inside help *)
+  | FilePicker    (* inside file picker *)
+
+type binding = {
+  name : string;           (* e.g. "save", "quit", "step_forward" *)
+  codes : int list;        (* key codes that trigger this binding *)
+  display : string;        (* e.g. "^S", "Alt+Down", "F5" *)
+  context : context;
+  description : string;    (* e.g. "Save file" *)
+}
+```
+
+Each binding is a named value:
+```ocaml
+let save = { name = "save"; codes = [19]; display = "^S";
+             context = Global; description = "Save file" }
+let quit = { name = "quit"; codes = [24]; display = "^X";
+             context = Global; description = "Exit all" }
+let step_forward = { name = "step_forward";
+  codes = [526; 532; 517]; display = "Alt+Down";
+  context = Global; description = "Step forward" }
+```
+
+A `match_key` function tests if a keycode matches a binding:
+```ocaml
+val match_key : int -> binding -> bool
+```
+
+A `all_bindings` list grouped by context, used to generate the help
+screen and status bar text.
+
+### Phase 12.2: Refactor editor.ml and main.ml
+
+Replace all magic integer constants with `Keys.xyz.codes` checks.
+The pattern `if ch = 19 then ...` becomes
+`if Keys.match_key ch Keys.save then ...`.
+
+For the status bar, instead of hardcoded strings like
+`"^S:Save ^W:Close"`, generate from bindings:
+```ocaml
+let status_hint bindings =
+  String.concat " " (List.map (fun b ->
+    Printf.sprintf "%s:%s" b.display b.description
+  ) bindings)
+```
+
+### Phase 12.3: Generate help screen from bindings
+
+Instead of the hardcoded `Help.text`, generate the help screen from
+`Keys.all_bindings`, grouped by context:
+
+```
+─── Navigation ──────────────
+  Alt+Down     Step forward
+  Alt+Up       Step backward
+  ^E           Go to cursor
+  ...
+─── Editing ─────────────────
+  ^S           Save file
+  ...
+```
+
+The `Help.text` string is computed once at startup from the registry.
+
+### Phase 12.4: Kitty keyboard protocol
+
+The Kitty keyboard protocol sends enhanced key reports that disambiguate:
+- `^M` (Ctrl+M) vs `Enter` (keycode 13 vs a distinct report)
+- `^I` (Ctrl+I) vs `Tab`
+- `^H` (Ctrl+H) vs `Backspace`
+- Modifier combinations: Shift+Enter, Ctrl+Enter, etc.
+
+**Enable**: send `\x1b[>1u` to enable progressive enhancement level 1.
+**Disable**: send `\x1b[<u` on exit.
+**Detect**: check if the terminal responds to `\x1b[?u` (query mode).
+
+Key reports come as `\x1b[<keycode>;<modifiers>u` CSI sequences.
+ncurses may or may not parse these — we may need to handle them in
+our escape sequence parser (the one that already handles bracketed paste).
+
+**New bindings unlocked by Kitty protocol:**
+- `^M` for minimap toggle (currently F2)
+- `^I` for indent / completion (currently blocked by Tab)
+- Shift+Enter for newline-without-autoindent
+- Ctrl+Enter for execute-and-step
+
+**Fallback**: terminals without Kitty support ignore the enable sequence.
+We detect this and use the current key mappings. The binding registry
+supports alternative codes per binding for this.
+
+### Phase 12.5: Alternative bindings
+
+Each binding can have primary and fallback codes:
+```ocaml
+type binding = {
+  ...
+  codes : int list;          (* primary codes *)
+  kitty_codes : int list;    (* codes with Kitty protocol enabled *)
+  ...
+}
+```
+
+When Kitty protocol is active, `match_key` checks `kitty_codes` first.
+This allows `^M` to be both "Enter" (in non-Kitty mode) and "minimap
+toggle" (in Kitty mode) without conflict.
+
+### Implementation order
+
+1. Create `keys.ml` with all binding definitions
+2. Refactor `editor.ml` to use `Keys.match_key`
+3. Refactor `main.ml` to use `Keys.match_key`
+4. Generate status bar hints from bindings
+5. Generate help screen from bindings
+6. Add Kitty keyboard protocol detection and enable/disable
+7. Add Kitty-specific key parsing
+8. Add alternative bindings for Kitty mode
+
+### Notes
+
+- The refactor should be mechanical — no behavior changes in steps 1-5.
+- The help screen generation replaces the hand-maintained `help.ml`.
+- Context-specific bindings (like query menu keys) still need their
+  own dispatch logic, but the keys themselves are defined centrally.
+- The Kitty protocol is strictly additive — no existing functionality
+  breaks if the terminal doesn't support it.
+
+---
+
 ## Phase 11: Messages Pane Tabs
 
 **Goal**: The messages pane supports multiple content tabs — "Messages"
