@@ -10,6 +10,7 @@ type action =
   | Quit
   | Close_tab
   | Save_prompt
+  | Reload
   | Open_file of string
   | Jump_back of jump_point
 
@@ -656,7 +657,9 @@ let update_status display (tab : Tab.t) =
     let line = Buffer.get_line buf cl in
     let vcol = Utf8.byte_to_col line cc in
     let fname = Tab.project_relative_path (Buffer.filename buf) in
-    let mod_flag = if Buffer.modified buf then "*" else "" in
+    let mod_flag =
+      (if Buffer.modified buf then "*" else "") ^
+      (if Buffer.disk_changed buf then "\xe2\x9f\xb3" else "") in
     let rocq_status = match session with
       | None -> ""
       | Some sess ->
@@ -669,10 +672,11 @@ let update_status display (tab : Tab.t) =
         else if n_verified > 0 then Printf.sprintf " [%d verified]" n_verified
         else ""
     in
+    let reload_hint = if Buffer.disk_changed buf then " F4:Reload" else "" in
     let focus_info = match tab.focused_pane with
-      | `Script -> "  ^S:Save ^W:Close ^T:Opts ^Q:Query F1:Help"
-      | `Goals -> "  [Goals] ^P:Pane ^Q:Query F1:Help"
-      | `Messages -> "  [Messages] ^P:Pane ^Q:Query F1:Help"
+      | `Script -> "  ^S:Save ^W:Close ^T:Opts ^Q:Query F1:Help" ^ reload_hint
+      | `Goals -> "  [Goals] ^P:Pane ^Q:Query F1:Help" ^ reload_hint
+      | `Messages -> "  [Messages] ^P:Pane ^Q:Query F1:Help" ^ reload_hint
     in
     (* Horizontal scroll indicator *)
     let hscroll_ind =
@@ -1036,6 +1040,9 @@ let handle_key ch (tab : Tab.t) display =
         in_options_mode := false;
         (match session with Some s -> Session.sync_options_and_refresh s | None -> ());
         None
+    end
+    else if ch = Curses.Key.f 4 then begin (* F4 — reload from disk *)
+      Some Reload
     end
     else if ch = Curses.Key.f 3 then begin (* F3 — theme picker toggle *)
       in_theme_mode := not !in_theme_mode;

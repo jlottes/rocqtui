@@ -8,6 +8,9 @@ val create : unit -> t
 (** Load a file into the buffer. *)
 val load_file : string -> t
 
+(** Reload the buffer from its file on disk. Resets undo history. *)
+val reload : t -> unit
+
 (** Save buffer to its file. Returns false if no filename is set. *)
 val save : t -> bool
 
@@ -20,6 +23,12 @@ val set_filename : t -> string -> unit
 
 (** Whether the buffer has been modified since last save. *)
 val modified : t -> bool
+
+(** Whether the file on disk has changed since last load/save. *)
+val disk_changed : t -> bool
+
+(** Set the disk_changed flag. *)
+val set_disk_changed : t -> bool -> unit
 
 (** Line count. *)
 val line_count : t -> int

@@ -12,6 +12,7 @@ type action =
   | Quit
   | Close_tab
   | Save_prompt
+  | Reload
   | Open_file of string
   | Jump_back of jump_point
 

@@ -421,6 +421,7 @@ let handle_resource uri mgr =
         "filename", (match Buffer.filename t.buf with
           | Some f -> `String f | None -> `Null);
         "modified", `Bool (Buffer.modified t.buf);
+        "disk_changed", `Bool (Buffer.disk_changed t.buf);
         "active", `Bool (i = mgr.active);
       ]
     ) mgr.Tab.tabs in

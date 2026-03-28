@@ -77,6 +77,14 @@ let () =
   (* Wire up open files callback for file picker *)
   Editor.set_open_files_fn (fun () ->
     List.filter_map (fun (t : Tab.t) -> Buffer.filename t.buf) mgr.tabs);
+  (* File watcher *)
+  let watcher = File_watch.create () in
+  (* Watch all initial files *)
+  List.iter (fun (t : Tab.t) ->
+    match Buffer.filename t.buf with
+    | Some f -> File_watch.add_watch watcher f
+    | None -> ()
+  ) mgr.tabs;
   (* Render helper *)
   let render () =
     (* Set MCP status indicator *)
@@ -94,7 +102,9 @@ let () =
         let name = match List.assoc_opt t.id dnames with
           | Some n -> n | None -> "[?]"
         in
-        let prefix = if Buffer.modified t.buf then "*" else "" in
+        let prefix =
+          (if Buffer.modified t.buf then "*" else "") ^
+          (if Buffer.disk_changed t.buf then "\xe2\x9f\xb3" (* ⟳ *) else "") in
         let suffix = match spinner with
           | Some s when Mcp_server.is_tab_active mcp t.id -> " " ^ s
           | _ -> ""
@@ -180,7 +190,8 @@ let () =
     let mcp_fds = Mcp_server.server_fd mcp :: Mcp_server.client_fds mcp in
     let build_fds = match Build.watch_fd () with
       | Some fd -> [fd] | None -> [] in
-    let extra_fds = stdin_fd :: mcp_fds @ build_fds in
+    let watch_fds = [File_watch.watch_fd watcher] in
+    let extra_fds = stdin_fd :: mcp_fds @ build_fds @ watch_fds in
     let ready = Main_loop.select_with_watches extra_fds timeout in
     (* Handle MCP connections/messages *)
     if Mcp_server.handle_ready mcp ready mgr then begin
@@ -191,6 +202,67 @@ let () =
     end;
     (* Poll build subprocess *)
     if Build.poll () then needs_render := true;
+    (* Poll file watcher *)
+    if File_watch.poll watcher then begin
+      let changed = File_watch.take_changed watcher in
+      List.iter (fun path ->
+        List.iter (fun (t : Tab.t) ->
+          match Buffer.filename t.buf with
+          | Some f when f = path ->
+            Buffer.set_disk_changed t.buf true;
+            let vend = match t.session with
+              | Some s -> Session.verified_end s | None -> 0 in
+            if Buffer.modified t.buf then begin
+              (* Dirty buffer — just notify, don't reload *)
+              Display.set_status display
+                (Printf.sprintf "%s changed on disk (buffer has unsaved changes)"
+                   (Filename.basename path));
+              needs_render := true
+            end else if vend > 0 then begin
+              (* Clean buffer but has verified region — check if change
+                 is within the verified region *)
+              let old_text = Buffer.text t.buf in
+              let new_text = try
+                let ic = open_in path in
+                let s = In_channel.input_all ic in
+                close_in ic; s
+              with _ -> old_text in
+              (* Find first differing byte *)
+              let min_len = min (String.length old_text) (String.length new_text) in
+              let diff_at = ref min_len in
+              (try for i = 0 to min_len - 1 do
+                 if old_text.[i] <> new_text.[i] then begin
+                   diff_at := i; raise Exit
+                 end
+               done with Exit -> ());
+              if !diff_at < vend then begin
+                (* Change is within verified region — don't auto-reload *)
+                Display.set_status display
+                  (Printf.sprintf "%s changed on disk (verified region affected)"
+                     (Filename.basename path));
+                needs_render := true
+              end else begin
+                (* Change is after verified region — safe to reload *)
+                Buffer.reload t.buf;
+                Buffer.set_disk_changed t.buf false;
+                File_watch.add_watch watcher path;
+                Display.set_status display
+                  (Printf.sprintf "%s reloaded" (Filename.basename path));
+                needs_render := true
+              end
+            end else begin
+              (* Clean buffer, no verified region — safe to reload *)
+              Buffer.reload t.buf;
+              Buffer.set_disk_changed t.buf false;
+              File_watch.add_watch watcher path;
+              Display.set_status display
+                (Printf.sprintf "%s reloaded" (Filename.basename path));
+              needs_render := true
+            end
+          | _ -> ()
+        ) mgr.Tab.tabs
+      ) changed
+    end;
     (* Poll ALL sessions *)
     if Tab.poll_all mgr then begin
       needs_render := true;
@@ -221,13 +293,69 @@ let () =
             match Editor.handle_key ch tab display with
             | Editor.Quit -> handle_quit ()
             | Editor.Close_tab -> handle_close_tab ()
+            | Editor.Reload ->
+              let tab = Tab.active_tab mgr in
+              (match Buffer.filename tab.buf with
+               | Some path ->
+                 let do_reload () =
+                   (* Rewind session before reload *)
+                   (match tab.session with
+                    | Some s -> Session.go_to_offset s 0
+                    | None -> ());
+                   Buffer.reload tab.buf;
+                   File_watch.add_watch watcher path;
+                   Display.set_status display
+                     (Printf.sprintf "%s reloaded" (Filename.basename path));
+                   needs_render := true
+                 in
+                 if Buffer.modified tab.buf then begin
+                   Display.set_status display
+                     "Buffer has unsaved changes! F4 again to discard and reload.";
+                   Display.refresh_all display;
+                   let ready = Main_loop.select_with_watches [stdin_fd] (-1.0) in
+                   if List.mem stdin_fd ready then begin
+                     let ch2 = Curses.getch () in
+                     if ch2 = Curses.Key.f 4 then
+                       do_reload ()
+                     else
+                       needs_render := true
+                   end
+                 end else
+                   do_reload ()
+               | None ->
+                 Display.set_status display "No filename.");
+              needs_render := true
             | Editor.Save_prompt ->
               (match Buffer.filename tab.buf with
                | Some _ ->
-                 if Buffer.save tab.buf then
-                   Display.set_status display "Saved."
-                 else
-                   Display.set_status display "Error saving file."
+                 if Buffer.disk_changed tab.buf then begin
+                   (* File changed on disk — confirm overwrite *)
+                   Display.set_status display
+                     "File changed on disk! ^S again to overwrite, ^R to reload.";
+                   Display.refresh_all display;
+                   let ready = Main_loop.select_with_watches [stdin_fd] (-1.0) in
+                   if List.mem stdin_fd ready then begin
+                     let ch2 = Curses.getch () in
+                     if ch2 = 19 then begin (* ^S — force save *)
+                       if Buffer.save tab.buf then
+                         Display.set_status display "Saved (overwritten)."
+                       else
+                         Display.set_status display "Error saving file."
+                     end else if ch2 = 18 then begin (* ^R — reload *)
+                       Buffer.reload tab.buf;
+                       File_watch.add_watch watcher
+                         (match Buffer.filename tab.buf with
+                          | Some f -> f | None -> "");
+                       Display.set_status display "Reloaded from disk."
+                     end
+                     (* else: cancelled *)
+                   end
+                 end else begin
+                   if Buffer.save tab.buf then
+                     Display.set_status display "Saved."
+                   else
+                     Display.set_status display "Error saving file."
+                 end
                | None ->
                  Display.set_status display "No filename.");
               needs_render := true
@@ -275,6 +403,7 @@ let () =
                  let (_pd, pargs) = Project.find_args (Some path) in
                  let new_tab = Tab.create_from_file ~args:(pargs @ extra_args) path in
                  Tab.add_tab mgr new_tab;
+                 File_watch.add_watch watcher path;
                  Display.set_tab_bar display true);
               (* Jump to position if requested *)
               (match jump with
@@ -298,6 +427,7 @@ let () =
     end
   done;
   Mcp_server.shutdown mcp;
+  File_watch.close watcher;
   Clipboard.disable_bracketed_paste ();
   List.iter (fun (tab : Tab.t) ->
     match tab.session with Some s -> Session.quit s | None -> ()

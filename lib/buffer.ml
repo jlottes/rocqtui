@@ -17,6 +17,7 @@ type t = {
   mutable hscroll : int;  (* horizontal scroll in screen columns *)
   mutable modified : bool;
   mutable filename : string option;
+  mutable disk_changed : bool;  (* file changed on disk since last load/save *)
   mutable cut_buf : string list;
   mutable anchor : (int * int) option;  (* (line, col) or None *)
   mutable undo_stack : snapshot list;
@@ -40,7 +41,8 @@ let create () =
     anchor = None;
     undo_stack = [];
     redo_stack = [];
-    last_edit = Other }
+    last_edit = Other;
+    disk_changed = false }
 
 let ensure_capacity buf n =
   if n > Array.length buf.lines then begin
@@ -119,7 +121,35 @@ let load_file path =
   List.iteri (fun i l -> buf.lines.(i) <- l) lines;
   buf.num_lines <- n;
   buf.modified <- false;
+  buf.disk_changed <- false;
   buf
+
+let reload buf =
+  match buf.filename with
+  | None -> ()
+  | Some path ->
+    let ic = open_in path in
+    let lines = ref [] in
+    (try while true do lines := input_line ic :: !lines done
+     with End_of_file -> ());
+    close_in ic;
+    let lines = List.rev !lines in
+    let n = max 1 (List.length lines) in
+    ensure_capacity buf n;
+    List.iteri (fun i l -> buf.lines.(i) <- l) lines;
+    for i = n to buf.num_lines - 1 do buf.lines.(i) <- "" done;
+    buf.num_lines <- n;
+    buf.modified <- false;
+    buf.disk_changed <- false;
+    buf.undo_stack <- [];
+    buf.redo_stack <- [];
+    buf.last_edit <- Other;
+    (* Keep cursor in bounds *)
+    if buf.cur_line >= n then begin
+      buf.cur_line <- max 0 (n - 1);
+      buf.cur_col <- 0
+    end else if buf.cur_col > String.length buf.lines.(buf.cur_line) then
+      buf.cur_col <- String.length buf.lines.(buf.cur_line)
 
 let save buf =
   match buf.filename with
@@ -132,6 +162,7 @@ let save buf =
     done;
     close_out oc;
     buf.modified <- false;
+    buf.disk_changed <- false;
     true
 
 let save_as buf path =
@@ -141,6 +172,8 @@ let save_as buf path =
 let filename buf = buf.filename
 let set_filename buf f = buf.filename <- Some f
 let modified buf = buf.modified
+let disk_changed buf = buf.disk_changed
+let set_disk_changed buf v = buf.disk_changed <- v
 let line_count buf = buf.num_lines
 let get_line buf i = buf.lines.(i)
 let cursor buf = (buf.cur_line, buf.cur_col)

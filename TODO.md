@@ -78,9 +78,8 @@ or hand-written).
 - [ ] Save as: prompt for filename (needed for new/blank tabs)
 - [ ] Add/remove file from _RocqProject (toggle current file's presence)
       Visual indicator in tab bar or status bar for files not in _RocqProject
-- [ ] External modification detection: watch files for changes (inotify or
-      stat-based polling). If the file changed on disk and the buffer is
-      clean, auto-reload. If dirty, prompt the user.
+- [x] External modification detection: inotify watches on open files.
+      Clean buffer auto-reloads; dirty buffer shows warning in status bar.
 - [ ] Rename file (update _RocqProject entry, update tab, save)
 
 ## Display / UX
