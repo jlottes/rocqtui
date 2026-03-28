@@ -39,8 +39,8 @@ val script_dims : t -> int * int
 val draw_chrome : ?goals_focused:bool -> ?messages_focused:bool -> t -> unit
 
 (** Pane identification for mouse events. *)
-type pane_id = PScript | PGoals | PMessages | PStatus | PNone
-              | PBorderV | PBorderH | PTabBar
+type pane_id = PScript | PMinimap | PGoals | PMessages | PStatus | PNone
+              | PBorderV | PBorderH | PBorderMinimap | PTabBar
 
 (** Determine which pane a screen coordinate falls in. *)
 val pane_at : t -> x:int -> y:int -> pane_id
@@ -53,6 +53,18 @@ val move_split_v : t -> int -> unit
 
 (** Move the horizontal split (goals/messages border) to row [row]. *)
 val move_split_h : t -> int -> unit
+
+(** Set minimap width (0 = hidden). Rebuilds layout. *)
+val set_minimap_width : t -> int -> unit
+
+(** Get current minimap width. *)
+val minimap_width : t -> int
+
+(** Get the minimap window (None if hidden). *)
+val minimap_win : t -> Curses.window option
+
+(** Drag the minimap's left border to screen column [col]. *)
+val move_minimap_border : t -> int -> unit
 
 (** Draw the tab bar. [tabs] is a list of (name, is_modified) pairs.
     [active] is the 0-based index of the active tab. *)

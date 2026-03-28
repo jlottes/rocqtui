@@ -24,6 +24,8 @@ Configure in `.mcp.json`:
 ## Resources
 
 Read these with MCP resource reads to inspect current state.
+Append `?tab=N` to any URI to target a specific tab by ID (e.g.,
+`rocqtui://goals?tab=3`). If omitted, the active tab is used.
 
 | URI | Description |
 |-----|-------------|
@@ -31,6 +33,8 @@ Read these with MCP resource reads to inspect current state.
 | `rocqtui://goals` | Current proof goals (text/plain) |
 | `rocqtui://messages` | Messages from Rocq (text/plain) |
 | `rocqtui://cursor` | Cursor position as `{"line": N, "col": N}` (0-based) |
+| `rocqtui://error` | Current error: `{"start", "end", "message"}` or `null` |
+| `rocqtui://line_offsets` | Array of byte offsets for each line start |
 | `rocqtui://regions` | `{"verified_end": N, "target_end": N}` byte offsets |
 | `rocqtui://sentences` | List of `{"start", "end", "status"}` for each sent sentence |
 | `rocqtui://tabs` | Open tabs with `{"id", "index", "filename", "modified", "active"}` |
@@ -59,7 +63,19 @@ Pass `"async": true` to return immediately without waiting.
 - **insert_text** `{offset, text}` — Insert text at a byte offset.
 - **replace_range** `{start, end, text}` — Replace bytes `[start, end)` with text.
 - **delete_range** `{start, end}` — Delete bytes `[start, end)`.
+- **batch_edit** `{edits}` — Apply multiple `{start, end, text}` edits as one
+  undo group. Provide edits in document order; they are applied last-to-first
+  so offsets refer to the original text.
 - **move_cursor** `{line, col}` — Move cursor to 0-based line and byte column.
+- **undo** — Undo the last edit (or batch).
+- **redo** — Redo the last undone edit.
+
+### Position Helpers
+
+- **offset_of_line** `{line, col?}` — Convert 0-based line and column to a
+  byte offset. Column defaults to 0. Use this to compute offsets for edits.
+- **get_context** `{offset, before?, after?}` — Get buffer text around a byte
+  offset. Returns `{start, end, offset, text}`. Defaults: 500 bytes each side.
 
 ### Querying Rocq
 

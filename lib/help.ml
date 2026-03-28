@@ -43,6 +43,8 @@ let text = {|
   ^G             Toggle hypotheses (focused / all)
   ^T             Printing options panel
   F1             This help screen
+  F2             Toggle minimap
+  F3             Change color theme
   Drag borders   Resize panes
 
   ─── Tabs ─────────────────────────────
@@ -58,7 +60,7 @@ let text = {|
              ESC e x  ∃     ESC | -  ⊢
 
   ─── Themes ───────────────────────────────────
-  Use -theme NAME on the command line:
+  F3 to switch themes, or -theme NAME on command line:
     solarized-dark  solarized-light  classic
     monokai  nord
 

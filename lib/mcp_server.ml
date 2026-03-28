@@ -197,6 +197,54 @@ let tool_defs = [
      ];
      "required", `List [`String "filename"];
    ]);
+  ("undo", "Undo the last edit",
+   `Assoc [
+     "type", `String "object";
+     "properties", `Assoc [];
+   ]);
+  ("redo", "Redo the last undone edit",
+   `Assoc [
+     "type", `String "object";
+     "properties", `Assoc [];
+   ]);
+  ("offset_of_line", "Convert line and column to byte offset",
+   `Assoc [
+     "type", `String "object";
+     "properties", `Assoc [
+       "line", `Assoc ["type", `String "integer"; "description", `String "0-based line number"];
+       "col", `Assoc ["type", `String "integer"; "description", `String "0-based byte column (default 0)"];
+     ];
+     "required", `List [`String "line"];
+   ]);
+  ("get_context", "Get buffer text around a byte offset",
+   `Assoc [
+     "type", `String "object";
+     "properties", `Assoc [
+       "offset", `Assoc ["type", `String "integer"; "description", `String "center byte offset"];
+       "before", `Assoc ["type", `String "integer"; "description", `String "bytes before offset (default 500)"];
+       "after", `Assoc ["type", `String "integer"; "description", `String "bytes after offset (default 500)"];
+     ];
+     "required", `List [`String "offset"];
+   ]);
+  ("batch_edit", "Apply multiple edits as one undo group. Edits are applied last-to-first (provide them in document order; offsets refer to the original text).",
+   `Assoc [
+     "type", `String "object";
+     "properties", `Assoc [
+       "edits", `Assoc [
+         "type", `String "array";
+         "items", `Assoc [
+           "type", `String "object";
+           "properties", `Assoc [
+             "start", `Assoc ["type", `String "integer"];
+             "end", `Assoc ["type", `String "integer"];
+             "text", `Assoc ["type", `String "string"];
+           ];
+           "required", `List [`String "start"; `String "end"; `String "text"];
+         ];
+       ];
+     ];
+     "required", `List [`String "edits"];
+   ]);
   ("is_busy", "Check if rocqtui is busy (stepping in progress)",
    `Assoc [
      "type", `String "object";
@@ -208,6 +256,8 @@ let resource_defs = [
   ("rocqtui://buffer", "Current file content", "text/plain");
   ("rocqtui://goals", "Current goal state", "text/plain");
   ("rocqtui://messages", "Messages from rocqtop", "text/plain");
+  ("rocqtui://error", "Current error range and message", "application/json");
+  ("rocqtui://line_offsets", "Byte offset of each line start", "application/json");
   ("rocqtui://cursor", "Cursor position", "application/json");
   ("rocqtui://regions", "Verified and target regions", "application/json");
   ("rocqtui://sentences", "Sentence list with status", "application/json");
@@ -216,8 +266,28 @@ let resource_defs = [
 
 (* --- Resource handlers --- *)
 
+(* Parse ?tab=N from URI, return (base_uri, tab) *)
+let parse_resource_uri uri mgr =
+  match String.split_on_char '?' uri with
+  | [base; query] ->
+    let params = String.split_on_char '&' query in
+    let tab_id = List.find_map (fun p ->
+      match String.split_on_char '=' p with
+      | ["tab"; v] -> int_of_string_opt v
+      | _ -> None
+    ) params in
+    let tab = match tab_id with
+      | Some id ->
+        (match Tab.find_by_id mgr id with
+         | Some t -> t
+         | None -> Tab.active_tab mgr)
+      | None -> Tab.active_tab mgr
+    in
+    (base, tab)
+  | _ -> (uri, Tab.active_tab mgr)
+
 let handle_resource uri mgr =
-  let tab = Tab.active_tab mgr in
+  let (uri, tab) = parse_resource_uri uri mgr in
   match uri with
   | "rocqtui://buffer" ->
     Some (`Assoc [
@@ -330,6 +400,46 @@ let handle_resource uri mgr =
           "uri", `String uri;
           "mimeType", `String "application/json";
           "text", `String (Yojson.Safe.to_string (`List tabs));
+        ]
+      ]
+    ])
+  | "rocqtui://error" ->
+    let (err_range, err_msg) = match tab.session with
+      | Some s ->
+        let range = Session.error_range s in
+        let msg = match Session.messages s with
+          | m :: _ -> m | [] -> "" in
+        (range, msg)
+      | None -> (None, "")
+    in
+    let json = match err_range with
+      | Some (s, e) -> `Assoc [
+          "start", `Int s; "end", `Int e;
+          "message", `String err_msg ]
+      | None -> `Null
+    in
+    Some (`Assoc [
+      "contents", `List [
+        `Assoc [
+          "uri", `String uri;
+          "mimeType", `String "application/json";
+          "text", `String (Yojson.Safe.to_string json);
+        ]
+      ]
+    ])
+  | "rocqtui://line_offsets" ->
+    let text = Buffer.text tab.buf in
+    let offsets = ref [0] in  (* line 0 starts at offset 0 *)
+    String.iteri (fun i c ->
+      if c = '\n' then offsets := (i + 1) :: !offsets
+    ) text;
+    let arr = `List (List.rev_map (fun o -> `Int o) !offsets) in
+    Some (`Assoc [
+      "contents", `List [
+        `Assoc [
+          "uri", `String uri;
+          "mimeType", `String "application/json";
+          "text", `String (Yojson.Safe.to_string arr);
         ]
       ]
     ])
@@ -539,14 +649,17 @@ let handle_tool t name args mgr =
       Buffer.filename t.buf = Some filename
     ) mgr.Tab.tabs in
     (match existing with
-     | Some t ->
+     | Some tab ->
        (* Switch to existing tab *)
-       (match Tab.index_of_id mgr t.id with
+       (match Tab.index_of_id mgr tab.id with
         | Some idx -> mgr.Tab.active <- idx
         | None -> ());
        (true, `Assoc ["content", `List [
          `Assoc ["type", `String "text"; "text",
-           `String (Printf.sprintf "Switched to existing tab %d" t.id)]
+           `String (Yojson.Safe.to_string (`Assoc [
+             "tab", `Int tab.id;
+             "existed", `Bool true;
+           ]))]
        ]])
      | None ->
        let (project_dir, project_args) = Project.find_args (Some filename) in
@@ -557,8 +670,83 @@ let handle_tool t name args mgr =
         | None -> ());
        (true, `Assoc ["content", `List [
          `Assoc ["type", `String "text"; "text",
-           `String (Printf.sprintf "Opened in tab %d" new_tab.id)]
+           `String (Yojson.Safe.to_string (`Assoc [
+             "tab", `Int new_tab.id;
+             "existed", `Bool false;
+           ]))]
        ]]))
+  | "undo" ->
+    Buffer.undo tab.buf;
+    (true, `Assoc ["content", `List [
+      `Assoc ["type", `String "text"; "text", `String "OK"]
+    ]])
+  | "redo" ->
+    Buffer.redo tab.buf;
+    (true, `Assoc ["content", `List [
+      `Assoc ["type", `String "text"; "text", `String "OK"]
+    ]])
+  | "offset_of_line" ->
+    let line = args |> Yojson.Safe.Util.member "line"
+               |> Yojson.Safe.Util.to_int in
+    let col = match args |> Yojson.Safe.Util.member "col" with
+      | `Int c -> c | _ -> 0 in
+    let offset = ref 0 in
+    for i = 0 to min (line - 1) (Buffer.line_count tab.buf - 1) do
+      offset := !offset + String.length (Buffer.get_line tab.buf i) + 1
+    done;
+    offset := !offset + col;
+    (false, `Assoc ["content", `List [
+      `Assoc ["type", `String "text"; "text",
+        `String (string_of_int !offset)]
+    ]])
+  | "get_context" ->
+    let offset = args |> Yojson.Safe.Util.member "offset"
+                 |> Yojson.Safe.Util.to_int in
+    let before = match args |> Yojson.Safe.Util.member "before" with
+      | `Int n -> n | _ -> 500 in
+    let after_ = match args |> Yojson.Safe.Util.member "after" with
+      | `Int n -> n | _ -> 500 in
+    let text = Buffer.text tab.buf in
+    let len = String.length text in
+    let s = max 0 (offset - before) in
+    let e = min len (offset + after_) in
+    let context = String.sub text s (e - s) in
+    (false, `Assoc ["content", `List [
+      `Assoc ["type", `String "text"; "text",
+        `String (Yojson.Safe.to_string (`Assoc [
+          "start", `Int s;
+          "end", `Int e;
+          "offset", `Int offset;
+          "text", `String context;
+        ]))]
+    ]])
+  | "batch_edit" ->
+    let edits = args |> Yojson.Safe.Util.member "edits"
+                |> Yojson.Safe.Util.to_list in
+    (* Parse edits *)
+    let parsed = List.map (fun e ->
+      let s = e |> Yojson.Safe.Util.member "start" |> Yojson.Safe.Util.to_int in
+      let ed = e |> Yojson.Safe.Util.member "end" |> Yojson.Safe.Util.to_int in
+      let text = e |> Yojson.Safe.Util.member "text"
+                 |> Yojson.Safe.Util.to_string in
+      (s, ed, text)
+    ) edits in
+    (* Sort by start offset descending so earlier offsets stay valid *)
+    let sorted = List.sort (fun (a, _, _) (b, _, _) -> compare b a) parsed in
+    (* Apply each edit *)
+    List.iter (fun (s, e, text) ->
+      Buffer.move_to_byte_offset tab.buf s;
+      Buffer.set_anchor tab.buf;
+      Buffer.move_to_byte_offset tab.buf e;
+      ignore (Buffer.delete_selection tab.buf);
+      String.iter (fun c ->
+        if c = '\n' then Buffer.insert_newline tab.buf
+        else Buffer.insert_char tab.buf c
+      ) text
+    ) sorted;
+    (true, `Assoc ["content", `List [
+      `Assoc ["type", `String "text"; "text", `String "OK"]
+    ]])
   | "is_busy" ->
     let busy = match tab.session with
       | Some s -> Session.is_busy s | None -> false in

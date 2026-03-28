@@ -1,15 +1,17 @@
 type t = {
   mutable script : Curses.window;
+  mutable minimap : Curses.window option;
   mutable goals : Curses.window;
   mutable messages : Curses.window;
   mutable status : Curses.window;
   mutable term_h : int;
   mutable term_w : int;
-  mutable split_col : int;
+  mutable split_col : int;      (* main vertical divider: script+minimap | goals *)
   mutable split_row : int;
+  mutable minimap_width : int;  (* 0 = hidden, >0 = braille columns (excl separator) *)
   mutable cursor_row : int;
   mutable cursor_col : int;
-  mutable has_tab_bar : bool;  (* whether tab bar is shown *)
+  mutable has_tab_bar : bool;
 }
 
 (* Color pair IDs *)
@@ -26,13 +28,19 @@ let compute_layout h w ~tab_bar =
   let split_row = top + content_h / 2 in
   (split_col, split_row)
 
-let create_windows h w split_col split_row ~tab_bar =
+let create_windows h w split_col split_row ~tab_bar ~minimap_width =
   let top = if tab_bar then 1 else 0 in
-  let script = Curses.newwin (h - 1 - top) split_col top 0 in
+  let content_h = h - 1 - top in
+  let mm_total = if minimap_width > 0 then minimap_width + 1 else 0 in (* +1 for separator *)
+  let script_w = split_col - mm_total in
+  let script = Curses.newwin content_h (max 1 script_w) top 0 in
+  let minimap = if minimap_width > 0 then
+    Some (Curses.newwin content_h (minimap_width + 1) top script_w)  (* +1 for separator col *)
+  else None in
   let goals = Curses.newwin (split_row - top) (w - split_col - 1) top (split_col + 1) in
   let messages = Curses.newwin (h - 1 - split_row - 1) (w - split_col - 1) (split_row + 1) (split_col + 1) in
   let status = Curses.newwin 1 w (h - 1) 0 in
-  (script, goals, messages, status)
+  (script, minimap, goals, messages, status)
 
 let init_colors () =
   let _ = Curses.start_color () in
@@ -93,9 +101,12 @@ let init () =
   let (h, w) = Curses.getmaxyx (Curses.stdscr ()) in
   let tab_bar = false in  (* enabled later via set_tab_bar *)
   let (split_col, split_row) = compute_layout h w ~tab_bar in
-  let (script, goals, messages, status) = create_windows h w split_col split_row ~tab_bar in
-  let t = { script; goals; messages; status;
+  let minimap_width = 0 in
+  let (script, minimap, goals, messages, status) =
+    create_windows h w split_col split_row ~tab_bar ~minimap_width in
+  let t = { script; minimap; goals; messages; status;
             term_h = h; term_w = w; split_col; split_row;
+            minimap_width;
             cursor_row = 0; cursor_col = 0; has_tab_bar = tab_bar } in
   (* Enable scrolling on content panes *)
   Curses.scrollok script true;
@@ -113,6 +124,7 @@ let teardown _t =
 
 let destroy_windows t =
   let _ = Curses.delwin t.script in
+  (match t.minimap with Some w -> ignore (Curses.delwin w) | None -> ());
   let _ = Curses.delwin t.goals in
   let _ = Curses.delwin t.messages in
   let _ = Curses.delwin t.status in
@@ -126,8 +138,11 @@ let resize t =
   let _ = Curses.werase stdscr in
   let _ = Curses.keypad stdscr true in
   let (split_col, split_row) = compute_layout h w ~tab_bar:t.has_tab_bar in
-  let (script, goals, messages, status) = create_windows h w split_col split_row ~tab_bar:t.has_tab_bar in
+  let (script, minimap, goals, messages, status) =
+    create_windows h w split_col split_row
+      ~tab_bar:t.has_tab_bar ~minimap_width:t.minimap_width in
   t.script <- script;
+  t.minimap <- minimap;
   t.goals <- goals;
   t.messages <- messages;
   t.status <- status;
@@ -154,58 +169,74 @@ let script_dims t =
 let draw_chrome ?goals_focused ?messages_focused t =
   draw_chrome_on ?goals_focused ?messages_focused t
 
-type pane_id = PScript | PGoals | PMessages | PStatus | PNone
-              | PBorderV | PBorderH | PTabBar
+type pane_id = PScript | PMinimap | PGoals | PMessages | PStatus | PNone
+              | PBorderV | PBorderH | PBorderMinimap | PTabBar
 
 let pane_at t ~x ~y =
   if t.has_tab_bar && y = 0 then PTabBar
   else if y >= t.term_h - 1 then PStatus
-  else if x < t.split_col then PScript
-  else if x = t.split_col then PBorderV
-  else if y < t.split_row then PGoals
-  else if y = t.split_row then PBorderH
-  else PMessages
+  else begin
+    let mm_total = if t.minimap_width > 0 then t.minimap_width + 1 else 0 in
+    let script_w = t.split_col - mm_total in
+    if x < script_w then PScript
+    else if t.minimap_width > 0 && x = script_w then PBorderMinimap
+    else if x < t.split_col then PMinimap
+    else if x = t.split_col then PBorderV
+    else if y < t.split_row then PGoals
+    else if y = t.split_row then PBorderH
+    else PMessages
+  end
+
+let rebuild_layout t =
+  destroy_windows t;
+  let _ = Curses.werase (Curses.stdscr ()) in
+  let (script, minimap, goals, messages, status) =
+    create_windows t.term_h t.term_w t.split_col t.split_row
+      ~tab_bar:t.has_tab_bar ~minimap_width:t.minimap_width in
+  t.script <- script; t.minimap <- minimap;
+  t.goals <- goals; t.messages <- messages; t.status <- status;
+  Curses.scrollok script true;
+  Curses.scrollok goals true;
+  Curses.scrollok messages true;
+  let _ = Curses.keypad script true in
+  Curses.wbkgdset status (Curses.A.color_pair color_status);
+  let _ = Curses.werase status in
+  draw_chrome_on t
 
 let move_split_v t col =
-  let col = max 10 (min col (t.term_w - 15)) in
+  let mm_total = if t.minimap_width > 0 then t.minimap_width + 1 else 0 in
+  let col = max (10 + mm_total) (min col (t.term_w - 15)) in
   if col <> t.split_col then begin
-    destroy_windows t;
-    let _ = Curses.werase (Curses.stdscr ()) in
-    let split_col = col in
-    let split_row = t.split_row in
-    let (script, goals, messages, status) =
-      create_windows t.term_h t.term_w split_col split_row ~tab_bar:t.has_tab_bar in
-    t.script <- script; t.goals <- goals;
-    t.messages <- messages; t.status <- status;
-    t.split_col <- split_col;
-    Curses.scrollok script true;
-    Curses.scrollok goals true;
-    Curses.scrollok messages true;
-    let _ = Curses.keypad script true in
-    Curses.wbkgdset status (Curses.A.color_pair color_status);
-    let _ = Curses.werase status in
-    draw_chrome_on t
+    t.split_col <- col;
+    rebuild_layout t
   end
 
 let move_split_h t row =
   let row = max 3 (min row (t.term_h - 5)) in
   if row <> t.split_row then begin
-    destroy_windows t;
-    let _ = Curses.werase (Curses.stdscr ()) in
-    let split_col = t.split_col in
-    let split_row = row in
-    let (script, goals, messages, status) =
-      create_windows t.term_h t.term_w split_col split_row ~tab_bar:t.has_tab_bar in
-    t.script <- script; t.goals <- goals;
-    t.messages <- messages; t.status <- status;
-    t.split_row <- split_row;
-    Curses.scrollok script true;
-    Curses.scrollok goals true;
-    Curses.scrollok messages true;
-    let _ = Curses.keypad script true in
-    Curses.wbkgdset status (Curses.A.color_pair color_status);
-    let _ = Curses.werase status in
-    draw_chrome_on t
+    t.split_row <- row;
+    rebuild_layout t
+  end
+
+let set_minimap_width t w =
+  let w = max 0 (min w (t.split_col - 12)) in
+  if w <> t.minimap_width then begin
+    t.minimap_width <- w;
+    rebuild_layout t
+  end
+
+let minimap_width t = t.minimap_width
+
+let minimap_win t = t.minimap
+
+let move_minimap_border t col =
+  (* col is the screen x of the minimap's left border.
+     minimap_width = split_col - col - 1 *)
+  let new_w = t.split_col - col - 1 in
+  let new_w = max 2 (min new_w (t.split_col - 12)) in
+  if new_w <> t.minimap_width then begin
+    t.minimap_width <- new_w;
+    rebuild_layout t
   end
 
 let set_tab_bar t enabled =
@@ -268,6 +299,9 @@ let refresh_all ?(defer_update=false) t =
   let _ = Curses.wnoutrefresh t.goals in
   let _ = Curses.wnoutrefresh t.messages in
   let _ = Curses.wnoutrefresh t.status in
+  (match t.minimap with
+   | Some w -> ignore (Curses.wnoutrefresh w)
+   | None -> ());
   let _ = Curses.wmove t.script t.cursor_row t.cursor_col in
   let _ = Curses.wnoutrefresh t.script in
   if not defer_update then

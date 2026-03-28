@@ -50,20 +50,20 @@ let init_compose () =
   compose_state := Some (Compose.load ())
 
 (* Drag state for resizing pane borders — global since it's display-level *)
-type drag_mode = NoDrag | DragV | DragH
+type drag_mode = NoDrag | DragV | DragH | DragMinimap | DragMinimapScroll
 let dragging = ref NoDrag
 
 let clear_pane_selection (ps : Tab.pane_selection) =
   ps.ps_active <- false
 
-let pane_selection_text (ps : Tab.pane_selection) lines_cache scroll =
+let pane_selection_text (ps : Tab.pane_selection) lines_cache =
   if not ps.ps_active then None
   else begin
     let lines = lines_cache in
     let n = List.length lines in
-    let al = ps.ps_anchor_line + scroll in
+    let al = ps.ps_anchor_line in
     let ac = ps.ps_anchor_col in
-    let cl = ps.ps_cursor_line + scroll in
+    let cl = ps.ps_cursor_line in
     let cc = ps.ps_cursor_col in
     let (sl, sc, el, ec) =
       if al < cl || (al = cl && ac <= cc) then (al, ac, cl, cc)
@@ -83,14 +83,14 @@ let pane_selection_text (ps : Tab.pane_selection) lines_cache scroll =
     if text = "" then None else Some text
   end
 
-let [@warning "-32"] select_all_pane (ps : Tab.pane_selection) lines_cache scroll =
+let [@warning "-32"] select_all_pane (ps : Tab.pane_selection) lines_cache =
   let lines = !lines_cache in
   let n = List.length lines in
   if n = 0 then ()
   else begin
-    ps.ps_anchor_line <- 0 - scroll;
+    ps.ps_anchor_line <- 0;
     ps.ps_anchor_col <- 0;
-    ps.ps_cursor_line <- (n - 1) - scroll;
+    ps.ps_cursor_line <- n - 1;
     ps.ps_cursor_col <- String.length (List.nth lines (n - 1));
     ps.ps_active <- true
   end
@@ -109,6 +109,9 @@ let take_jump_target () =
   let v = !jump_target in
   jump_target := None;
   v
+
+let current_theme_name = ref "solarized-dark"
+let set_current_theme name = current_theme_name := name
 
 (* Jump stack for go-back. *)
 let jump_stack : jump_point list ref = ref []
@@ -135,6 +138,7 @@ let in_query_mode = ref false
 
 (* Help screen mode *)
 let in_help_mode = ref false
+
 
 (* Apply a chgat to a byte range within a line, adjusting for hscroll *)
 let chgat_byte_range win line row hscroll cols byte_start byte_end attr color =
@@ -252,9 +256,9 @@ let render_text_pane ?(sel : Tab.pane_selection option) ?set_cache win scroll_re
   (match sel with
    | Some ps when ps.ps_active ->
      let scroll = !scroll_ref in
-     let al = ps.ps_anchor_line + scroll in
+     let al = ps.ps_anchor_line in
      let ac = ps.ps_anchor_col in
-     let cl = ps.ps_cursor_line + scroll in
+     let cl = ps.ps_cursor_line in
      let cc = ps.ps_cursor_col in
      let (sl, sc, el, ec) =
        if al < cl || (al = cl && ac <= cc) then (al, ac, cl, cc)
@@ -349,7 +353,7 @@ let render_script display (tab : Tab.t) =
   else begin
   let win = Display.script_win display in
   let (rows, cols) = Display.script_dims display in
-  if tab.suppress_ensure_visible then
+  if tab.suppress_ensure_visible || !dragging = DragMinimapScroll then
     tab.suppress_ensure_visible <- false
   else
     Buffer.ensure_visible_h buf rows cols;
@@ -433,6 +437,29 @@ let render_script display (tab : Tab.t) =
    | Some (sel_start, sel_end) ->
      overlay_range sel_start sel_end Curses.A.normal Theme.pair_selection
    | None -> ());
+  (* Minimap — render into its own window *)
+  (match Display.minimap_win display with
+   | Some mm_win ->
+     let lines = Array.init (Buffer.line_count buf) (Buffer.get_line buf) in
+     let num_lines = Array.length lines in
+     let (mm_rows_avail, mm_cols_total) = Curses.getmaxyx mm_win in
+     let mm_braille_cols = mm_cols_total - 1 in  (* -1 for separator column *)
+     let verified_end = match session with
+       | Some s -> Session.verified_end s | None -> 0 in
+     let pending_end = match session with
+       | Some s -> Session.pending_end s | None -> 0 in
+     let error_range = match session with
+       | Some s -> Session.error_range s | None -> None in
+     let ypc = Minimap.y_per_cell ~num_lines ~available_rows:mm_rows_avail in
+     let mm_data = Minimap.render ~lines ~num_lines
+         ~verified_end ~pending_end ~error_range ~ypc
+         ~cols:mm_braille_cols in
+     let border_attr = Curses.A.color_pair Display.color_border in
+     let _ = Curses.werase mm_win in
+     Minimap.draw mm_win ~sep_col:0 ~col_offset:1 ~win_rows:mm_rows_avail
+       ~minimap_rows:(Array.length mm_data)
+       ~scroll ~visible_lines:rows ~ypc ~border_attr mm_data
+   | None -> ());
   let (cl, cc) = Buffer.cursor buf in
   let cursor_row = cl - scroll in
   if cursor_row >= 0 && cursor_row < rows then begin
@@ -441,7 +468,6 @@ let render_script display (tab : Tab.t) =
     let cursor_col = max 0 cursor_col in
     Display.place_cursor display ~row:cursor_row ~col:cursor_col
   end else
-    (* Cursor is off-screen — place it at 0,0 but it will be hidden by curs_set *)
     Display.place_cursor display ~row:0 ~col:0
   end (* if not in_help_mode *)
 
@@ -532,8 +558,8 @@ let format_compose_status cs =
 let query_subject (tab : Tab.t) =
   let buf = tab.buf in
   match tab.focused_pane with
-  | `Goals -> pane_selection_text tab.goals_sel tab.goals_lines_cache tab.goals_scroll
-  | `Messages -> pane_selection_text tab.messages_sel tab.messages_lines_cache tab.messages_scroll
+  | `Goals -> pane_selection_text tab.goals_sel tab.goals_lines_cache
+  | `Messages -> pane_selection_text tab.messages_sel tab.messages_lines_cache
   | `Script ->
     match Buffer.selected_text buf with
     | Some text -> Some text
@@ -547,6 +573,16 @@ let run_query session phrase =
 let render_query_bar display =
   let text = "[a]About [c]Check [d]Print [l]Locate [p]Show Proof [e]Show Existentials  ^Q:close" in
   Display.set_status display text
+
+let in_theme_mode = ref false
+
+let render_theme_bar display =
+  let parts = List.mapi (fun i name ->
+    let key = Char.chr (Char.code '1' + i) in
+    let marker = if name = !current_theme_name then "*" else "" in
+    Printf.sprintf "[%c]%s%s" key name marker
+  ) Theme.available in
+  Display.set_status display (String.concat "  " parts ^ "  F3:close")
 
 let render_options_bar display =
   let parts = List.map (fun (e : Printopts.entry) ->
@@ -563,6 +599,8 @@ let update_status display (tab : Tab.t) =
   let session = tab.session in
   if !in_help_mode then
     Display.set_status display "F1:Help  Press any key to close."
+  else if !in_theme_mode then
+    render_theme_bar display
   else if !in_options_mode then
     render_options_bar display
   else if !in_query_mode then
@@ -702,14 +740,13 @@ let screen_to_pane_pos (tab : Tab.t) display ~x ~y pane_id =
     else begin
       let line = List.nth lines line_idx in
       let byte_col = Utf8.col_to_byte line (max 0 col) in
-      Some (row, byte_col)  (* row is relative to visible area *)
+      Some (line_idx, byte_col)  (* absolute line index *)
     end
   end
 
 (* Select word at position in a pane's cached lines *)
-let pane_select_word (ps : Tab.pane_selection) lines_cache scroll row byte_col =
+let pane_select_word (ps : Tab.pane_selection) lines_cache line_idx byte_col =
   let lines = lines_cache in
-  let line_idx = scroll + row in
   if line_idx >= List.length lines then ()
   else begin
     let line = List.nth lines line_idx in
@@ -724,9 +761,9 @@ let pane_select_word (ps : Tab.pane_selection) lines_cache scroll row byte_col =
       while !r < len && is_id line.[!r] do incr r done;
       if !r > !l && line.[!r - 1] = '.' then decr r;
       if !r > !l then begin
-        ps.ps_anchor_line <- row;
+        ps.ps_anchor_line <- line_idx;
         ps.ps_anchor_col <- !l;
-        ps.ps_cursor_line <- row;
+        ps.ps_cursor_line <- line_idx;
         ps.ps_cursor_col <- !r;
         ps.ps_active <- true
       end
@@ -845,7 +882,9 @@ let handle_key ch (tab : Tab.t) display =
       Some Continue
     end
     else if ch = 27 then begin (* Escape *)
-      if !in_options_mode then begin
+      if !in_theme_mode then
+        in_theme_mode := false
+      else if !in_options_mode then begin
         in_options_mode := false;
         (match session with Some s -> Session.sync_options_and_refresh s | None -> ())
       end else begin
@@ -949,6 +988,22 @@ let handle_key ch (tab : Tab.t) display =
         (match session with Some s -> Session.sync_options_and_refresh s | None -> ());
         None
     end
+    else if ch = Curses.Key.f 3 then begin (* F3 — theme picker toggle *)
+      in_theme_mode := not !in_theme_mode;
+      Some Continue
+    end
+    else if !in_theme_mode then begin
+      in_theme_mode := false;
+      let idx = ch - Char.code '1' in
+      let themes = Theme.available in
+      if idx >= 0 && idx < List.length themes then begin
+        let name = List.nth themes idx in
+        let theme = Theme.find name in
+        Theme.apply theme;
+        current_theme_name := name
+      end;
+      Some Continue
+    end
     else if ch = 17 then begin (* ^Q — query mode toggle *)
       in_query_mode := not !in_query_mode;
       Some Continue
@@ -1009,6 +1064,24 @@ let handle_key ch (tab : Tab.t) display =
         (match !dragging with
          | DragV -> Display.move_split_v display x
          | DragH -> Display.move_split_h display y
+         | DragMinimap -> Display.move_minimap_border display x
+         | DragMinimapScroll ->
+           (match Display.minimap_win display with
+            | Some mm_win ->
+              let (mm_begy, _) = Curses.getbegyx mm_win in
+              let (mm_rows, _) = Curses.getmaxyx mm_win in
+              let mm_row = y - mm_begy in
+              if mm_row >= 0 && mm_row < mm_rows then begin
+                let num_lines = Buffer.line_count buf in
+                let ypc = Minimap.y_per_cell ~num_lines ~available_rows:mm_rows in
+                let target_line = mm_row * ypc in
+                let (srows, _) = Display.script_dims display in
+                let target_scroll = max 0 (target_line - srows / 2) in
+                let max_scroll = max 0 (num_lines - srows) in
+                Buffer.set_scroll_top buf (min target_scroll max_scroll);
+                tab.suppress_ensure_visible <- true
+              end
+            | None -> ())
          | NoDrag -> ());
         if b1_release then dragging := NoDrag
       end
@@ -1058,14 +1131,18 @@ let handle_key ch (tab : Tab.t) display =
            | Some f -> f x
            | None -> ())
         end
-        else if (pane = Display.PBorderV || pane = Display.PBorderH)
+        else if (pane = Display.PBorderV || pane = Display.PBorderH
+                 || pane = Display.PBorderMinimap)
                 && b1_press then
-          dragging := (if pane = Display.PBorderV then DragV else DragH)
+          dragging := (match pane with
+            | Display.PBorderV -> DragV
+            | Display.PBorderMinimap -> DragMinimap
+            | _ -> DragH)
         else if (pane = Display.PGoals || pane = Display.PMessages)
                 && (b1_click || b1_dblclick || b1_press) then begin
           (* Click in right pane — focus it *)
           tab.focused_pane <- (if pane = Display.PGoals then `Goals else `Messages);
-          let (ps, lines_cache, scroll_ref, pane_id) =
+          let (ps, lines_cache, _scroll_ref, pane_id) =
             if pane = Display.PGoals then
               (tab.goals_sel, tab.goals_lines_cache, tab.goals_scroll, `Goals)
             else
@@ -1074,7 +1151,7 @@ let handle_key ch (tab : Tab.t) display =
           if b1_dblclick then begin
             match screen_to_pane_pos tab display ~x ~y pane_id with
             | Some (row, byte_col) ->
-              pane_select_word ps lines_cache scroll_ref row byte_col
+              pane_select_word ps lines_cache row byte_col
             | None -> ()
           end
           else if b1_press then begin
@@ -1094,6 +1171,26 @@ let handle_key ch (tab : Tab.t) display =
             | Some (_, _) -> clear_pane_selection ps
             | None -> ()
           end
+        end
+        else if pane = Display.PMinimap && (b1_click || b1_press) then begin
+          (* Click/drag on minimap — scroll to that position *)
+          (match Display.minimap_win display with
+           | Some mm_win ->
+             let (mm_begy, _) = Curses.getbegyx mm_win in
+             let (mm_rows, _) = Curses.getmaxyx mm_win in
+             let mm_row = y - mm_begy in
+             if mm_row >= 0 && mm_row < mm_rows then begin
+               let num_lines = Buffer.line_count buf in
+               let ypc = Minimap.y_per_cell ~num_lines ~available_rows:mm_rows in
+               let target_line = mm_row * ypc in
+               let (srows, _) = Display.script_dims display in
+               let target_scroll = max 0 (target_line - srows / 2) in
+               let max_scroll = max 0 (num_lines - srows) in
+               Buffer.set_scroll_top buf (min target_scroll max_scroll);
+               tab.suppress_ensure_visible <- true
+             end;
+             if b1_press then dragging := DragMinimapScroll
+           | None -> ())
         end
         else if pane = Display.PScript && (b1_click || b1_dblclick || b1_press) then begin
           tab.focused_pane <- `Script;
@@ -1261,6 +1358,13 @@ let handle_key ch (tab : Tab.t) display =
       in_help_mode := not !in_help_mode;
       Some Continue
     end
+    else if ch = Curses.Key.f 2 then begin
+      if Display.minimap_width display > 0 then
+        Display.set_minimap_width display 0
+      else
+        Display.set_minimap_width display Minimap.width;
+      Some Continue
+    end
     else if !in_help_mode then begin
       (* Any key exits help mode *)
       in_help_mode := false;
@@ -1268,8 +1372,8 @@ let handle_key ch (tab : Tab.t) display =
     end
     else if ch = 1 then begin (* ^A — About query from any pane *)
       let subject = match tab.focused_pane with
-        | `Goals -> pane_selection_text tab.goals_sel tab.goals_lines_cache tab.goals_scroll
-        | `Messages -> pane_selection_text tab.messages_sel tab.messages_lines_cache tab.messages_scroll
+        | `Goals -> pane_selection_text tab.goals_sel tab.goals_lines_cache
+        | `Messages -> pane_selection_text tab.messages_sel tab.messages_lines_cache
         | `Script ->
           match Buffer.selected_text buf with
           | Some text -> Some text | None -> Buffer.word_at_cursor buf
@@ -1281,8 +1385,8 @@ let handle_key ch (tab : Tab.t) display =
     end
     else if ch = 4 then begin (* ^D — Print query from any pane *)
       let subject = match tab.focused_pane with
-        | `Goals -> pane_selection_text tab.goals_sel tab.goals_lines_cache tab.goals_scroll
-        | `Messages -> pane_selection_text tab.messages_sel tab.messages_lines_cache tab.messages_scroll
+        | `Goals -> pane_selection_text tab.goals_sel tab.goals_lines_cache
+        | `Messages -> pane_selection_text tab.messages_sel tab.messages_lines_cache
         | `Script ->
           match Buffer.selected_text buf with
           | Some text -> Some text | None -> Buffer.word_at_cursor buf
@@ -1294,8 +1398,8 @@ let handle_key ch (tab : Tab.t) display =
     end
     else if ch = 25 then begin (* ^Y — copy from any pane *)
       let text = match tab.focused_pane with
-        | `Goals -> pane_selection_text tab.goals_sel tab.goals_lines_cache tab.goals_scroll
-        | `Messages -> pane_selection_text tab.messages_sel tab.messages_lines_cache tab.messages_scroll
+        | `Goals -> pane_selection_text tab.goals_sel tab.goals_lines_cache
+        | `Messages -> pane_selection_text tab.messages_sel tab.messages_lines_cache
         | `Script -> Buffer.selected_text buf
       in
       (match text with

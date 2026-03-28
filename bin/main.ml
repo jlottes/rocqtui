@@ -34,6 +34,7 @@ let () =
   Sys.set_signal Sys.sigtstp Sys.Signal_ignore;
   let display = Display.init () in
   Theme.apply theme;
+  Editor.set_current_theme theme.name;
   Editor.init_compose ();
   Clipboard.enable_bracketed_paste ();
   Rocq_protocol.set_interrupt_hook (fun t ->

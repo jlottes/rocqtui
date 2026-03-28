@@ -14,12 +14,11 @@
 - [x] async flag for stepping tools
 - [ ] Wire up Claude Code as an actual MCP client and test end-to-end
 - [ ] Handle concurrency: Claude editing while user is typing
-- [ ] Line/offset conversion: `offset_of_line {line, col}` tool and/or `line_offsets` resource
-- [ ] Undo/redo tools (expose Buffer.undo/redo via MCP)
-- [ ] Batch edits: `batch_edit` tool — list of edits applied as one undo group
-- [ ] Error location in step responses — include byte range from Session.error_range
-- [ ] Get context: `get_context {offset, before, after}` — return surrounding text
-- [ ] Group Claude's edits into single undo units
+- [x] Line/offset conversion: `offset_of_line` tool + `line_offsets` resource
+- [x] Undo/redo tools
+- [x] Batch edits: `batch_edit` tool (edits applied last-to-first, one undo group)
+- [x] Error location: `error` resource + byte range in bridge step responses
+- [x] Get context: `get_context {offset, before, after}` tool
 
 ## Per-tab State Refactor (Phase 9 remaining)
 
@@ -30,6 +29,11 @@
 - [x] Move `mouse_selecting`, `suppress_ensure_visible` into Tab.t
 - [x] Editor.handle_key takes Tab.t instead of separate buf + session
 - Note: `dragging` and `clipboard` remain global (display-level / shared)
+
+## Bug Fixes
+
+- [x] Mouse clicks in script pane off by 1 row when tab bar shown (getbegyx)
+- [x] Pane selection (goals/messages) drifts when scrolling — now uses absolute line indices
 
 ## Editor Features
 
@@ -54,11 +58,12 @@
 
 - [ ] Vertical scroll bar in script pane
 - [ ] Better horizontal scroll (scroll follows cursor more smoothly)
-- [ ] Minimap / overview of file
+- [x] Minimap (F2): braille overview, own curses window, draggable border,
+      click to scroll, adaptive compression, region coloring, viewport bracket
 - [ ] Configurable pane layout (e.g., goals below script, messages on right)
 - [ ] Remember pane split positions across sessions
 - [ ] Remember window size across sessions
-- [ ] Color theme hot-reload
+- [x] Color theme hot-switch (F3): live theme picker, no restart needed
 
 ## Async / Performance
 

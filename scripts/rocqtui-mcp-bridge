@@ -104,25 +104,38 @@ class Bridge:
         return False  # timed out
 
     def _enrich_step_response(self, args):
-        """After stepping completes, read goals + messages + sentences."""
+        """After stepping completes, read goals + messages + error + sentences."""
         goals = self._read_resource("rocqtui://goals")
         messages = self._read_resource("rocqtui://messages")
+        error_json = self._read_resource("rocqtui://error")
         sentences_json = self._read_resource("rocqtui://sentences")
 
+        # Parse error location
+        error_info = None
+        try:
+            err = json.loads(error_json)
+            if err is not None:
+                error_info = err
+        except (json.JSONDecodeError, TypeError):
+            pass
+
         # Check for errors in sentences
-        errors = []
+        sentence_errors = []
         try:
             sentences = json.loads(sentences_json)
             for s in sentences:
                 status = s.get("status", "")
                 if status.startswith("error:"):
-                    errors.append(status)
+                    sentence_errors.append(status)
         except (json.JSONDecodeError, TypeError):
             pass
 
         parts = []
-        if errors:
-            parts.append("ERRORS:\n" + "\n".join(errors))
+        if error_info:
+            loc = f"bytes {error_info.get('start', '?')}..{error_info.get('end', '?')}"
+            parts.append(f"ERROR at {loc}:\n{error_info.get('message', '')}")
+        elif sentence_errors:
+            parts.append("ERRORS:\n" + "\n".join(sentence_errors))
         if messages.strip():
             parts.append("Messages:\n" + messages)
         if goals.strip():

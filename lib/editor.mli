@@ -38,3 +38,6 @@ val handle_key : int -> Tab.t -> Display.t -> action
 (** After Open_file action, get the target position (line, col) for jump.
     Returns and clears the value. *)
 val take_jump_target : unit -> (int * int) option
+
+(** Set the current theme name (for tracking the active theme). *)
+val set_current_theme : string -> unit
