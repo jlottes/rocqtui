@@ -25,6 +25,8 @@ let description () = match !active with
 let start ~project_dir ~cmd ~args ~desc =
   if is_running () then false
   else begin
+    (* Clear previous build *)
+    active := None;
     (* Create pipe for stdout+stderr *)
     let (read_fd, write_fd) = Unix.pipe ~cloexec:true () in
     let pid = Unix.create_process cmd
@@ -153,6 +155,11 @@ let build_file ~project_dir v_path =
 let build_all ~project_dir =
   start ~project_dir ~cmd:"make"
     ~args:["-C"; project_dir] ~desc:"make"
+
+(* Run make clean. *)
+let build_clean ~project_dir =
+  start ~project_dir ~cmd:"make"
+    ~args:["-C"; project_dir; "clean"] ~desc:"make clean"
 
 (* Get the project-relative .v path *)
 let rel_path ~project_dir path =

@@ -34,9 +34,10 @@ val status_win : t -> Curses.window
 (** Get the usable dimensions (rows, cols) of the script pane. *)
 val script_dims : t -> int * int
 
-(** Draw borders and pane labels. [goals_focused] and [messages_focused]
-    control focus indicators. *)
-val draw_chrome : ?goals_focused:bool -> ?messages_focused:bool -> t -> unit
+(** Draw borders and pane labels. [msg_tab_names] and [msg_tab_active]
+    render the messages pane tab bar. *)
+val draw_chrome : ?goals_focused:bool -> ?messages_focused:bool ->
+  ?msg_tab_names:string list -> ?msg_tab_active:int -> t -> unit
 
 (** Pane identification for mouse events. *)
 type pane_id = PScript | PMinimap | PGoals | PMessages | PStatus | PNone
@@ -62,6 +63,9 @@ val minimap_width : t -> int
 
 (** Get the minimap window (None if hidden). *)
 val minimap_win : t -> Curses.window option
+
+(** Determine which messages sub-tab was clicked on the divider row. *)
+val msg_tab_at_x : t -> x:int -> tab_names:string list -> int option
 
 (** Drag the minimap's left border to screen column [col]. *)
 val move_minimap_border : t -> int -> unit

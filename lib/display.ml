@@ -52,7 +52,11 @@ let init_colors () =
   let _ = Curses.init_pair color_border Curses.Color.cyan (-1) in
   ()
 
-let draw_chrome_on ?(goals_focused=false) ?(messages_focused=false) t =
+let color_tab_active = 32
+let color_tab_inactive = 33
+
+let draw_chrome_on ?(goals_focused=false) ?(messages_focused=false)
+    ?(msg_tab_names=[]) ?(msg_tab_active=0) t =
   let acs = Curses.get_acs_codes () in
   let stdscr = Curses.stdscr () in
   let top = if t.has_tab_bar then 1 else 0 in
@@ -74,11 +78,31 @@ let draw_chrome_on ?(goals_focused=false) ?(messages_focused=false) t =
   Curses.wattroff stdscr (Curses.A.color_pair color_border);
   (* Pane labels *)
   let goals_label = if goals_focused then "[ Goals ]" else " Goals " in
-  let messages_label = if messages_focused then "[ Messages ]" else " Messages " in
   Curses.wattron stdscr (Curses.A.color_pair color_border lor Curses.A.bold);
   let _ = Curses.mvwaddstr stdscr top (t.split_col + 2) goals_label in
-  let _ = Curses.mvwaddstr stdscr t.split_row (t.split_col + 2) messages_label in
   Curses.wattroff stdscr (Curses.A.color_pair color_border lor Curses.A.bold);
+  (* Messages tab bar *)
+  let col = ref (t.split_col + 2) in
+  List.iteri (fun i name ->
+    let is_active = (i = msg_tab_active) in
+    let focused = messages_focused && is_active in
+    let label = if focused then Printf.sprintf "[ %s ]" name
+                else Printf.sprintf " %s " name in
+    let attr = if is_active then
+      Curses.A.color_pair color_tab_active lor Curses.A.bold
+    else
+      Curses.A.color_pair color_border in
+    Curses.wattron stdscr attr;
+    let _ = Curses.mvwaddstr stdscr t.split_row !col label in
+    Curses.wattroff stdscr attr;
+    col := !col + String.length label;
+    if i < List.length msg_tab_names - 1 then begin
+      Curses.wattron stdscr (Curses.A.color_pair color_border);
+      let _ = Curses.mvwaddstr stdscr t.split_row !col "│" in
+      Curses.wattroff stdscr (Curses.A.color_pair color_border);
+      col := !col + 1  (* │ is 3 bytes but 1 column *)
+    end
+  ) msg_tab_names;
   let _ = Curses.wnoutrefresh stdscr in
   ()
 
@@ -166,8 +190,8 @@ let status_win t = t.status
 let script_dims t =
   Curses.getmaxyx t.script
 
-let draw_chrome ?goals_focused ?messages_focused t =
-  draw_chrome_on ?goals_focused ?messages_focused t
+let draw_chrome ?goals_focused ?messages_focused ?msg_tab_names ?msg_tab_active t =
+  draw_chrome_on ?goals_focused ?messages_focused ?msg_tab_names ?msg_tab_active t
 
 type pane_id = PScript | PMinimap | PGoals | PMessages | PStatus | PNone
               | PBorderV | PBorderH | PBorderMinimap | PTabBar
@@ -229,6 +253,24 @@ let minimap_width t = t.minimap_width
 
 let minimap_win t = t.minimap
 
+(* Determine which messages sub-tab was clicked on the horizontal divider.
+   Returns the tab index or None. *)
+let msg_tab_at_x t ~x ~tab_names =
+  if x <= t.split_col + 1 then None
+  else begin
+    let col = ref (t.split_col + 2) in
+    let found = ref None in
+    List.iteri (fun i name ->
+      let label_len = String.length name + 2 in  (* " name " *)
+      if x >= !col && x < !col + label_len && !found = None then
+        found := Some i;
+      col := !col + label_len;
+      if i < List.length tab_names - 1 then
+        col := !col + 1  (* separator │ *)
+    ) tab_names;
+    !found
+  end
+
 let move_minimap_border t col =
   (* col is the screen x of the minimap's left border.
      minimap_width = split_col - col - 1 *)
@@ -244,9 +286,6 @@ let set_tab_bar t enabled =
     t.has_tab_bar <- enabled;
     resize t
   end
-
-let color_tab_active = 32
-let color_tab_inactive = 33
 
 let draw_tab_bar t tabs active =
   if not t.has_tab_bar then ()

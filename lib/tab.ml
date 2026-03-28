@@ -12,6 +12,53 @@ let fresh_pane_sel () =
   { ps_anchor_line = 0; ps_anchor_col = 0;
     ps_cursor_line = 0; ps_cursor_col = 0; ps_active = false }
 
+type msg_tab = {
+  mt_name : string;
+  mutable mt_lines : string list;
+  mutable mt_scroll : int;
+  mt_sel : pane_selection;
+  mutable mt_lines_cache : string list;
+}
+
+type msg_tabs = {
+  mutable mt_tabs : msg_tab list;
+  mutable mt_active : int;
+}
+
+let fresh_msg_tab name =
+  { mt_name = name; mt_lines = []; mt_scroll = 0;
+    mt_sel = fresh_pane_sel (); mt_lines_cache = [] }
+
+let fresh_msg_tabs () =
+  { mt_tabs = [fresh_msg_tab "Rocq"]; mt_active = 0 }
+
+let active_msg_tab mt =
+  if mt.mt_active >= 0 && mt.mt_active < List.length mt.mt_tabs then
+    List.nth mt.mt_tabs mt.mt_active
+  else
+    List.hd mt.mt_tabs  (* fallback to first *)
+
+let find_msg_tab mt name =
+  let rec find i = function
+    | [] -> None
+    | t :: _ when t.mt_name = name -> Some (i, t)
+    | _ :: rest -> find (i + 1) rest
+  in
+  find 0 mt.mt_tabs
+
+let ensure_msg_tab mt name =
+  match find_msg_tab mt name with
+  | Some (_, t) -> t
+  | None ->
+    let t = fresh_msg_tab name in
+    mt.mt_tabs <- mt.mt_tabs @ [t];
+    t
+
+let activate_msg_tab mt name =
+  match find_msg_tab mt name with
+  | Some (i, _) -> mt.mt_active <- i
+  | None -> ()
+
 type t = {
   id : int;
   buf : Buffer.t;
@@ -19,14 +66,12 @@ type t = {
   session_args : string list;
   mutable focused_pane : [`Script | `Goals | `Messages];
   mutable goals_scroll : int;
-  mutable messages_scroll : int;
   mutable show_all_hyps : bool;
   mutable mouse_selecting : bool;
   mutable suppress_ensure_visible : bool;
   goals_sel : pane_selection;
-  messages_sel : pane_selection;
   mutable goals_lines_cache : string list;
-  mutable messages_lines_cache : string list;
+  msg : msg_tabs;
 }
 
 type manager = {
@@ -43,14 +88,13 @@ let fresh_id () =
 let make_tab ?(args=[]) buf session =
   { id = fresh_id (); buf; session; session_args = args;
     focused_pane = `Script;
-    goals_scroll = 0; messages_scroll = 0;
+    goals_scroll = 0;
     show_all_hyps = false;
     mouse_selecting = false;
     suppress_ensure_visible = false;
     goals_sel = fresh_pane_sel ();
-    messages_sel = fresh_pane_sel ();
     goals_lines_cache = [];
-    messages_lines_cache = [] }
+    msg = fresh_msg_tabs () }
 
 let create_blank ?(args=[]) () =
   let buf = Buffer.create () in

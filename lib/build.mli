@@ -32,3 +32,6 @@ val vo_target : project_dir:string -> string -> string
 
 (** Build dependencies of a .v file (not the file itself). Returns false if busy. *)
 val build_deps : project_dir:string -> string -> bool
+
+(** Run make clean. Returns false if busy. *)
+val build_clean : project_dir:string -> bool

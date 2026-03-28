@@ -8,6 +8,21 @@ type pane_selection = {
   mutable ps_active : bool;
 }
 
+(** A sub-tab in the messages pane (e.g. "Rocq", "Build"). *)
+type msg_tab = {
+  mt_name : string;
+  mutable mt_lines : string list;
+  mutable mt_scroll : int;
+  mt_sel : pane_selection;
+  mutable mt_lines_cache : string list;
+}
+
+(** Messages pane tab manager. *)
+type msg_tabs = {
+  mutable mt_tabs : msg_tab list;
+  mutable mt_active : int;
+}
+
 type t = {
   id : int;
   buf : Buffer.t;
@@ -15,14 +30,12 @@ type t = {
   session_args : string list;
   mutable focused_pane : [`Script | `Goals | `Messages];
   mutable goals_scroll : int;
-  mutable messages_scroll : int;
   mutable show_all_hyps : bool;
   mutable mouse_selecting : bool;
   mutable suppress_ensure_visible : bool;
   goals_sel : pane_selection;
-  messages_sel : pane_selection;
   mutable goals_lines_cache : string list;
-  mutable messages_lines_cache : string list;
+  msg : msg_tabs;
 }
 
 type manager = {
@@ -45,10 +58,12 @@ val create_manager : t -> manager
 val poll_all : manager -> bool
 val tab_at_x : manager -> int -> int option
 
-(** Compute disambiguated display names for tabs.
-    Returns [(tab_id, display_name)] pairs. When two tabs share a basename,
-    parent directories are prepended until unique. *)
 val display_names : manager -> (int * string) list
-
-(** Project-relative path for a filename, or basename if no project found. *)
 val project_relative_path : string option -> string
+
+(** Messages pane sub-tab helpers. *)
+val fresh_pane_sel : unit -> pane_selection
+val active_msg_tab : msg_tabs -> msg_tab
+val find_msg_tab : msg_tabs -> string -> (int * msg_tab) option
+val ensure_msg_tab : msg_tabs -> string -> msg_tab
+val activate_msg_tab : msg_tabs -> string -> unit
