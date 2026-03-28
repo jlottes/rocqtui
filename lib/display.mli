@@ -67,5 +67,6 @@ val set_status : t -> string -> unit
 (** Move the terminal cursor to a position in the script pane. *)
 val place_cursor : t -> row:int -> col:int -> unit
 
-(** Refresh all windows. *)
-val refresh_all : t -> unit
+(** Refresh all windows. If [defer_update] is true, marks windows for
+    refresh but does not call doupdate (caller must do it). *)
+val refresh_all : ?defer_update:bool -> t -> unit

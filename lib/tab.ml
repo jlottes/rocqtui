@@ -126,13 +126,88 @@ let prev_tab mgr =
 let create_manager tab =
   { tabs = [tab]; active = 0; tab_scroll = 0 }
 
+(* Compute disambiguated display names for tabs.
+   When multiple tabs share the same basename, progressively prepend
+   parent directory components until all names are unique. *)
+let display_names mgr =
+  let tab_paths = List.map (fun (t : t) ->
+    match Buffer.filename t.buf with
+    | Some f -> (t.id, f)
+    | None -> (t.id, "")
+  ) mgr.tabs in
+  (* Split path into components, root first: "/a/b/c.v" -> ["/";"a";"b";"c.v"] *)
+  let split_path f =
+    let rec aux acc f =
+      let base = Filename.basename f in
+      let dir = Filename.dirname f in
+      if dir = f || base = "" then base :: acc
+      else aux (base :: acc) dir
+    in
+    aux [] f
+  in
+  let components = List.map (fun (id, f) ->
+    if f = "" then (id, ["[new]"])
+    else (id, split_path f)
+  ) tab_paths in
+  let name_of_parts parts n =
+    let len = List.length parts in
+    let start = max 0 (len - n) in
+    let selected = List.filteri (fun i _ -> i >= start) parts in
+    String.concat "/" selected
+  in
+  (* Per-entry depth: only increase depth for entries that have duplicates *)
+  let entries = ref (List.map (fun (id, parts) ->
+    (id, 1, parts)
+  ) components) in
+  let has_dups () =
+    let ns = List.map (fun (_, d, parts) -> name_of_parts parts d) !entries in
+    let unique = List.sort_uniq String.compare ns in
+    List.length unique < List.length ns
+  in
+  let max_iter = ref 0 in
+  while has_dups () && !max_iter < 20 do
+    incr max_iter;
+    (* Find which names are duplicated *)
+    let ns = List.map (fun (id, d, parts) ->
+      (id, name_of_parts parts d, d, parts)
+    ) !entries in
+    let counts = Hashtbl.create 16 in
+    List.iter (fun (_, n, _, _) ->
+      let c = try Hashtbl.find counts n with Not_found -> 0 in
+      Hashtbl.replace counts n (c + 1)
+    ) ns;
+    (* Increase depth only for entries whose current name is duplicated *)
+    entries := List.map (fun (id, n, d, parts) ->
+      if Hashtbl.find counts n > 1 then (id, d + 1, parts)
+      else (id, d, parts)
+    ) ns
+  done;
+  List.map (fun (id, d, parts) -> (id, name_of_parts parts d)) !entries
+
+(* Project-relative path for a file, or basename if no project *)
+let project_relative_path filename =
+  match filename with
+  | None -> "[new]"
+  | Some f ->
+    let dir = Filename.dirname f in
+    match Project.find_project_file dir with
+    | Some (project_dir, _) ->
+      let prefix = project_dir ^ "/" in
+      let prefix_len = String.length prefix in
+      if String.length f > prefix_len
+         && String.sub f 0 prefix_len = prefix then
+        String.sub f prefix_len (String.length f - prefix_len)
+      else
+        Filename.basename f
+    | None -> Filename.basename f
+
 let tab_at_x mgr x =
+  let dnames = display_names mgr in
   let col = ref 1 in
   let found = ref None in
   List.iteri (fun i tab ->
-    let name = match Buffer.filename tab.buf with
-      | Some f -> Filename.basename f
-      | None -> "[new]"
+    let name = match List.assoc_opt tab.id dnames with
+      | Some n -> n | None -> "[?]"
     in
     let modified = Buffer.modified tab.buf in
     let label = (if modified then "*" else "") ^ name in

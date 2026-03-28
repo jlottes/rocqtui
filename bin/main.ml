@@ -73,6 +73,9 @@ let () =
   let mcp = Mcp_server.create () in
   (* Create MCP socket symlinks in project directories *)
   List.iter (Mcp_server.create_project_symlink mcp) !project_dirs;
+  (* Wire up open files callback for file picker *)
+  Editor.set_open_files_fn (fun () ->
+    List.filter_map (fun (t : Tab.t) -> Buffer.filename t.buf) mgr.tabs);
   (* Render helper *)
   let render () =
     (* Set MCP status indicator *)
@@ -85,9 +88,10 @@ let () =
     if Tab.count mgr > 1 then begin
       let spinner = if Mcp_server.has_clients mcp then
         Some (Mcp_server.spinner_char mcp) else None in
+      let dnames = Tab.display_names mgr in
       let tabs = List.map (fun (t : Tab.t) ->
-        let name = match Buffer.filename t.buf with
-          | Some f -> Filename.basename f | None -> "[new]"
+        let name = match List.assoc_opt t.id dnames with
+          | Some n -> n | None -> "[?]"
         in
         let prefix = if Buffer.modified t.buf then "*" else "" in
         let suffix = match spinner with
@@ -104,65 +108,66 @@ let () =
   Curses.timeout 0;
   let stdin_fd = Unix.stdin in
   let running = ref true in
-  let handle_quit () =
+  let prompt_unsaved msg confirm_key on_confirm =
+    let tab = Tab.active_tab mgr in
+    Display.set_status display msg;
+    Display.refresh_all display;
+    let ready = Main_loop.select_with_watches [stdin_fd] (-1.0) in
+    if List.mem stdin_fd ready then begin
+      let ch2 = Curses.getch () in
+      if ch2 = confirm_key then
+        on_confirm ()
+      else if ch2 = 19 then begin (* ^S — save *)
+        (match Buffer.filename tab.buf with
+         | Some _ ->
+           if Buffer.save tab.buf then
+             Display.set_status display "Saved."
+           else
+             Display.set_status display "Error saving file."
+         | None ->
+           Display.set_status display "No filename.");
+        needs_render := true
+      end else begin
+        let t = Tab.active_tab mgr in
+        ignore (Editor.handle_key ch2 t display);
+        needs_render := true
+      end
+    end
+  in
+  let handle_close_tab () =
     let tab = Tab.active_tab mgr in
     if Tab.count mgr > 1 then begin
-      if Buffer.modified tab.buf then begin
-        Display.set_status display "Unsaved changes! ^X again to close, ^O to save.";
-        Display.refresh_all display;
-        let ready = Main_loop.select_with_watches [stdin_fd] (-1.0) in
-        if List.mem stdin_fd ready then begin
-          let ch2 = Curses.getch () in
-          if ch2 = 24 then begin
+      if Buffer.modified tab.buf then
+        prompt_unsaved "Unsaved changes! ^W again to close, ^S to save." 23
+          (fun () ->
             ignore (Tab.close_active mgr);
             if Tab.count mgr <= 1 then
               Display.set_tab_bar display false;
-            needs_render := true
-          end else if ch2 = 15 then begin
-            (match Buffer.filename tab.buf with
-             | Some _ ->
-               if Buffer.save tab.buf then
-                 Display.set_status display "Saved."
-               else
-                 Display.set_status display "Error saving file."
-             | None ->
-               Display.set_status display "No filename.");
-            needs_render := true
-          end
-        end
-      end else begin
+            needs_render := true)
+      else begin
         ignore (Tab.close_active mgr);
         if Tab.count mgr <= 1 then
           Display.set_tab_bar display false;
         needs_render := true
       end
     end else begin
-      if Buffer.modified tab.buf then begin
-        Display.set_status display "Unsaved changes! ^X again to quit, ^O to save.";
-        Display.refresh_all display;
-        let ready = Main_loop.select_with_watches [stdin_fd] (-1.0) in
-        if List.mem stdin_fd ready then begin
-          let ch2 = Curses.getch () in
-          if ch2 = 24 then running := false
-          else if ch2 = 15 then begin
-            (match Buffer.filename tab.buf with
-             | Some _ ->
-               if Buffer.save tab.buf then
-                 Display.set_status display "Saved."
-               else
-                 Display.set_status display "Error saving file."
-             | None ->
-               Display.set_status display "No filename.");
-            needs_render := true
-          end else begin
-            let t = Tab.active_tab mgr in
-            ignore (Editor.handle_key ch2 t display);
-            needs_render := true
-          end
-        end
-      end else
+      (* Last tab — same as quit *)
+      if Buffer.modified tab.buf then
+        prompt_unsaved "Unsaved changes! ^W again to quit, ^S to save." 23
+          (fun () -> running := false)
+      else
         running := false
     end
+  in
+  let handle_quit () =
+    (* Check if any tab has unsaved changes *)
+    let any_unsaved = List.exists (fun (t : Tab.t) ->
+      Buffer.modified t.buf) mgr.tabs in
+    if any_unsaved then
+      prompt_unsaved "Unsaved changes! ^X again to quit, ^S to save." 24
+        (fun () -> running := false)
+    else
+      running := false
   in
   (* Main loop *)
   render ();
@@ -210,6 +215,7 @@ let () =
           else begin
             match Editor.handle_key ch tab display with
             | Editor.Quit -> handle_quit ()
+            | Editor.Close_tab -> handle_close_tab ()
             | Editor.Save_prompt ->
               (match Buffer.filename tab.buf with
                | Some _ ->
@@ -219,6 +225,22 @@ let () =
                    Display.set_status display "Error saving file."
                | None ->
                  Display.set_status display "No filename.");
+              needs_render := true
+            | Editor.Open_file path ->
+              (* Check if already open *)
+              let existing = List.find_opt (fun (t : Tab.t) ->
+                Buffer.filename t.buf = Some path
+              ) mgr.tabs in
+              (match existing with
+               | Some t ->
+                 (match Tab.index_of_id mgr t.id with
+                  | Some idx -> mgr.active <- idx
+                  | None -> ())
+               | None ->
+                 let (_pd, pargs) = Project.find_args (Some path) in
+                 let new_tab = Tab.create_from_file ~args:(pargs @ extra_args) path in
+                 Tab.add_tab mgr new_tab;
+                 Display.set_tab_bar display true);
               needs_render := true
             | Editor.Continue ->
               needs_render := true

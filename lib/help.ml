@@ -5,13 +5,15 @@ let text = {|
   Arrows         Move cursor
   Home / End     Start / end of line
   PgUp / PgDn    Page up / down
-  ^W             Cycle pane focus (Script→Goals→Messages)
+  ^P             Cycle pane focus (Script→Goals→Messages)
   Click          Position cursor / focus pane
   Scroll wheel   Scroll pane under mouse
 
   ─── Editing ──────────────────────────────────
-  ^O             Save file
-  ^X             Exit (prompts if unsaved)
+  ^O             Open file (project file picker)
+  ^S             Save file
+  ^W             Close tab (exit if last)
+  ^X             Exit all (prompts if unsaved)
   ^K             Cut line (or cut selection)
   ^U             Paste
   ^Y             Copy selection (also to system clipboard)
@@ -23,8 +25,8 @@ let text = {|
   ESC            Compose key (XCompose input)
 
   ─── Rocq ─────────────────────────────────────
-  Alt+Down / ^N  Step forward (advance target)
-  Alt+Up   / ^P  Step backward (retract target)
+  Alt+Down       Step forward (advance target)
+  Alt+Up         Step backward (retract target)
   ^E             Go to cursor (set target to cursor)
   Cmd+Click      Go to cursor (at click position)
   ^C             Interrupt rocqtop
@@ -43,7 +45,8 @@ let text = {|
 
   ─── Tabs ─────────────────────────────
   ^B             New blank tab
-  ^X             Close tab (exit if last)
+  ^W             Close tab (exit if last)
+  Alt+Left/Right Switch tabs
   Click tab bar  Switch tabs
 
   ─── Compose (ESC) ────────────────────────────

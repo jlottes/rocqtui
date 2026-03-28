@@ -44,3 +44,11 @@ val prev_tab : manager -> unit
 val create_manager : t -> manager
 val poll_all : manager -> bool
 val tab_at_x : manager -> int -> int option
+
+(** Compute disambiguated display names for tabs.
+    Returns [(tab_id, display_name)] pairs. When two tabs share a basename,
+    parent directories are prepended until unique. *)
+val display_names : manager -> (int * string) list
+
+(** Project-relative path for a filename, or basename if no project found. *)
+val project_relative_path : string option -> string

@@ -264,12 +264,11 @@ let place_cursor t ~row ~col =
   t.cursor_row <- row;
   t.cursor_col <- col
 
-let refresh_all t =
+let refresh_all ?(defer_update=false) t =
   let _ = Curses.wnoutrefresh t.goals in
   let _ = Curses.wnoutrefresh t.messages in
   let _ = Curses.wnoutrefresh t.status in
-  (* Script pane last so the physical cursor lands here *)
   let _ = Curses.wmove t.script t.cursor_row t.cursor_col in
   let _ = Curses.wnoutrefresh t.script in
-  let _ = Curses.doupdate () in
-  ()
+  if not defer_update then
+    ignore (Curses.doupdate ())

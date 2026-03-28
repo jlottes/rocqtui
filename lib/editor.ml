@@ -1,7 +1,9 @@
 type action =
   | Continue
   | Quit
+  | Close_tab
   | Save_prompt
+  | Open_file of string
 
 let init_error_msg = ref ""
 let set_init_error msg = init_error_msg := msg
@@ -88,6 +90,10 @@ let [@warning "-32"] select_all_pane (ps : Tab.pane_selection) lines_cache scrol
 (* Tab bar click callback *)
 let tab_bar_click_handler : (int -> unit) option ref = ref None
 let set_tab_bar_click_handler f = tab_bar_click_handler := Some f
+
+(* Callback to get list of open file paths (for file picker markers) *)
+let open_files_fn : (unit -> string list) ref = ref (fun () -> [])
+let set_open_files_fn f = open_files_fn := f
 
 (* Print options mode *)
 let in_options_mode = ref false
@@ -536,10 +542,7 @@ let update_status display (tab : Tab.t) =
     let (cl, cc) = Buffer.cursor buf in
     let line = Buffer.get_line buf cl in
     let vcol = Utf8.byte_to_col line cc in
-    let fname = match Buffer.filename buf with
-      | Some f -> Filename.basename f
-      | None -> "[new]"
-    in
+    let fname = Tab.project_relative_path (Buffer.filename buf) in
     let mod_flag = if Buffer.modified buf then "*" else "" in
     let rocq_status = match session with
       | None -> ""
@@ -554,9 +557,9 @@ let update_status display (tab : Tab.t) =
         else ""
     in
     let focus_info = match tab.focused_pane with
-      | `Script -> "  ^O:Save ^X:Exit ^T:Opts ^Q:Query F1:Help"
-      | `Goals -> "  [Goals] ^W:Pane ^Q:Query F1:Help"
-      | `Messages -> "  [Messages] ^W:Pane ^Q:Query F1:Help"
+      | `Script -> "  ^S:Save ^W:Close ^T:Opts ^Q:Query F1:Help"
+      | `Goals -> "  [Goals] ^P:Pane ^Q:Query F1:Help"
+      | `Messages -> "  [Messages] ^P:Pane ^Q:Query F1:Help"
     in
     (* Horizontal scroll indicator *)
     let hscroll_ind =
@@ -612,8 +615,15 @@ let render_all display (tab : Tab.t) =
       let (rows, _) = Display.script_dims display in
       cl >= scroll && cl < scroll + rows
   in
+  let picker_open = File_picker.is_open () in
+  let cursor_visible = cursor_visible && not picker_open in
   ignore (Curses.curs_set (if cursor_visible then 1 else 0));
-  Display.refresh_all display
+  if picker_open then begin
+    Display.refresh_all ~defer_update:true display;
+    File_picker.render display;
+    ignore (Curses.doupdate ())
+  end else
+    Display.refresh_all display
 
 (* Convert screen coordinates to buffer (line, byte_col) position.
    Returns None if the coordinates are outside the script pane content. *)
@@ -724,23 +734,65 @@ let handle_key ch (tab : Tab.t) display =
   in
   if compose_handled then
     Continue
+  else if File_picker.is_open () then begin
+    let (box_top, box_left, box_w, _box_h, visible_rows) =
+      File_picker.box_geometry () in
+    if ch = Curses.Key.mouse then begin
+      let (_ok, x, y, bstate) = Display.get_mouse () in
+      let b1_click = bstate land 0x4 <> 0 in
+      let scroll_up = bstate land 0x10000 <> 0 in
+      let scroll_down = bstate land 0x200000 <> 0 in
+      if b1_click then
+        match File_picker.handle_click ~y ~x ~box_top ~box_left
+                ~box_width:box_w ~visible_rows with
+        | File_picker.PickerOpen path -> Open_file path
+        | _ -> Continue
+      else if scroll_up then
+        (File_picker.handle_scroll (-1) visible_rows; Continue)
+      else if scroll_down then
+        (File_picker.handle_scroll 1 visible_rows; Continue)
+      else Continue
+    end else
+      match File_picker.handle_key ch visible_rows with
+      | File_picker.PickerOpen path -> Open_file path
+      | File_picker.PickerClose -> Continue
+      | File_picker.PickerContinue -> Continue
+  end
   else
   (* --- Global keys (work in any pane) --- *)
   let handle_global () =
-    if ch = 24 then Some Quit
-    else if ch = 15 then Some Save_prompt
+    if ch = 24 then Some Quit (* ^X — exit *)
+    else if ch = 23 then Some Close_tab (* ^W — close tab *)
+    else if ch = 19 then Some Save_prompt (* ^S — save *)
+    else if ch = 15 then begin (* ^O — open file picker *)
+      let filename = Buffer.filename buf in
+      let dir = match filename with
+        | Some f -> Filename.dirname f
+        | None -> Sys.getcwd ()
+      in
+      (match Project.find_project_file dir with
+       | Some (project_dir, project_file) ->
+         (* Gather list of currently open files for markers *)
+         (* We don't have the tab manager here, so pass empty list.
+            main.ml can set this up if needed. *)
+         File_picker.open_picker ~project_dir ~project_file
+           ~open_files:(!open_files_fn ())
+       | None ->
+         Display.set_status display "No _RocqProject found.");
+      Some Continue
+    end
     else if ch = 3 then begin (* ^C — interrupt rocqtop *)
       (match session with
        | Some s -> (try Unix.kill (Session.pid s) Sys.sigint with _ -> ())
        | None -> ());
       Some Continue
     end
-    else if ch = 14 || ch = 526 || ch = 532 || ch = 517 then begin
+    else if ch = 526 || ch = 532 || ch = 517 then begin
       tab.goals_scroll <- 0; tab.messages_scroll <- 0;
       (match session with Some s -> Session.step_forward s | None -> ());
       Some Continue
     end
-    else if ch = 16 || ch = 567 || ch = 573 || ch = 558 then begin
+    else if ch = 567 || ch = 573 || ch = 558 then begin
       tab.goals_scroll <- 0; tab.messages_scroll <- 0;
       (match session with Some s -> Session.step_backward s | None -> ());
       Some Continue
@@ -882,7 +934,7 @@ let handle_key ch (tab : Tab.t) display =
       if handled then Some Continue
       else None  (* fall through to normal handling *)
     end
-    else if ch = 23 then begin (* ^W *)
+    else if ch = 16 then begin (* ^P — cycle pane focus *)
       tab.focused_pane <- (match tab.focused_pane with
         | `Script -> `Goals | `Goals -> `Messages | `Messages -> `Script);
       Some Continue

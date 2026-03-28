@@ -484,3 +484,200 @@ processing sentences even when not visible.
   this matters. Could make it hideable.
 - Consider: should closing the last tab exit, or show an empty
   tab / welcome screen?
+
+---
+
+## Phase 10: File Opening
+
+**Goal**: Two ways to open files in new tabs — a project file picker dialog,
+and a hotkey to jump to the file for a `Require Import` module at the cursor.
+
+### Phase 10.1: Module resolution
+
+Implement module-name-to-file-path resolution using the `-R` and `-Q` flags
+from `_RocqProject`. This is needed for both the file picker (knowing which
+files belong to the project) and the "open module at cursor" feature.
+
+**`-R dir logical`** maps physical directory `dir` recursively to logical
+prefix `logical`. Implicit: files can be imported with or without the prefix.
+
+**`-Q dir logical`** maps physical directory `dir` to logical prefix `logical`.
+Explicit: must use full qualified path.
+
+Resolution logic for `Require Import A.B.C`:
+1. For each `-R dir prefix` / `-Q dir prefix`:
+   - If the module path starts with `prefix`, strip it. Remaining path
+     `B.C` → file `dir/B/C.v`.
+   - For `-R` (implicit): also try the full path without stripping.
+     `A.B.C` → file `dir/A/B/C.v`.
+2. First match wins.
+
+Add to `project.ml`:
+```ocaml
+type load_path_entry = {
+  physical_dir : string;   (* absolute path *)
+  logical_prefix : string; (* dotted, e.g. "AffineConstructive" *)
+  implicit : bool;         (* -R = true, -Q = false *)
+}
+
+val load_paths : string -> load_path_entry list
+(* Parse _RocqProject and return load path entries *)
+
+val resolve_module : load_path_entry list -> string -> string option
+(* Map a dotted module name to a .v file path *)
+
+val project_files : load_path_entry list -> string list
+(* List all .v files reachable through the load paths *)
+```
+
+### Phase 10.2: Project file picker dialog (^O)
+
+A modal overlay that shows project files in a tree view with
+Unicode line-drawing characters.
+
+**Layout:**
+```
+┌─ Open File ──────────────────────────┐
+│ ▾ interfaces/                        │
+│   ├── prelude.v                      │
+│   ├── notation.v                     │
+│   ├── orders.v                       │
+│   └── subset/                        │
+│       ├── notation.v                 │
+│       └── ...                        │
+│ ▾ theory/                            │
+│   ├── groups.v                       │
+│   ├── rings.v                        │
+│   └── nno.v                          │
+│ ▾ implementations/                   │
+│   ├── nat/                           │
+│   │   ├── nno.v                      │
+│   │   └── rig.v                      │
+│   └── bool.v                         │
+│                                      │
+│ [P] project files  [A] all .v files  │
+└──────────────────────────────────────┘
+```
+
+**Features:**
+- Tree view with `├──`, `└──`, `│` connectors
+- Directories shown as nodes, files as leaves
+- Highlight bar on selected item (navigate with Up/Down/PageUp/PageDown)
+- Mouse wheel scrolls, mouse click selects
+- Enter opens the selected file in a new tab (or switches to existing tab)
+- Escape closes the dialog
+- `p` key: show only files listed in `_RocqProject` (default)
+- `a` key: show all `*.v` files found recursively in load path dirs
+- Currently-open files shown with a marker (e.g., `•` prefix)
+- **Tab disambiguation**: when two open tabs have the same basename (e.g.,
+  two `notation.v` files), the tab bar shows enough parent directories to
+  disambiguate: `interfaces/notation.v` vs `subset/notation.v`
+
+**Implementation:**
+- New module `file_picker.ml`:
+  - `type tree_node = Dir of string * tree_node list | File of string`
+  - Build tree from project file list or recursive directory scan
+  - Flatten to display lines with indent + connectors
+  - Track selection index, scroll offset
+  - Render into a centered overlay window
+- `editor.ml`: new `in_file_picker` mode, similar to `in_help_mode`
+- Tree is built once on dialog open, not re-scanned on every keypress
+
+**Data flow:**
+1. ^P pressed → `Project.load_paths` from active tab's project dir
+2. If project mode: `Project.project_files` (files listed in _RocqProject)
+3. If all mode: recursive scan of load path directories for `*.v`
+4. Build tree, flatten, render
+5. Enter → `Tab.create_from_file`, `Tab.add_tab`, close dialog
+
+Note: this dialog is bound to ^O after the save→^S remap in Phase 10.5.
+Implement 10.5 first or concurrently.
+
+### Phase 10.3: Tab name disambiguation
+
+When multiple tabs have the same `Filename.basename`, show enough
+of the path to distinguish them. For example, if both
+`interfaces/notation.v` and `interfaces/subset/notation.v` are open,
+show `notation.v` and `subset/notation.v` (or more if still ambiguous).
+
+Algorithm:
+1. Group tabs by basename
+2. For groups with >1 tab, progressively prepend parent directory
+   components until all names in the group are unique
+3. Cache the display names, recompute when tabs are added/closed
+
+Update `tab_at_x` and the tab bar rendering in `main.ml` and `display.ml`
+to use display names instead of raw basenames.
+
+### Phase 10.4: Open module at cursor (^L)
+
+When the cursor is on a `Require Import` or `From ... Require` line,
+parse the module name(s) and open the corresponding file.
+
+**Resolution strategy — two approaches, tried in order:**
+
+1. **Query Rocq** via `Locate Library <module>.` — works for everything
+   on the load path including the stdlib, prelude, and installed packages.
+   Returns a `.vo` path; swap `.vo` → `.v` for the source file. Doesn't
+   require the module to be loaded first. Requires a running session.
+
+2. **Local resolution** via our `-R`/`-Q` load path logic — works for
+   project-local files even if not yet compiled to `.vo`. Falls back
+   to this if there's no session or `Locate Library` fails.
+
+Tested: `Locate Library interfaces.prelude.` with `-R . AffineConstructive`
+returns the full `.vo` path correctly, even with implicit (short) names.
+
+**Parsing the Require line:**
+- Detect lines matching: `(From <prefix>)? Require (Import|Export)? <modules>.`
+- Extract the module name(s) — there may be several separated by spaces
+- If `From X` form, prepend `X.` to each module name
+
+**Behavior:**
+- ^L with cursor on a Require line: resolve the module name nearest
+  the cursor (or the first one if cursor isn't on a specific name)
+- If file found: open in new tab (or switch to existing tab)
+- If not found: show message in status bar ("Module Foo.Bar not found")
+- If multiple modules on the line: open the one the cursor is on
+  (by finding which module name span contains the cursor column)
+
+**Edge cases:**
+- `Require Import A B C.` — three modules on one line
+- `From Lib Require Import A B.` — prefix applied to all
+- Module not in project (stdlib, etc.) — resolve via `Locate Library`,
+  which finds stdlib `.vo` files; derive `.v` from the path
+- Cursor not on a Require line — show "No Require at cursor"
+
+### Phase 10.5: Remap save to ^S, open to ^O
+
+Change `^O` (currently save) to `^S` (universally expected for save).
+Free up `^O` for "open file" (the file picker from 10.2).
+
+**Flow control:** `^S` is the XOFF character that freezes terminals
+with flow control enabled. At startup, disable flow control by
+clearing the IXON flag via `tcsetattr` (same approach as nano/vim).
+Add a C stub or use `Unix.tcsetattr` in OCaml.
+
+Update keybindings:
+| Key | Old Action | New Action |
+|-----|-----------|------------|
+| ^S  | (free)    | Save       |
+| ^O  | Save      | Open file picker |
+| ^P  | (free)    | (available for other use) |
+
+### Notes
+
+- The file picker tree is purely cosmetic — it doesn't represent the
+  logical module hierarchy, just the physical directory structure.
+  This is simpler and matches what users see in their file manager.
+- The `_RocqProject` file lists files in compilation order, but the
+  picker should show them in alphabetical/tree order.
+- For large projects, the tree could be long. Scrolling is essential.
+  Consider: should directories be collapsible? Start with flat expanded
+  tree — collapsibility is a nice-to-have.
+- The "all .v files" mode helps when files exist but aren't yet added
+  to `_RocqProject`.
+- ^O for open (after remapping save to ^S) is the standard binding.
+  ^L (12) is free and works for "locate module".
+- Disabling IXON is safe — no modern terminal workflow depends on
+  ^S/^Q flow control, and nano/vim both do this.
