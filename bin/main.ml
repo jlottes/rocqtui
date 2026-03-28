@@ -37,7 +37,7 @@ let () =
   Editor.set_current_theme theme.name;
   Editor.init_compose ();
   Clipboard.enable_bracketed_paste ();
-  Keys.enable_kitty ();
+  (* Keys.enable_kitty ();  — disabled until CSI parser is complete *)
   Rocq_protocol.set_interrupt_hook (fun t ->
     let ch = Curses.getch () in
     if ch = 3 then
@@ -272,23 +272,11 @@ let () =
     end;
     (* Handle keyboard input *)
     if List.mem stdin_fd ready then begin
-      let peek timeout =
-        let ready = Main_loop.select_with_watches [stdin_fd] timeout in
-        if List.mem stdin_fd ready then Curses.getch () else -1 in
-      let block () =
-        let rec wait () =
-          let ready = Main_loop.select_with_watches [stdin_fd] 1.0 in
-          if List.mem stdin_fd ready then
-            let c = Curses.getch () in
-            if c = -1 then wait () else c
-          else wait ()
-        in wait () in
       let rec drain () =
-        let ev = Keys.read_key_event ~peek ~block ~getch:Curses.getch () in
-        match ev with
-        | None -> ()
-        | Some ev when not !running -> ignore ev
-        | Some ev ->
+        let ch = Curses.getch () in
+        if ch = -1 || not !running then ()
+        else begin
+          let ev = Keys.RawKey ch in
           let tab = Tab.active_tab mgr in
           if Keys.match_event ev Keys.new_tab then begin
             let active = Tab.active_tab mgr in
@@ -431,6 +419,7 @@ let () =
               needs_render := true
           end;
           if !running then drain ()
+        end
       in
       drain ()
     end;
