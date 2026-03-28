@@ -336,6 +336,52 @@ let disable_kitty () =
 
 let is_kitty_enabled () = !kitty_enabled
 
+(* --- Key event type --- *)
+
+type key_event =
+  | RawKey of int                     (* traditional getch result *)
+  | KittyKey of kitty_key             (* CSI u decoded *)
+  | Paste of string                   (* bracketed paste content *)
+  | Escape                            (* standalone ESC *)
+
+(* Unified match: works with both RawKey and KittyKey *)
+let match_event ev b =
+  match ev with
+  | RawKey ch -> List.mem ch b.codes
+  | KittyKey kk ->
+    (* First check kitty_codes, then try mapping keycode to legacy *)
+    if match_kitty_key kk b then true
+    else if kk.kk_modifier = 1 then
+      (* No modifier — keycode might map to a legacy code *)
+      List.mem kk.kk_keycode b.codes
+    else if kk.kk_modifier = 5 then
+      (* Ctrl — map to ctrl code if it's a letter *)
+      let kc = kk.kk_keycode in
+      if kc >= 97 && kc <= 122 then  (* a-z *)
+        List.mem (kc - 96) b.codes  (* ctrl+a=1, ctrl+b=2, etc. *)
+      else
+        false
+    else
+      false
+  | Paste _ -> false
+  | Escape -> false
+
+(* Extract the raw int from a key event (for non-binding checks like printable chars) *)
+let raw_key_of_event = function
+  | RawKey ch -> Some ch
+  | KittyKey kk when kk.kk_modifier = 1 -> Some kk.kk_keycode
+  | _ -> None
+
+(* Check if event is a mouse event *)
+let is_mouse_event = function
+  | RawKey ch -> ch = Curses.Key.mouse
+  | _ -> false
+
+(* Check if event is a resize event *)
+let is_resize_event = function
+  | RawKey ch -> ch = Curses.Key.resize
+  | _ -> false
+
 (* Parse a CSI u sequence from a string of bytes after "ESC [".
    Returns Some kitty_key or None. *)
 let parse_csi_u bytes =
@@ -357,4 +403,153 @@ let parse_csi_u bytes =
       | _ -> 1
     in
     Some { kk_keycode = keycode; kk_modifier = modifier }
+  end
+
+(* Read a complete key event from the terminal.
+   [peek timeout] reads one byte with timeout (returns -1 on timeout).
+   [block ()] blocks until a byte is available.
+   [getch ()] is a non-blocking read (returns -1 if nothing). *)
+let read_key_event ~peek ~block ~getch () =
+  let ch = getch () in
+  if ch = -1 then None
+  else if ch <> 27 then
+    Some (RawKey ch)
+  else begin
+    (* ESC received — peek ahead *)
+    let next = peek 0.025 in
+    if next = -1 then
+      Some Escape  (* standalone ESC *)
+    else if next = Char.code '[' then begin
+      (* CSI sequence — read parameter bytes until final byte (0x40-0x7E) *)
+      let buf = Stdlib.Buffer.create 16 in
+      let final = ref (-1) in
+      let finished = ref false in
+      while not !finished do
+        let c = peek 0.050 in
+        if c = -1 then
+          finished := true
+        else if c >= 64 && c <= 126 then begin
+          (* Final byte *)
+          final := c;
+          finished := true
+        end else
+          Stdlib.Buffer.add_char buf (Char.chr c)
+      done;
+      let params = Stdlib.Buffer.contents buf in
+      if !final = Char.code 'u' then begin
+        (* CSI u (Kitty protocol) *)
+        match parse_csi_u (params ^ "u") with
+        | Some kk -> Some (KittyKey kk)
+        | None -> Some (RawKey 27)  (* fallback *)
+      end
+      else if !final = Char.code '~' then begin
+        (* CSI ~ — function key or special *)
+        (* Check for bracketed paste: ESC[200~ *)
+        if params = "200" then begin
+          (* Bracketed paste — read until ESC[201~ *)
+          let paste = Stdlib.Buffer.create 256 in
+          let done_ = ref false in
+          while not !done_ do
+            let c = block () in
+            if c = 27 then begin
+              let n1 = peek 0.025 in
+              if n1 = Char.code '[' then begin
+                let p = Stdlib.Buffer.create 8 in
+                let f = ref (-1) in
+                let fin = ref false in
+                while not !fin do
+                  let c2 = peek 0.050 in
+                  if c2 = -1 then fin := true
+                  else if c2 >= 64 && c2 <= 126 then
+                    (f := c2; fin := true)
+                  else
+                    Stdlib.Buffer.add_char p (Char.chr c2)
+                done;
+                if Stdlib.Buffer.contents p = "201" && !f = Char.code '~' then
+                  done_ := true
+                else begin
+                  Stdlib.Buffer.add_char paste '\x1b';
+                  Stdlib.Buffer.add_char paste '[';
+                  Stdlib.Buffer.add_string paste (Stdlib.Buffer.contents p);
+                  if !f >= 0 then Stdlib.Buffer.add_char paste (Char.chr !f)
+                end
+              end else begin
+                Stdlib.Buffer.add_char paste '\x1b';
+                if n1 >= 0 then Stdlib.Buffer.add_char paste (Char.chr n1)
+              end
+            end else
+              Stdlib.Buffer.add_char paste (Char.chr c)
+          done;
+          Some (Paste (Stdlib.Buffer.contents paste))
+        end else begin
+          (* Other CSI ~ sequence — try to map to a curses key *)
+          match int_of_string_opt params with
+          | Some 5 -> Some (RawKey Curses.Key.ppage)
+          | Some 6 -> Some (RawKey Curses.Key.npage)
+          | Some n -> Some (RawKey (1000 + n))  (* arbitrary mapping *)
+          | None -> Some (RawKey 27)
+        end
+      end
+      else if !final >= Char.code 'A' && !final <= Char.code 'D' then begin
+        (* Arrow keys: CSI [modifier] A/B/C/D *)
+        let modifier = match int_of_string_opt params with
+          | Some n -> n | None ->
+            match String.split_on_char ';' params with
+            | _ :: m :: _ -> (match int_of_string_opt m with Some n -> n | None -> 1)
+            | _ -> 1
+        in
+        let base = match !final with
+          | c when c = Char.code 'A' -> Curses.Key.up
+          | c when c = Char.code 'B' -> Curses.Key.down
+          | c when c = Char.code 'C' -> Curses.Key.right
+          | c when c = Char.code 'D' -> Curses.Key.left
+          | _ -> 0
+        in
+        if modifier = 1 then Some (RawKey base)
+        else begin
+          (* Map modified arrows to the ncurses extended codes *)
+          let bits = modifier - 1 in
+          let has_shift = bits land 1 <> 0 in
+          let has_alt = bits land 2 <> 0 in
+          let has_ctrl = bits land 4 <> 0 in
+          (* ncurses shift+up=337, alt+up=564, ctrl+up=567, etc.
+             These vary; use KittyKey for precision *)
+          let kc = match !final with
+            | c when c = Char.code 'A' ->
+              if has_alt then 564 else if has_ctrl then 567
+              else if has_shift then 337 else base
+            | c when c = Char.code 'B' ->
+              if has_alt then 523 else if has_ctrl then 526
+              else if has_shift then 336 else base
+            | c when c = Char.code 'C' ->
+              if has_alt then 558 else if has_ctrl then 561
+              else if has_shift then 402 else base
+            | c when c = Char.code 'D' ->
+              if has_alt then 543 else if has_ctrl then 546
+              else if has_shift then 393 else base
+            | _ -> base
+          in
+          ignore (has_shift, has_alt, has_ctrl);
+          Some (RawKey kc)
+        end
+      end
+      else if !final = Char.code 'H' then Some (RawKey Curses.Key.home)
+      else if !final = Char.code 'F' then Some (RawKey Curses.Key.end_)
+      else if !final = Char.code 'M' then begin
+        (* Mouse event — put back ESC [ M and let ncurses handle it.
+           Actually, we can't ungetch a whole sequence. Return as mouse. *)
+        Some (RawKey Curses.Key.mouse)
+      end
+      else
+        Some (RawKey 27)  (* unknown CSI *)
+    end
+    else begin
+      (* ESC + non-[ — could be Alt+key or compose *)
+      (* Return ESC, then the next char needs to be re-processed.
+         We can't really "put back" next, so return a special. *)
+      (* For now, return RawKey 27 and let the existing ESC handler
+         in editor.ml deal with next via peek_getch *)
+      ignore (Curses.ungetch next);
+      Some (RawKey 27)
+    end
   end

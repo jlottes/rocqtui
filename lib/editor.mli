@@ -35,6 +35,7 @@ val set_open_files_fn : (unit -> string list) -> unit
 val render_all : Display.t -> Tab.t -> unit
 
 val handle_key : int -> Tab.t -> Display.t -> action
+val handle_key_event : Keys.key_event -> Tab.t -> Display.t -> action
 
 (** After Open_file action, get the target position (line, col) for jump.
     Returns and clears the value. *)

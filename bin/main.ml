@@ -37,6 +37,7 @@ let () =
   Editor.set_current_theme theme.name;
   Editor.init_compose ();
   Clipboard.enable_bracketed_paste ();
+  Keys.enable_kitty ();
   Rocq_protocol.set_interrupt_hook (fun t ->
     let ch = Curses.getch () in
     if ch = 3 then
@@ -271,26 +272,40 @@ let () =
     end;
     (* Handle keyboard input *)
     if List.mem stdin_fd ready then begin
+      let peek timeout =
+        let ready = Main_loop.select_with_watches [stdin_fd] timeout in
+        if List.mem stdin_fd ready then Curses.getch () else -1 in
+      let block () =
+        let rec wait () =
+          let ready = Main_loop.select_with_watches [stdin_fd] 1.0 in
+          if List.mem stdin_fd ready then
+            let c = Curses.getch () in
+            if c = -1 then wait () else c
+          else wait ()
+        in wait () in
       let rec drain () =
-        let ch = Curses.getch () in
-        if ch <> -1 && !running then begin
+        let ev = Keys.read_key_event ~peek ~block ~getch:Curses.getch () in
+        match ev with
+        | None -> ()
+        | Some ev when not !running -> ignore ev
+        | Some ev ->
           let tab = Tab.active_tab mgr in
-          if ch = 14 then begin (* ^N — new blank tab *)
+          if Keys.match_event ev Keys.new_tab then begin
             let active = Tab.active_tab mgr in
             Tab.add_tab mgr (Tab.create_blank ~args:active.session_args ());
             Display.set_tab_bar display true;
             needs_render := true
           end
-          else if ch = 552 then begin (* Alt+Left — prev tab *)
+          else if Keys.match_event ev Keys.prev_tab then begin
             Tab.prev_tab mgr;
             needs_render := true
           end
-          else if ch = 567 then begin (* Alt+Right — next tab *)
+          else if Keys.match_event ev Keys.next_tab then begin
             Tab.next_tab mgr;
             needs_render := true
           end
           else begin
-            match Editor.handle_key ch tab display with
+            match Editor.handle_key_event ev tab display with
             | Editor.Quit -> handle_quit ()
             | Editor.Close_tab -> handle_close_tab ()
             | Editor.Reload ->
@@ -416,7 +431,6 @@ let () =
               needs_render := true
           end;
           if !running then drain ()
-        end
       in
       drain ()
     end;
@@ -428,6 +442,7 @@ let () =
   done;
   Mcp_server.shutdown mcp;
   File_watch.close watcher;
+  Keys.disable_kitty ();
   Clipboard.disable_bracketed_paste ();
   List.iter (fun (tab : Tab.t) ->
     match tab.session with Some s -> Session.quit s | None -> ()

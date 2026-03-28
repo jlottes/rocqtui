@@ -356,7 +356,7 @@ let visible_portion line hscroll cols =
   if start_byte >= len then ("", len)
   else (String.sub line start_byte (end_byte - start_byte), start_byte)
 
-let help_lines = String.split_on_char '\n' Help.text
+let help_lines = String.split_on_char '\n' (Keys.generate_help ())
 
 let render_help_screen display =
   let win = Display.script_win display in
@@ -601,7 +601,10 @@ let run_query session phrase =
   | None -> ()
 
 let render_query_bar display =
-  let text = "[a]About [c]Check [d]Print [g]Coercions [l]Locate [p]Show Proof [e]Show Existentials  ^Q:close" in
+  let text = Printf.sprintf "[%s]About [%s]Check [%s]Print [%s]Coercions [%s]Locate [%s]Show Proof [%s]Existentials  %s:close"
+    Keys.query_about.display Keys.query_check.display Keys.query_print.display
+    Keys.query_coercions.display Keys.query_locate.display Keys.query_proof.display
+    Keys.query_existentials.display Keys.query_menu.display in
   Display.set_status display text
 
 let in_theme_mode = ref false
@@ -622,7 +625,9 @@ let render_build_bar display =
       | Some d -> d | None -> "building" in
     Printf.sprintf "  Building: %s  [c]Cancel" desc
   else
-    "[f]File [d]Deps [a]All [c]Cursor [x]Clean  F5:close"
+    Printf.sprintf "[%s]File [%s]Deps [%s]All [%s]Cursor [%s]Clean  %s:close"
+      Keys.build_file.display Keys.build_deps.display Keys.build_all.display
+      Keys.build_cursor.display Keys.build_clean.display Keys.build_menu.display
   in
   Display.set_status display text
 
@@ -672,11 +677,21 @@ let update_status display (tab : Tab.t) =
         else if n_verified > 0 then Printf.sprintf " [%d verified]" n_verified
         else ""
     in
-    let reload_hint = if Buffer.disk_changed buf then " F4:Reload" else "" in
+    let reload_hint = if Buffer.disk_changed buf then
+      " " ^ Keys.reload.display ^ ":Reload" else "" in
     let focus_info = match tab.focused_pane with
-      | `Script -> "  ^S:Save ^W:Close ^T:Opts ^Q:Query F1:Help" ^ reload_hint
-      | `Goals -> "  [Goals] ^P:Pane ^Q:Query F1:Help" ^ reload_hint
-      | `Messages -> "  [Messages] ^P:Pane ^Q:Query F1:Help" ^ reload_hint
+      | `Script ->
+        Printf.sprintf "  %s:Save %s:Close %s:Opts %s:Query %s:Help%s"
+          Keys.save.display Keys.close_tab.display Keys.options_menu.display
+          Keys.query_menu.display Keys.help.display reload_hint
+      | `Goals ->
+        Printf.sprintf "  [Goals] %s:Pane %s:Query %s:Help%s"
+          Keys.cycle_pane.display Keys.query_menu.display
+          Keys.help.display reload_hint
+      | `Messages ->
+        Printf.sprintf "  [Messages] %s:Pane %s:Query %s:Help%s"
+          Keys.cycle_pane.display Keys.query_menu.display
+          Keys.help.display reload_hint
     in
     (* Horizontal scroll indicator *)
     let hscroll_ind =
@@ -882,10 +897,10 @@ let handle_key ch (tab : Tab.t) display =
   else
   (* --- Global keys (work in any pane) --- *)
   let handle_global () =
-    if ch = 24 then Some Quit (* ^X — exit *)
-    else if ch = 23 then Some Close_tab (* ^W — close tab *)
-    else if ch = 19 then Some Save_prompt (* ^S — save *)
-    else if ch = 2 then begin (* ^B — jump back *)
+    if Keys.match_key ch Keys.quit then Some Quit
+    else if Keys.match_key ch Keys.close_tab then Some Close_tab
+    else if Keys.match_key ch Keys.save then Some Save_prompt
+    else if Keys.match_key ch Keys.jump_back then begin
       match pop_jump () with
       | Some jp ->
         jump_target := Some (jp.jp_line, jp.jp_col);
@@ -894,7 +909,7 @@ let handle_key ch (tab : Tab.t) display =
         Display.set_status display "No previous location.";
         Some Continue
     end
-    else if ch = 15 then begin (* ^O — open file picker *)
+    else if Keys.match_key ch Keys.open_file then begin
       let filename = Buffer.filename buf in
       let dir = match filename with
         | Some f -> Filename.dirname f
@@ -911,23 +926,23 @@ let handle_key ch (tab : Tab.t) display =
          Display.set_status display "No _RocqProject found.");
       Some Continue
     end
-    else if ch = 3 then begin (* ^C — interrupt rocqtop *)
+    else if Keys.match_key ch Keys.interrupt then begin
       (match session with
        | Some s -> (try Unix.kill (Session.pid s) Sys.sigint with _ -> ())
        | None -> ());
       Some Continue
     end
-    else if ch = 526 || ch = 532 || ch = 517 then begin
+    else if Keys.match_key ch Keys.step_forward then begin
       tab.goals_scroll <- 0; (Tab.ensure_msg_tab tab.msg "Rocq").mt_scroll <- 0;
       (match session with Some s -> Session.step_forward s | None -> ());
       Some Continue
     end
-    else if ch = 567 || ch = 573 || ch = 558 then begin
+    else if Keys.match_key ch Keys.step_backward then begin
       tab.goals_scroll <- 0; (Tab.ensure_msg_tab tab.msg "Rocq").mt_scroll <- 0;
       (match session with Some s -> Session.step_backward s | None -> ());
       Some Continue
     end
-    else if ch = 5 then begin (* ^E — go to cursor *)
+    else if Keys.match_key ch Keys.go_to_cursor then begin
       tab.goals_scroll <- 0; (Tab.ensure_msg_tab tab.msg "Rocq").mt_scroll <- 0;
       (match session with Some s -> Session.go_to_cursor s | None -> ());
       Some Continue
@@ -1020,8 +1035,9 @@ let handle_key ch (tab : Tab.t) display =
       end;
       Some Continue
     end
-    else if ch = 7 then begin tab.show_all_hyps <- not tab.show_all_hyps; Some Continue end
-    else if ch = 20 then begin (* ^T *)
+    else if Keys.match_key ch Keys.toggle_hyps then begin
+      tab.show_all_hyps <- not tab.show_all_hyps; Some Continue end
+    else if Keys.match_key ch Keys.options_menu then begin
       if !in_options_mode then begin
         in_options_mode := false;
         (match session with Some s -> Session.sync_options_and_refresh s | None -> ())
@@ -1041,10 +1057,10 @@ let handle_key ch (tab : Tab.t) display =
         (match session with Some s -> Session.sync_options_and_refresh s | None -> ());
         None
     end
-    else if ch = Curses.Key.f 4 then begin (* F4 — reload from disk *)
+    else if Keys.match_key ch Keys.reload then begin
       Some Reload
     end
-    else if ch = Curses.Key.f 3 then begin (* F3 — theme picker toggle *)
+    else if Keys.match_key ch Keys.theme_menu then begin
       in_theme_mode := not !in_theme_mode;
       Some Continue
     end
@@ -1060,7 +1076,7 @@ let handle_key ch (tab : Tab.t) display =
       end;
       Some Continue
     end
-    else if ch = Curses.Key.f 5 then begin (* F5 — build menu toggle *)
+    else if Keys.match_key ch Keys.build_menu then begin
       in_build_mode := not !in_build_mode;
       Some Continue
     end
@@ -1153,7 +1169,7 @@ let handle_key ch (tab : Tab.t) display =
       else
         (Some Continue)
     end
-    else if ch = 17 then begin (* ^Q — query mode toggle *)
+    else if Keys.match_key ch Keys.query_menu then begin
       in_query_mode := not !in_query_mode;
       Some Continue
     end
@@ -1230,7 +1246,7 @@ let handle_key ch (tab : Tab.t) display =
       if handled then Some Continue
       else None  (* fall through to normal handling *)
     end
-    else if ch = 16 then begin (* ^P — cycle pane focus *)
+    else if Keys.match_key ch Keys.cycle_pane then begin
       tab.focused_pane <- (match tab.focused_pane with
         | `Script -> `Goals | `Goals -> `Messages | `Messages -> `Script);
       Some Continue
@@ -1472,7 +1488,7 @@ let handle_key ch (tab : Tab.t) display =
       end;
       Some Continue
     end
-    else if ch = 12 then begin (* ^L — jump to definition *)
+    else if Keys.match_key ch Keys.jump_to_def then begin
       let (cl, cc) = Buffer.cursor buf in
       let line = Buffer.get_line buf cl in
       (* Try Require line first *)
@@ -1583,7 +1599,7 @@ let handle_key ch (tab : Tab.t) display =
          Some (Open_file path)
        | None -> Some Continue)
     end
-    else if ch = Curses.Key.f 1 then begin
+    else if Keys.match_key ch Keys.help then begin
       if !in_help_mode then begin
         in_help_mode := false;
         help_scroll := 0
@@ -1591,14 +1607,14 @@ let handle_key ch (tab : Tab.t) display =
         in_help_mode := true;
       Some Continue
     end
-    else if ch = Curses.Key.f 2 then begin
+    else if Keys.match_key ch Keys.minimap then begin
       if Display.minimap_width display > 0 then
         Display.set_minimap_width display 0
       else
         Display.set_minimap_width display Minimap.width;
       Some Continue
     end
-    else if ch = 1 then begin (* ^A — About query from any pane *)
+    else if Keys.match_key ch Keys.about then begin
       let subject = match tab.focused_pane with
         | `Goals -> pane_selection_text tab.goals_sel tab.goals_lines_cache
         | `Messages -> pane_selection_text (Tab.active_msg_tab tab.msg).mt_sel (Tab.active_msg_tab tab.msg).mt_lines_cache
@@ -1611,7 +1627,7 @@ let handle_key ch (tab : Tab.t) display =
          Session.query s ("About " ^ word ^ ".")       | _ -> ());
       Some Continue
     end
-    else if ch = 4 then begin (* ^D — Print query from any pane *)
+    else if Keys.match_key ch Keys.print_query then begin
       let subject = match tab.focused_pane with
         | `Goals -> pane_selection_text tab.goals_sel tab.goals_lines_cache
         | `Messages -> pane_selection_text (Tab.active_msg_tab tab.msg).mt_sel (Tab.active_msg_tab tab.msg).mt_lines_cache
@@ -1624,7 +1640,7 @@ let handle_key ch (tab : Tab.t) display =
          Session.query s ("Print " ^ word ^ ".")       | _ -> ());
       Some Continue
     end
-    else if ch = 25 then begin (* ^Y — copy from any pane *)
+    else if Keys.match_key ch Keys.copy then begin
       let text = match tab.focused_pane with
         | `Goals -> pane_selection_text tab.goals_sel tab.goals_lines_cache
         | `Messages -> pane_selection_text (Tab.active_msg_tab tab.msg).mt_sel (Tab.active_msg_tab tab.msg).mt_lines_cache
@@ -1637,12 +1653,12 @@ let handle_key ch (tab : Tab.t) display =
        | None -> ());
       Some Continue
     end
-    else if ch = 26 then begin (* ^Z — undo *)
+    else if Keys.match_key ch Keys.undo then begin
       Buffer.undo buf;
       rewind_if_needed tab;
       Some Continue
     end
-    else if ch = 18 then begin (* ^R — redo *)
+    else if Keys.match_key ch Keys.redo then begin
       Buffer.redo buf;
       rewind_if_needed tab;
       Some Continue
@@ -1730,7 +1746,7 @@ let handle_key ch (tab : Tab.t) display =
       Buffer.move_page_up buf (rows - 1); Some Continue
     end
     (* Clipboard *)
-    else if ch = 11 then begin (* ^K — cut *)
+    else if Keys.match_key ch Keys.cut then begin
       if not (cursor_in_target tab) then begin
         (match session with Some s -> Session.clear_error s | None -> ());
         match Buffer.delete_selection buf with
@@ -1743,7 +1759,7 @@ let handle_key ch (tab : Tab.t) display =
       end;
       Some Continue
     end
-    else if ch = 21 then begin (* ^U — paste *)
+    else if Keys.match_key ch Keys.paste then begin
       if not (cursor_in_target tab) then begin
         (match session with Some s -> Session.clear_error s | None -> ());
         ignore (Buffer.delete_selection buf);
@@ -1812,3 +1828,59 @@ let handle_key ch (tab : Tab.t) display =
          | Some a -> a | None -> Continue)
   in
   action
+
+(* Convert a Kitty key event to a legacy keycode for handle_key *)
+let kitty_to_legacy (kk : Keys.kitty_key) =
+  let kc = kk.kk_keycode in
+  let m = kk.kk_modifier in
+  if m = 1 then
+    (* No modifier — use keycode directly for Enter(13), Tab(9), etc.
+       For printable chars, use keycode as-is *)
+    Some kc
+  else if m = 5 then
+    (* Ctrl — map letter to ctrl code *)
+    if kc >= 97 && kc <= 122 then Some (kc - 96)  (* ctrl+a=1 .. ctrl+z=26 *)
+    else None
+  else if m = 2 then
+    (* Shift — for arrows, map to shift+arrow codes *)
+    (match kc with
+     | 57352 (* up *) -> Some 337
+     | 57353 (* down *) -> Some 336
+     | 57354 (* right *) -> Some 402
+     | 57355 (* left *) -> Some 393
+     | _ ->
+       (* Shift+printable: just use the keycode *)
+       if kc >= 32 && kc < 127 then Some kc else None)
+  else if m = 3 then
+    (* Alt — for arrows, map to alt+arrow *)
+    (match kc with
+     | 57352 -> Some 564  | 57353 -> Some 523
+     | 57354 -> Some 558  | 57355 -> Some 543
+     | _ -> None)
+  else
+    None
+
+let handle_key_event (ev : Keys.key_event) (tab : Tab.t) display =
+  match ev with
+  | Keys.RawKey ch -> handle_key ch tab display
+  | Keys.KittyKey kk ->
+    (match kitty_to_legacy kk with
+     | Some ch -> handle_key ch tab display
+     | None -> Continue)
+  | Keys.Paste text ->
+    let buf = tab.buf in
+    if not (cursor_in_target tab) then begin
+      (match tab.session with Some s -> Session.clear_error s | None -> ());
+      ignore (Buffer.delete_selection buf);
+      insert_string tab text
+    end;
+    Continue
+  | Keys.Escape ->
+    (* Standalone ESC — start compose *)
+    (match !compose_state with
+     | Some cs ->
+       Compose.start cs;
+       Display.set_status display (format_compose_status cs);
+       Display.refresh_all display
+     | None -> ());
+    Continue
