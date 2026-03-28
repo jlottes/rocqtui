@@ -62,6 +62,13 @@ let json_notification method_ params =
     "params", params;
   ]
 
+(* Robust int extraction — handles both `Int and `String "123" *)
+let to_int_lenient json =
+  match json with
+  | `Int n -> n
+  | `String s -> (match int_of_string_opt s with Some n -> n | None -> 0)
+  | _ -> 0
+
 (* --- MCP Protocol --- *)
 
 let server_info = `Assoc [
@@ -495,14 +502,14 @@ let handle_tool t name args mgr =
     ]])
   | "go_to_offset" ->
     let offset = args |> Yojson.Safe.Util.member "offset"
-                 |> Yojson.Safe.Util.to_int in
+                 |> to_int_lenient in
     (match tab.session with
      | Some s -> Session.go_to_offset s offset | None -> ());
     (true, `Assoc ["content", `List [
       `Assoc ["type", `String "text"; "text", `String "OK"]
     ]])
   | "insert_text" ->
-    let offset = args |> Yojson.Safe.Util.member "offset" |> Yojson.Safe.Util.to_int in
+    let offset = args |> Yojson.Safe.Util.member "offset" |> to_int_lenient in
     let text = args |> Yojson.Safe.Util.member "text" |> Yojson.Safe.Util.to_string in
     Buffer.move_to_byte_offset tab.buf offset;
     String.iter (fun c ->
@@ -513,8 +520,8 @@ let handle_tool t name args mgr =
       `Assoc ["type", `String "text"; "text", `String "OK"]
     ]])
   | "replace_range" ->
-    let s = args |> Yojson.Safe.Util.member "start" |> Yojson.Safe.Util.to_int in
-    let e = args |> Yojson.Safe.Util.member "end" |> Yojson.Safe.Util.to_int in
+    let s = args |> Yojson.Safe.Util.member "start" |> to_int_lenient in
+    let e = args |> Yojson.Safe.Util.member "end" |> to_int_lenient in
     let text = args |> Yojson.Safe.Util.member "text" |> Yojson.Safe.Util.to_string in
     (* Select the range and delete it, then insert replacement *)
     Buffer.move_to_byte_offset tab.buf s;
@@ -529,8 +536,8 @@ let handle_tool t name args mgr =
       `Assoc ["type", `String "text"; "text", `String "OK"]
     ]])
   | "move_cursor" ->
-    let line = args |> Yojson.Safe.Util.member "line" |> Yojson.Safe.Util.to_int in
-    let col = args |> Yojson.Safe.Util.member "col" |> Yojson.Safe.Util.to_int in
+    let line = args |> Yojson.Safe.Util.member "line" |> to_int_lenient in
+    let col = args |> Yojson.Safe.Util.member "col" |> to_int_lenient in
     Buffer.move_to tab.buf line col;
     (true, `Assoc ["content", `List [
       `Assoc ["type", `String "text"; "text", `String "OK"]
@@ -620,7 +627,7 @@ let handle_tool t name args mgr =
          `Assoc ["type", `String "text"; "text", `String "No session."]
        ]]))
   | "switch_tab" ->
-    let id = args |> Yojson.Safe.Util.member "tab" |> Yojson.Safe.Util.to_int in
+    let id = args |> Yojson.Safe.Util.member "tab" |> to_int_lenient in
     (match Tab.index_of_id mgr id with
      | Some idx ->
        mgr.Tab.active <- idx;
@@ -632,8 +639,8 @@ let handle_tool t name args mgr =
          `Assoc ["type", `String "text"; "text", `String "Unknown tab ID"]
        ]; "isError", `Bool true]))
   | "delete_range" ->
-    let s = args |> Yojson.Safe.Util.member "start" |> Yojson.Safe.Util.to_int in
-    let e = args |> Yojson.Safe.Util.member "end" |> Yojson.Safe.Util.to_int in
+    let s = args |> Yojson.Safe.Util.member "start" |> to_int_lenient in
+    let e = args |> Yojson.Safe.Util.member "end" |> to_int_lenient in
     Buffer.move_to_byte_offset tab.buf s;
     Buffer.set_anchor tab.buf;
     Buffer.move_to_byte_offset tab.buf e;
@@ -687,7 +694,7 @@ let handle_tool t name args mgr =
     ]])
   | "offset_of_line" ->
     let line = args |> Yojson.Safe.Util.member "line"
-               |> Yojson.Safe.Util.to_int in
+               |> to_int_lenient in
     let col = match args |> Yojson.Safe.Util.member "col" with
       | `Int c -> c | _ -> 0 in
     let offset = ref 0 in
@@ -701,7 +708,7 @@ let handle_tool t name args mgr =
     ]])
   | "get_context" ->
     let offset = args |> Yojson.Safe.Util.member "offset"
-                 |> Yojson.Safe.Util.to_int in
+                 |> to_int_lenient in
     let before = match args |> Yojson.Safe.Util.member "before" with
       | `Int n -> n | _ -> 500 in
     let after_ = match args |> Yojson.Safe.Util.member "after" with
@@ -725,8 +732,8 @@ let handle_tool t name args mgr =
                 |> Yojson.Safe.Util.to_list in
     (* Parse edits *)
     let parsed = List.map (fun e ->
-      let s = e |> Yojson.Safe.Util.member "start" |> Yojson.Safe.Util.to_int in
-      let ed = e |> Yojson.Safe.Util.member "end" |> Yojson.Safe.Util.to_int in
+      let s = e |> Yojson.Safe.Util.member "start" |> to_int_lenient in
+      let ed = e |> Yojson.Safe.Util.member "end" |> to_int_lenient in
       let text = e |> Yojson.Safe.Util.member "text"
                  |> Yojson.Safe.Util.to_string in
       (s, ed, text)
@@ -840,11 +847,18 @@ let process_client_data t client mgr =
       if String.length line > 0 then begin
         (try
            let msg = Yojson.Safe.from_string line in
-           let (changed, response) = dispatch_message t client msg mgr in
-           if changed then state_changed := true;
-           (match response with
-            | Some r -> send_to_client client r
-            | None -> ())
+           let id = try Yojson.Safe.Util.member "id" msg
+                    with _ -> `Null in
+           (try
+              let (changed, response) = dispatch_message t client msg mgr in
+              if changed then state_changed := true;
+              (match response with
+               | Some r -> send_to_client client r
+               | None -> ())
+            with e ->
+              let err = json_error id (-32603)
+                ("Internal error: " ^ Printexc.to_string e) in
+              send_to_client client err)
          with e ->
            let err = json_error `Null (-32700)
              ("Parse error: " ^ Printexc.to_string e) in
