@@ -585,7 +585,7 @@ let handle_tool t name args mgr =
     ]])
   | "save" ->
     let ok = Buffer.save tab.buf in
-    (false, `Assoc ["content", `List [
+    (ok, `Assoc ["content", `List [
       `Assoc ["type", `String "text"; "text",
         `String (if ok then "Saved" else "Failed")]
     ]])
