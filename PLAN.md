@@ -816,3 +816,105 @@ These are queries only (display in messages pane), not jump-to actions.
 3. Implement `Locate` output parsing helpers
 4. Implement Require line parsing
 5. Wire up ^L in editor.ml
+
+---
+
+## Phase 11: Messages Pane Tabs
+
+**Goal**: The messages pane supports multiple content tabs — "Messages"
+(Rocq output) and "Build" (build subprocess output). Future tabs could
+include search results, compilation errors, etc. The tab design is
+generic so adding new tabs is easy.
+
+### Architecture
+
+A **messages tab** is a named content source with its own scroll position,
+selection state, and line cache:
+
+```ocaml
+type msg_tab = {
+  name : string;                   (* "Rocq", "Build", etc. *)
+  mutable lines : string list;     (* content lines *)
+  mutable scroll : int;
+  sel : Tab.pane_selection;
+  mutable lines_cache : string list;
+}
+```
+
+A **messages tab manager** holds the list of tabs and the active tab index:
+
+```ocaml
+type msg_tabs = {
+  mutable tabs : msg_tab list;
+  mutable active : int;
+}
+```
+
+This lives inside `Tab.t` (per main-editor-tab), so each file tab has
+its own set of messages sub-tabs.
+
+### Tab bar rendering
+
+The messages pane label (currently "Messages" or "[ Messages ]") becomes
+a mini tab bar:
+
+```
+ Rocq │ Build
+```
+
+Active tab is highlighted (bold or brackets). Tabs are clickable.
+The horizontal divider already has space for the label — just replace
+the fixed label with the tab names.
+
+### Content sources
+
+**Rocq tab** — populated from `Session.messages`. Updated on each
+render (same as current behavior). Cleared on step actions as now.
+
+**Build tab** — populated from `Build.output ()`. Created when a build
+starts, persists until cleared. Updated on each render during a build.
+
+**Future tabs** — search results, error list, etc. Each is a `msg_tab`
+with its own content provider.
+
+### Auto-activation
+
+When content changes in a tab, it auto-activates:
+- Build starts or produces new output → switch to Build tab
+- Rocq emits a message (error, query result) → switch to Rocq tab
+- This way the user sees what's relevant without manual switching
+
+### Mouse interaction
+
+- Click on a tab name in the messages label → switch to that tab
+- Scroll/select within the active tab works as now
+
+### Cleanup
+
+- Build tab is removed (or cleared) when the user dismisses it, or
+  after a new build starts (replacing old output)
+- `Build.clear()` removes the build output and the tab
+
+### Implementation steps
+
+1. **Define `msg_tab` type** in `tab.ml` (or a new `msg_pane.ml`)
+2. **Add `msg_tabs` to `Tab.t`** — initialize with a single "Rocq" tab
+3. **Refactor `render_messages`** — render the active msg_tab's lines
+   instead of directly reading `Session.messages`
+4. **Refactor the messages label** in `display.ml` — draw tab names
+   instead of a fixed label, handle clicks
+5. **Wire up Build tab** — create/update on build start/poll, auto-activate
+6. **Wire up Rocq tab** — update from `Session.messages`, auto-activate
+   on new messages
+7. **Scroll/selection** — each msg_tab has its own scroll and selection,
+   switching tabs restores their state
+
+### Notes
+
+- The goals pane does NOT get tabs — it always shows the current goals.
+  If we wanted a "proof diff" view, that could be a goals pane tab later.
+- Tab switching in the messages pane should not conflict with main tab
+  switching (Alt+Left/Right). Click-only is fine for now; could add a
+  keybinding later if needed.
+- Keep the default state simple: if no build has run, only the "Rocq"
+  tab exists and the tab bar looks identical to the current label.

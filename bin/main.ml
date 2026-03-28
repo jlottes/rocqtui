@@ -178,7 +178,9 @@ let () =
       if Session.is_busy_opt tab.session then 0.01 else 0.1
     in
     let mcp_fds = Mcp_server.server_fd mcp :: Mcp_server.client_fds mcp in
-    let extra_fds = stdin_fd :: mcp_fds in
+    let build_fds = match Build.watch_fd () with
+      | Some fd -> [fd] | None -> [] in
+    let extra_fds = stdin_fd :: mcp_fds @ build_fds in
     let ready = Main_loop.select_with_watches extra_fds timeout in
     (* Handle MCP connections/messages *)
     if Mcp_server.handle_ready mcp ready mgr then begin
@@ -187,6 +189,8 @@ let () =
       if Tab.count mgr > 1 then
         Display.set_tab_bar display true
     end;
+    (* Poll build subprocess *)
+    if Build.poll () then needs_render := true;
     (* Poll ALL sessions *)
     if Tab.poll_all mgr then begin
       needs_render := true;

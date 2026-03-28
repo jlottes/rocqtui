@@ -45,6 +45,7 @@ let text = {|
   F1             This help screen
   F2             Toggle minimap
   F3             Change color theme
+  F5             Build menu (make file/all/deps)
   Drag borders   Resize panes
 
   ─── Tabs ─────────────────────────────

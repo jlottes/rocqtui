@@ -307,14 +307,19 @@ let render_goals display (tab : Tab.t) =
 let render_messages display (tab : Tab.t) =
   let session = tab.session in
   let win = Display.messages_win display in
-  let lines = match session with
+  let rocq_lines = match session with
     | None -> []
     | Some sess ->
-      (* Split each message on newlines since Pp output can be multi-line *)
       List.concat_map (fun msg ->
         String.split_on_char '\n' msg
       ) (Session.messages sess)
   in
+  let build_lines = if Build.is_running () || Build.output () <> [] then
+    Build.output ()
+  else [] in
+  let lines = if build_lines <> [] then
+    rocq_lines @ [""; "--- Build Output ---"] @ build_lines
+  else rocq_lines in
   let ms = ref tab.messages_scroll in
   render_text_pane ~sel:tab.messages_sel
     ~set_cache:(fun l -> tab.messages_lines_cache <- l)
@@ -582,6 +587,7 @@ let render_query_bar display =
   Display.set_status display text
 
 let in_theme_mode = ref false
+let in_build_mode = ref false
 
 let render_theme_bar display =
   let parts = List.mapi (fun i name ->
@@ -590,6 +596,17 @@ let render_theme_bar display =
     Printf.sprintf "[%c]%s%s" key name marker
   ) Theme.available in
   Display.set_status display (String.concat "  " parts ^ "  F3:close")
+
+let render_build_bar display =
+  let running = Build.is_running () in
+  let text = if running then
+    let desc = match Build.description () with
+      | Some d -> d | None -> "building" in
+    Printf.sprintf "  Building: %s  [c]Cancel" desc
+  else
+    "[f]Build file  [d]Build deps  [a]Build all  [c]Build at cursor  F5:close"
+  in
+  Display.set_status display text
 
 let render_options_bar display =
   let parts = List.map (fun (e : Printopts.entry) ->
@@ -606,6 +623,8 @@ let update_status display (tab : Tab.t) =
   let session = tab.session in
   if !in_help_mode then
     Display.set_status display "F1:close  ↑↓/PgUp/PgDn:scroll  any other key:close"
+  else if !in_build_mode then
+    render_build_bar display
   else if !in_theme_mode then
     render_theme_bar display
   else if !in_options_mode then
@@ -889,7 +908,9 @@ let handle_key ch (tab : Tab.t) display =
       Some Continue
     end
     else if ch = 27 then begin (* Escape *)
-      if !in_theme_mode then
+      if !in_build_mode then
+        in_build_mode := false
+      else if !in_theme_mode then
         in_theme_mode := false
       else if !in_options_mode then begin
         in_options_mode := false;
@@ -1010,6 +1031,90 @@ let handle_key ch (tab : Tab.t) display =
         current_theme_name := name
       end;
       Some Continue
+    end
+    else if ch = Curses.Key.f 5 then begin (* F5 — build menu toggle *)
+      in_build_mode := not !in_build_mode;
+      Some Continue
+    end
+    else if !in_build_mode then begin
+      in_build_mode := false;
+      let c = Char.lowercase_ascii (Char.chr (ch land 0xFF)) in
+      let project_info () =
+        let filename = Buffer.filename buf in
+        let dir = match filename with
+          | Some f -> Filename.dirname f | None -> Sys.getcwd () in
+        match Project.find_project_file dir with
+        | Some (pd, _) -> Some pd
+        | None -> None
+      in
+      if c = 'c' && Build.is_running () then begin
+        Build.cancel ();
+        Some Continue
+      end
+      else if c = 'f' then begin
+        (match Buffer.filename buf, project_info () with
+         | Some f, Some pd ->
+           if Build.build_file ~project_dir:pd f then ()
+           else Display.set_status display "Build already running."
+         | _, None ->
+           Display.set_status display "No project found."
+         | None, _ ->
+           Display.set_status display "No filename.");
+        Some Continue
+      end
+      else if c = 'd' then begin
+        (match Buffer.filename buf, project_info () with
+         | Some f, Some pd ->
+           if Build.build_deps ~project_dir:pd f then ()
+           else Display.set_status display "Build already running."
+         | _, None ->
+           Display.set_status display "No project found."
+         | None, _ ->
+           Display.set_status display "No filename.");
+        Some Continue
+      end
+      else if c = 'a' then begin
+        (match project_info () with
+         | Some pd ->
+           if Build.build_all ~project_dir:pd then ()
+           else Display.set_status display "Build already running."
+         | None ->
+           Display.set_status display "No project found.");
+        Some Continue
+      end
+      else if c = 'c' then begin
+        (* Build file at cursor — parse Require line *)
+        let (cl, cc) = Buffer.cursor buf in
+        let line = Buffer.get_line buf cl in
+        (match Locate.parse_require_line line, project_info () with
+         | Some (_, modules), Some pd ->
+           let modname = Locate.module_at_col modules cc in
+           (match modname with
+            | Some m ->
+              (* Resolve module to .v path *)
+              (match Project.find_project_file (Filename.dirname
+                       (match Buffer.filename buf with
+                        | Some f -> f | None -> Sys.getcwd ())) with
+               | Some (_, pf) ->
+                 let lps = Project.load_paths pf in
+                 (match Project.resolve_module lps m with
+                  | Some v_path ->
+                    if Build.build_file ~project_dir:pd v_path then ()
+                    else Display.set_status display "Build already running."
+                  | None ->
+                    Display.set_status display ("Module not found: " ^ m))
+               | None ->
+                 Display.set_status display "No project found.")
+            | None ->
+              Display.set_status display "No module at cursor.")
+         | _, None ->
+           Display.set_status display "No project found."
+         | None, _ ->
+           Display.set_status display "Not on a Require line.");
+        Some Continue
+      end
+      else
+        (Some Continue)
     end
     else if ch = 17 then begin (* ^Q — query mode toggle *)
       in_query_mode := not !in_query_mode;
