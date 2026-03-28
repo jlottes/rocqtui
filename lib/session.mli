@@ -44,6 +44,7 @@ val clear_error : t -> unit
 val goals_text : ?all_hyps:bool -> t -> string option
 val messages : t -> string list
 val clear_messages : t -> unit
+val set_messages : t -> string list -> unit
 val sentence_ranges : t -> sentence_display list
 val is_busy : t -> bool
 val is_busy_opt : t option -> bool

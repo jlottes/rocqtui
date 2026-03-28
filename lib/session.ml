@@ -454,6 +454,7 @@ let goals_text ?(all_hyps=true) t =
   | Some gs -> Some (format_goals ~all_hyps gs)
 let messages t = t.msgs
 let clear_messages t = t.msgs <- []
+let set_messages t msgs = t.msgs <- msgs
 
 let is_busy t =
   Rocq_protocol.is_busy t.rocq || verified_end t < t.target_end

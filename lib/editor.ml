@@ -600,7 +600,7 @@ let run_query session phrase =
   | None -> ()
 
 let render_query_bar display =
-  let text = "[a]About [c]Check [d]Print [l]Locate [p]Show Proof [e]Show Existentials  ^Q:close" in
+  let text = "[a]About [c]Check [d]Print [g]Coercions [l]Locate [p]Show Proof [e]Show Existentials  ^Q:close" in
   Display.set_status display text
 
 let in_theme_mode = ref false
@@ -1174,6 +1174,46 @@ let handle_key ch (tab : Tab.t) display =
           (match subject with
            | Some word -> run_query session ("Locate " ^ word ^ ".")
            | None -> ()); true
+        end else if c = 'g' then begin
+          let subject = query_subject tab in
+          (match subject, session with
+           | Some word, Some s ->
+             Session.query s "Print Graph.";
+             let all_msgs = Session.messages s in
+             (* Filter: keep lines containing " word >->" or ">-> word"
+                (also match qualified names like "module.word") *)
+             let matches_word line =
+               let has pat = try
+                 let _ = String.index_from line
+                   (String.index line (String.get pat 0)) ' ' in
+                 false  (* dummy — use simple substring check below *)
+               with _ -> false in
+               ignore has;
+               let line_has s =
+                 let slen = String.length s in
+                 let llen = String.length line in
+                 let rec check i =
+                   if i + slen > llen then false
+                   else if String.sub line i slen = s then true
+                   else check (i + 1)
+                 in check 0
+               in
+               line_has (" " ^ word ^ " >->")
+               || line_has (">-> " ^ word)
+               || line_has ("." ^ word ^ " >->")
+             in
+             let filtered = List.concat_map (fun msg ->
+               let lines = String.split_on_char '\n' msg in
+               List.filter (fun line ->
+                 String.length line > 0 && matches_word line
+               ) lines
+             ) all_msgs in
+             if filtered = [] then
+               Session.set_messages s ["No coercions found for " ^ word ^ "."]
+             else
+               Session.set_messages s filtered
+           | _, None -> ()
+           | None, _ -> ()); true
         end else if c = 'p' then begin
           run_query session "Show Proof."; true
         end else if c = 'e' then begin
