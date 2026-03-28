@@ -47,26 +47,31 @@ specific tab. If omitted, the active tab is used.
 ### Stepping
 
 These commands are **synchronous by default** — they block until Rocq
-finishes processing, then return goals, messages, and any errors in the
-response. No need to poll `is_busy` or read resources separately.
+finishes processing, then return a rich response including:
+- **Executed**: the sentence that was just verified
+- **Goals**: current proof state
+- **Messages**: any Rocq output
+- **Errors**: error location and message if verification failed
+- **Next**: preview of the next sentence to be executed
 
 Pass `"async": true` to return immediately without waiting.
 
-- **step_forward** — Advance and verify one Rocq sentence. Returns goals.
-- **step_backward** — Retract one sentence. May rewind Rocq. Returns goals.
+- **step_forward** — Advance and verify one Rocq sentence.
+- **step_backward** — Retract one sentence. May rewind Rocq.
 - **go_to_offset** `{offset}` — Set target to a byte offset (snapped to
   sentence boundary). Verify up to that point. Does not move the cursor.
-- **go_to_end** — Verify the entire file. Returns errors/goals on completion.
+- **go_to_end** — Verify the entire file.
 
 ### Editing
 
+All edit tools return a context snippet around the edit for verification.
+
+- **replace_text** `{old_text, new_text, occurrence?}` — **Preferred.** Find
+  exact text and replace it. No byte offsets needed. `occurrence` is 1-based
+  (default 1); use 0 to replace all. Returns context around the replacement.
 - **insert_text** `{offset, text}` — Insert text at a byte offset.
 - **replace_range** `{start, end, text}` — Replace bytes `[start, end)` with text.
 - **delete_range** `{start, end}` — Delete bytes `[start, end)`.
-- **replace_text** `{old_text, new_text, occurrence?}` — Find exact text and
-  replace it. No byte offsets needed. `occurrence` is 1-based (default 1);
-  use 0 to replace all occurrences. Returns context around the replacement
-  for verification. **Preferred over replace_range for most edits.**
 - **batch_edit** `{edits}` — Apply multiple `{start, end, text}` edits as one
   undo group. Provide edits in document order; they are applied last-to-first
   so offsets refer to the original text.
@@ -93,15 +98,15 @@ Pass `"async": true` to return immediately without waiting.
 ### Session Control
 
 - **interrupt** — Send SIGINT to Rocq (cancel long computation).
-- **is_busy** — Returns `"true"` or `"false"`. Check before reading goals
-  after stepping — Rocq processes sentences asynchronously.
+- **is_busy** — Returns `"true"` or `"false"`. Only needed with `"async": true`
+  stepping; sync stepping (the default) handles waiting automatically.
 - **save** — Save the file.
 
 ### Tabs
 
 - **switch_tab** `{tab}` — Switch to a tab by ID.
 - **open_file** `{filename}` — Open a file in a new tab (or switch to it if
-  already open). Returns the tab ID.
+  already open). Returns `{"tab": <id>, "existed": <bool>}`.
 
 ## Workflow Patterns
 
@@ -113,10 +118,11 @@ Pass `"async": true` to return immediately without waiting.
 2. Repeat.
 
 ### Edit and re-verify
-1. Use `replace_range` or `insert_text` to modify the buffer.
+1. Use `replace_text` (preferred) or `insert_text` to modify the buffer.
    Edits past the verified region don't require rewinding.
    Edits within the verified region will automatically retract Rocq.
 2. Call `go_to_end` to re-verify. The response shows errors if any.
+3. Check the returned context snippet to confirm the edit landed correctly.
 
 ### Query with custom printing
 ```json
