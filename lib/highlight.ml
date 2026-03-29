@@ -1,8 +1,9 @@
 type span = {
   start_col : int;
   length : int;
-  attr : int;
-  color : int;
+  attr : int;       (* ncurses attribute — kept for now *)
+  color : int;      (* ncurses color pair — kept for now *)
+  grid_attr : Grid.attr;  (* Grid attr for new renderer *)
 }
 
 (* Color pair IDs — starting after Display's pairs (1-5) *)
@@ -225,12 +226,38 @@ let offset_to_line_col (line_offsets : int array) bp =
   let col = bp - line_offsets.(line) in
   (line, col)
 
+(* Map ncurses color pair to Grid.attr using current theme *)
+let grid_attr_of_color color =
+  let a = Theme.attrs () in
+  if color = color_keyword then a.ga_keyword
+  else if color = color_tactic then a.ga_tactic
+  else if color = color_comment then a.ga_comment
+  else if color = color_string then a.ga_string
+  else if color = color_bullet then a.ga_bullet
+  else if color = color_number then a.ga_number
+  else if color = color_keyword_v then a.ga_keyword_v
+  else if color = color_tactic_v then a.ga_tactic_v
+  else if color = color_comment_v then a.ga_comment_v
+  else if color = color_string_v then a.ga_string_v
+  else if color = color_bullet_v then a.ga_bullet_v
+  else if color = color_number_v then a.ga_number_v
+  else if color = color_default_v then a.ga_default_v
+  else if color = color_keyword_p then a.ga_keyword_p
+  else if color = color_tactic_p then a.ga_tactic_p
+  else if color = color_comment_p then a.ga_comment_p
+  else if color = color_string_p then a.ga_string_p
+  else if color = color_bullet_p then a.ga_bullet_p
+  else if color = color_number_p then a.ga_number_p
+  else if color = color_default_p then a.ga_default_p
+  else Grid.default_attr
+
 let add_span result line_offsets num_lines bp ep attr color =
   if bp < ep then begin
     let (line, col) = offset_to_line_col line_offsets bp in
     let length = ep - bp in
     if line < num_lines && length > 0 then
-      result.(line) <- { start_col = col; length; attr; color } :: result.(line)
+      result.(line) <- { start_col = col; length; attr; color;
+                         grid_attr = grid_attr_of_color color } :: result.(line)
   end
 
 let add_multiline_span result line_offsets buf num_lines bp total_len attr color =
@@ -244,7 +271,8 @@ let add_multiline_span result line_offsets buf num_lines bp total_len attr color
         let span_len = min remaining avail in
         if span_len > 0 then
           result.(line) <- { start_col = col; length = span_len;
-                             attr; color } :: result.(line);
+                             attr; color;
+                             grid_attr = grid_attr_of_color color } :: result.(line);
         go (pos + span_len + 1) (remaining - span_len - 1)
       end
     end

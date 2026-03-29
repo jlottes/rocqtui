@@ -201,6 +201,87 @@ let pair_number_p = 29
 let pair_default_p = 30
 let pair_selection = 31
 
+(* --- Grid.attr equivalents --- *)
+
+type grid_attrs = {
+  ga_keyword : Grid.attr;
+  ga_tactic : Grid.attr;
+  ga_comment : Grid.attr;
+  ga_string : Grid.attr;
+  ga_bullet : Grid.attr;
+  ga_number : Grid.attr;
+  ga_default : Grid.attr;
+  (* Region variants *)
+  ga_keyword_v : Grid.attr;
+  ga_tactic_v : Grid.attr;
+  ga_comment_v : Grid.attr;
+  ga_string_v : Grid.attr;
+  ga_bullet_v : Grid.attr;
+  ga_number_v : Grid.attr;
+  ga_default_v : Grid.attr;
+  ga_keyword_p : Grid.attr;
+  ga_tactic_p : Grid.attr;
+  ga_comment_p : Grid.attr;
+  ga_string_p : Grid.attr;
+  ga_bullet_p : Grid.attr;
+  ga_number_p : Grid.attr;
+  ga_default_p : Grid.attr;
+  (* UI *)
+  ga_verified : Grid.attr;
+  ga_processing : Grid.attr;
+  ga_error : Grid.attr;
+  ga_status : Grid.attr;
+  ga_border : Grid.attr;
+  ga_selection : Grid.attr;
+  ga_tab_active : Grid.attr;
+  ga_tab_inactive : Grid.attr;
+}
+
+let gc (c : int) : Grid.color =
+  if c = -1 then Grid.Default else Grid.Color256 c
+
+let make_attr ?(bold=false) fg bg : Grid.attr =
+  { Grid.fg = gc fg; bg = gc bg; bold; dim = false;
+    reverse = false; underline = false }
+
+let grid_attrs_of_theme (theme : t) : grid_attrs =
+  let a fg bg = make_attr fg bg in
+  let ab fg bg = make_attr ~bold:true fg bg in
+  { ga_keyword = ab theme.keyword_fg theme.bg;
+    ga_tactic = a theme.tactic_fg theme.bg;
+    ga_comment = a theme.comment_fg theme.bg;
+    ga_string = a theme.string_fg theme.bg;
+    ga_bullet = ab theme.bullet_fg theme.bg;
+    ga_number = a theme.number_fg theme.bg;
+    ga_default = a theme.default_fg theme.bg;
+    ga_keyword_v = ab theme.keyword_fg theme.verified_bg;
+    ga_tactic_v = a theme.tactic_fg theme.verified_bg;
+    ga_comment_v = a theme.comment_fg theme.verified_bg;
+    ga_string_v = a theme.string_fg theme.verified_bg;
+    ga_bullet_v = ab theme.bullet_fg theme.verified_bg;
+    ga_number_v = a theme.number_fg theme.verified_bg;
+    ga_default_v = a theme.default_fg theme.verified_bg;
+    ga_keyword_p = ab theme.keyword_fg theme.processing_bg;
+    ga_tactic_p = a theme.tactic_fg theme.processing_bg;
+    ga_comment_p = a theme.comment_fg theme.processing_bg;
+    ga_string_p = a theme.string_fg theme.processing_bg;
+    ga_bullet_p = ab theme.bullet_fg theme.processing_bg;
+    ga_number_p = a theme.number_fg theme.processing_bg;
+    ga_default_p = a theme.processing_fg theme.processing_bg;
+    ga_verified = a theme.verified_fg theme.verified_bg;
+    ga_processing = a theme.processing_fg theme.processing_bg;
+    ga_error = a theme.error_fg theme.error_bg;
+    ga_status = a theme.status_fg theme.status_bg;
+    ga_border = a theme.border_fg theme.bg;
+    ga_selection = a theme.selection_fg theme.selection_bg;
+    ga_tab_active = ab theme.status_fg theme.status_bg;
+    ga_tab_inactive = a theme.border_fg theme.bg;
+  }
+
+let current_attrs : grid_attrs ref = ref (grid_attrs_of_theme default)
+
+let attrs () = !current_attrs
+
 let apply theme =
   let _ = Curses.use_default_colors () in
   (* UI pairs *)
@@ -236,4 +317,4 @@ let apply theme =
   (* Tab bar colors *)
   let _ = Curses.init_pair 32 theme.status_fg theme.status_bg in  (* active tab *)
   let _ = Curses.init_pair 33 theme.border_fg theme.bg in  (* inactive tab *)
-  ()
+  current_attrs := grid_attrs_of_theme theme

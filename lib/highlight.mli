@@ -6,6 +6,7 @@ type span = {
   length : int;
   attr : int;
   color : int;
+  grid_attr : Grid.attr;
 }
 
 (** Tokenize an entire buffer and return spans per line (0-indexed).
