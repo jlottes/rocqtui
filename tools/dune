@@ -1,2 +1,3 @@
-(executable
- (name braille_cat))
+(executables
+ (names braille_cat grid_cat)
+ (libraries rocqtui_lib))
