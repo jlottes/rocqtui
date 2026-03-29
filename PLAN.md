@@ -1133,12 +1133,152 @@ minimal ANSI output.
 
 ### Phase 13.6: Migrate from ncurses
 
-Incrementally replace ncurses calls:
-1. Replace `Display.init` with `Term.init` + `Render.create`
-2. Replace `mvwaddstr`/`wchgat` with `Grid.put_str`/`Grid.set_attr`
-3. Replace `wnoutrefresh`/`doupdate` with `Render.flush`
-4. Replace `getch`/`keypad` with `Input.read_event`
-5. Remove curses dependency from dune
+The migration replaces all ncurses usage with Grid/Render/Term/Input.
+Editor.ml currently gets raw ncurses windows from Display and paints
+on them directly — this entanglement must be cleanly separated.
+
+**Design principle**: editor.ml should not touch Grid or terminal I/O
+directly. It renders through Render's pane API. Input comes as
+Input.event values, not raw keycodes.
+
+#### Step 1: Change editor.ml signatures
+
+Replace `Display.t` with `Render.t` throughout:
+- `render_all : Render.t -> Tab.t -> unit`
+- `handle_key_event : Input.event -> Tab.t -> Render.t -> action`
+- Remove `handle_key : int -> ...` (all input is Input.event)
+
+Change internal rendering functions:
+- `render_script : Render.t -> Tab.t -> unit`
+  Uses `Render.put_str r PScript`, `Render.chgat r PScript`, etc.
+  No more `Display.script_win` / `Curses.mvwaddstr`.
+- `render_text_pane : Render.t -> pane_id -> ...`
+  Generic right-pane renderer, takes pane_id instead of Curses.window.
+- `render_goals/render_messages` delegate to render_text_pane.
+- `update_status : Render.t -> Tab.t -> unit`
+  Uses `Render.set_status`.
+
+Replace attribute system:
+- `Curses.A.normal`, `Curses.A.color_pair N` → `Grid.attr` values
+- Theme/Highlight modules return `Grid.attr` instead of
+  `(Curses.A.t * int)` pairs
+- `chgat_byte_range` takes `Grid.attr` instead of `attr + color`
+
+#### Step 2: Change editor.ml input handling
+
+Replace `int` keycodes with `Input.event` pattern matching:
+- `ch = Curses.Key.up` → `Input.Special (Up, _)`
+- `ch = Curses.Key.mouse` → `Input.Mouse mev`
+  Mouse events carry (button, x, y, mods) — no separate `get_mouse()`
+- `ch = 19` (^S) → `Keys.match_event ev Keys.save`
+- `ch >= 32 && ch < 127` → `Input.Key (cp, {ctrl=false; ...})`
+- Compose mode feeds `Input.Key` codepoints
+- Bracketed paste → `Input.Paste text`
+- Resize → `Input.Resize`
+- The ESC/compose/paste parsing currently in editor.ml moves to
+  Input.read_event (already done)
+
+Remove: `peek_getch`, `blocking_getch`, the entire ESC parsing block.
+
+#### Step 3: Change main.ml lifecycle
+
+**Main_loop.select_with_watches stays.** It is the central multiplexer
+that dispatches Spawn.Async watch callbacks (coqidetop I/O). We cannot
+replace it without also replacing Spawn.Async, which implements the
+Rocq XML protocol's async model.
+
+The Spawn.Async module (from coqide-server) uses Main_loop's
+`add_watch` to register callbacks on coqidetop's stdout fd. When
+data arrives, the callback reads XML, parses feedback/responses, and
+invokes stored continuations. `select_with_watches` drives this.
+
+Replace:
+- `Display.init()` → `Term.init(); let r = Render.create ()`
+- `Display.teardown` → `Term.teardown()`
+- `Display.resize` → `Render.resize r`
+- `Curses.getch` → `Input.read_event ~timeout:0.0 Unix.stdin`
+  (called only when stdin is ready from select)
+- Prompt handlers use `Input.read_event` in a blocking sub-loop
+
+Main loop structure:
+```
+while !running do
+  let extra_fds = [stdin] @ mcp_fds @ build_fds @ [inotify_fd] in
+  let timeout = if busy then 0.01 else 0.1 in
+  let ready = Main_loop.select_with_watches extra_fds timeout in
+  (* ^ dispatches coqidetop watch callbacks internally *)
+
+  if List.mem stdin ready then
+    match Input.read_event ~timeout:0.0 Unix.stdin with
+    | Some ev -> handle_event ev ...
+    | None -> ()
+
+  (* MCP, build, inotify handling unchanged *)
+  ...
+
+  (* Render *)
+  if needs_render then Render.present r
+done
+```
+
+`Curses.timeout 0` / non-blocking getch is replaced by the select
+check — we only call `Input.read_event` when stdin has data, with
+timeout 0.0. The timeout only controls waiting for the *first* byte;
+once that arrives, internal parsing uses 50ms timeouts for subsequent
+bytes in escape sequences. Since select confirmed data is ready, the
+first byte is guaranteed present. Terminals emit escape sequences
+atomically, so the remaining bytes of a CSI sequence are also present.
+
+`eval_call` (blocking sync Rocq calls like `edit_at`, `query`) still
+uses `Main_loop.select_with_watches [stdin] 0.1` internally. The
+interrupt hook needs to use `Input.read_event` instead of
+`Curses.getch` to check for ^C.
+
+#### Step 4: Migrate Theme and Highlight
+
+Theme currently calls `Curses.init_pair` to set up ncurses color pairs.
+With Grid, colors are specified per-cell as `Grid.color` values.
+
+Change `Theme.t` to provide `Grid.attr` values:
+```ocaml
+type t = {
+  keyword_attr : Grid.attr;
+  tactic_attr : Grid.attr;
+  comment_attr : Grid.attr;
+  verified_attr : Grid.attr;
+  (* etc. *)
+}
+```
+
+`Highlight.span` changes from `(attr: int, color: int)` to
+`(attr: Grid.attr)`.
+
+`Theme.apply` becomes a no-op (or sets a global `current_theme`).
+
+#### Step 5: Migrate file_picker and minimap
+
+File picker currently creates its own ncurses `newwin`.
+Change to render into Grid via `Render.set_overlay`.
+
+Minimap currently renders into its own ncurses window.
+Change to render into `Render.put_str r PMinimap`.
+
+#### Step 6: Remove ncurses dependency
+
+- Remove `curses` from dune libraries
+- Delete `Display.ml/mli`
+- Delete ncurses-specific code from `locale_stubs.c` (keep setlocale, wcwidth)
+- `Main_loop.ml` — may still be needed for Spawn.Async watch callbacks.
+  Evaluate whether to keep or replace.
+
+#### Migration order
+
+Do steps 1-3 together (they're coupled — can't have half the code
+using Display and half using Render). Steps 4-5 can follow. Step 6
+is cleanup.
+
+The change is large but mechanical. Each Curses call has a clear
+Render/Grid/Input equivalent. No new features, just plumbing.
 
 ### Phase 13.7: Unicode cell handling
 
