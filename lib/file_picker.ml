@@ -6,7 +6,7 @@ type entry =
 
 type flat_line = {
   indent : int;
-  connector : string;  (* "├── ", "└── ", "│   ", "    " prefix piece *)
+  connector : string;  (* "--- ", "--- ", "|   ", "    " prefix piece *)
   name : string;
   full_path : string;  (* "" for directories *)
   rel_path : string;   (* project-relative, e.g. "theory/groups.v" or "theory/" *)
@@ -29,14 +29,8 @@ type t = {
 }
 
 let state : t option ref = ref None
-let overlay_win : Curses.window option ref = ref None
 
 let is_open () = !state <> None
-
-let destroy_overlay () =
-  match !overlay_win with
-  | Some w -> ignore (Curses.delwin w); overlay_win := None
-  | None -> ()
 
 (* Build a tree from a list of absolute file paths, relative to project_dir *)
 let build_tree project_dir files =
@@ -101,12 +95,12 @@ let flatten_tree_with_paths project_dir ~project_files tree =
       let last = (i = n - 1) in
       let connector =
         if depth = 0 then ""
-        else if last then "└── "
-        else "├── "
+        else if last then "\xe2\x94\x94\xe2\x94\x80\xe2\x94\x80 "  (* "└── " *)
+        else "\xe2\x94\x9c\xe2\x94\x80\xe2\x94\x80 "  (* "├── " *)
       in
       let child_prefix =
         if depth = 0 then ""
-        else prefix ^ (if last then "    " else "│   ")
+        else prefix ^ (if last then "    " else "\xe2\x94\x82   ")  (* "│   " *)
       in
       match node with
       | File name ->
@@ -176,12 +170,9 @@ let tab_complete t =
     match matches with
     | [] -> ()
     | [single] ->
-      (* Exact single match — complete to full path.
-         If it's a directory (ends with /), complete to that. *)
       t.input <- single;
       navigate_to_input t
     | first :: rest ->
-      (* Find longest common prefix *)
       let lcp = ref (String.length first) in
       List.iter (fun s ->
         let n = min !lcp (String.length s) in
@@ -190,7 +181,6 @@ let tab_complete t =
         lcp := !i
       ) rest;
       let common = String.sub first 0 !lcp in
-      (* If we can extend past current input, do so *)
       if String.length common > input_len then begin
         t.input <- common;
         navigate_to_input t
@@ -208,7 +198,6 @@ let open_picker ~project_dir ~project_file ~open_files =
   state := Some t
 
 let close () =
-  destroy_overlay ();
   state := None
 
 let move_selection delta =
@@ -243,22 +232,22 @@ let handle_key ch visible_rows =
       close ();
       PickerClose
     end
-    else if ch = Curses.Key.up || ch = 259 then begin
+    else if ch = 259 then begin (* up *)
       move_selection (-1);
       ensure_visible visible_rows;
       PickerContinue
     end
-    else if ch = Curses.Key.down || ch = 258 then begin
+    else if ch = 258 then begin (* down *)
       move_selection 1;
       ensure_visible visible_rows;
       PickerContinue
     end
-    else if ch = Curses.Key.ppage || ch = 339 then begin
+    else if ch = 339 then begin (* page up *)
       move_selection (-visible_rows);
       ensure_visible visible_rows;
       PickerContinue
     end
-    else if ch = Curses.Key.npage || ch = 338 then begin
+    else if ch = 338 then begin (* page down *)
       move_selection visible_rows;
       ensure_visible visible_rows;
       PickerContinue
@@ -276,19 +265,19 @@ let handle_key ch visible_rows =
       end else
         PickerContinue
     end
-    else if ch = 9 then begin (* Tab — complete *)
+    else if ch = 9 then begin (* Tab -- complete *)
       tab_complete t;
       ensure_visible visible_rows;
       PickerContinue
     end
-    else if ch = 20 then begin (* ^T — toggle project/all *)
+    else if ch = 20 then begin (* ^T -- toggle project/all *)
       t.mode <- (match t.mode with ProjectFiles -> AllFiles | AllFiles -> ProjectFiles);
       rebuild_lines t;
       navigate_to_input t;
       ensure_visible visible_rows;
       PickerContinue
     end
-    else if ch = 127 || ch = Curses.Key.backspace || ch = 263 then begin (* Backspace *)
+    else if ch = 127 || ch = 263 then begin (* Backspace *)
       if String.length t.input > 0 then begin
         t.input <- String.sub t.input 0 (String.length t.input - 1);
         navigate_to_input t;
@@ -296,9 +285,8 @@ let handle_key ch visible_rows =
       end;
       PickerContinue
     end
-    else if ch = Char.code '/' then begin (* / — complete to directory *)
+    else if ch = Char.code '/' then begin (* / -- complete to directory *)
       tab_complete t;
-      (* Ensure input ends with / *)
       if String.length t.input > 0
          && t.input.[String.length t.input - 1] <> '/' then
         t.input <- t.input ^ "/";
@@ -315,7 +303,7 @@ let handle_key ch visible_rows =
     else
       PickerContinue
 
-(* Handle mouse click — returns action if a file was clicked *)
+(* Handle mouse click -- returns action if a file was clicked *)
 let handle_click ~y ~x:_ ~box_top ~box_left:_ ~box_width:_ ~visible_rows =
   match !state with
   | None -> PickerContinue
@@ -346,121 +334,141 @@ let handle_scroll direction visible_rows =
     let delta = if direction > 0 then 3 else -3 in
     t.scroll <- max 0 (min (n - visible_rows) (t.scroll + delta))
 
-let render _display =
-  match !state with
-  | None -> destroy_overlay ()
-  | Some t ->
-    let (term_h, term_w) = Curses.getmaxyx (Curses.stdscr ()) in
-    let box_h = min (term_h - 4) (max 10 (term_h * 3 / 4)) in
-    let box_w = min (term_w - 4) (max 40 (term_w * 2 / 3)) in
-    let box_top = (term_h - box_h) / 2 in
-    let box_left = (term_w - box_w) / 2 in
-    let visible_rows = box_h - 4 in  (* title, files, input, mode, bottom *)
-    (* Create or resize overlay window *)
-    destroy_overlay ();
-    let win = Curses.newwin box_h box_w box_top box_left in
-    overlay_win := Some win;
-    let _ = Curses.werase win in
-    let _ = Curses.keypad win true in
-    (* Draw border with Unicode *)
-    let border_attr = Curses.A.color_pair 5 lor Curses.A.bold in
-    Curses.wattron win border_attr;
-    (* Top border *)
-    let _ = Curses.mvwaddstr win 0 0 "┌─" in
-    let title = match t.mode with
-      | ProjectFiles -> " Open File (project) "
-      | AllFiles -> " Open File (all .v) "
-    in
-    let _ = Curses.mvwaddstr win 0 2 title in
-    let title_end = 2 + String.length title in
-    for c = title_end to box_w - 2 do
-      let _ = Curses.mvwaddstr win 0 c "─" in ()
-    done;
-    let _ = Curses.mvwaddstr win 0 (box_w - 1) "┐" in
-    (* Bottom border *)
-    let _ = Curses.mvwaddstr win (box_h - 1) 0 "└" in
-    for c = 1 to box_w - 2 do
-      let _ = Curses.mvwaddstr win (box_h - 1) c "─" in ()
-    done;
-    let _ = Curses.mvwaddstr win (box_h - 1) (box_w - 1) "┘" in
-    (* Side borders + clear interior *)
-    for r = 1 to box_h - 2 do
-      let _ = Curses.mvwaddstr win r 0 "│" in
-      let _ = Curses.mvwaddstr win r (box_w - 1) "│" in
-      ()
-    done;
-    Curses.wattroff win border_attr;
-    (* Input field *)
-    let input_row = box_h - 3 in
-    let input_width = box_w - 5 in
-    let _ = Curses.mvwaddstr win input_row 2 "> " in
-    let displayed_input =
-      if String.length t.input > input_width then
-        String.sub t.input (String.length t.input - input_width) input_width
-      else t.input
-    in
-    let _ = Curses.mvwaddstr win input_row 4 displayed_input in
-    (* Mode / help bar *)
-    let mode_row = box_h - 2 in
-    let mode_label = match t.mode with
-      | ProjectFiles -> "project"
-      | AllFiles -> "all .v"
-    in
-    let _ = Curses.mvwaddstr win mode_row 2
-      (Printf.sprintf "^T:%s  Tab:complete  Esc:close" mode_label) in
-    (* Draw file lines *)
-    let content_width = box_w - 4 in
-    for i = 0 to visible_rows - 1 do
-      let row = 1 + i in  (* row within overlay window *)
-      let idx = t.scroll + i in
-      if idx < Array.length t.lines then begin
-        let line = t.lines.(idx) in
-        let is_open_file = not line.is_dir &&
-                      List.mem line.full_path t.open_files in
-        let marker = if is_open_file then "• " else "  " in
-        let prefix_text = marker ^ line.connector in
-        let name_text = line.name in
-        let name_trunc =
-          let avail = content_width - String.length prefix_text in
-          if String.length name_text > avail then
-            String.sub name_text 0 (max 0 avail)
-          else name_text
+let render_overlay grid (rect : Render.rect) t =
+  let box_h = rect.height in
+  let box_w = rect.width in
+  let box_top = rect.row in
+  let box_left = rect.col in
+  let visible_rows = box_h - 4 in
+  let border_attr = { (Theme.attrs ()).ga_border with bold = true } in
+  let normal_attr = Grid.default_attr in
+  (* Fill background *)
+  Grid.clear_region grid ~row:box_top ~col:box_left ~height:box_h ~width:box_w ~attr:normal_attr;
+  (* Top border *)
+  Grid.set_cell grid ~row:box_top ~col:box_left
+    "\xe2\x94\x8c" border_attr;  (* ┌ *)
+  Grid.set_cell grid ~row:box_top ~col:(box_left + 1)
+    "\xe2\x94\x80" border_attr;  (* ─ *)
+  let title = match t.mode with
+    | ProjectFiles -> " Open File (project) "
+    | AllFiles -> " Open File (all .v) "
+  in
+  ignore (Grid.put_str grid ~row:box_top ~col:(box_left + 2) title border_attr);
+  let title_end = 2 + String.length title in
+  for c = title_end to box_w - 2 do
+    Grid.set_cell grid ~row:box_top ~col:(box_left + c)
+      "\xe2\x94\x80" border_attr  (* ─ *)
+  done;
+  Grid.set_cell grid ~row:box_top ~col:(box_left + box_w - 1)
+    "\xe2\x94\x90" border_attr;  (* ┐ *)
+  (* Bottom border *)
+  Grid.set_cell grid ~row:(box_top + box_h - 1) ~col:box_left
+    "\xe2\x94\x94" border_attr;  (* └ *)
+  for c = 1 to box_w - 2 do
+    Grid.set_cell grid ~row:(box_top + box_h - 1) ~col:(box_left + c)
+      "\xe2\x94\x80" border_attr  (* ─ *)
+  done;
+  Grid.set_cell grid ~row:(box_top + box_h - 1) ~col:(box_left + box_w - 1)
+    "\xe2\x94\x98" border_attr;  (* ┘ *)
+  (* Side borders *)
+  for r = 1 to box_h - 2 do
+    Grid.set_cell grid ~row:(box_top + r) ~col:box_left
+      "\xe2\x94\x82" border_attr;  (* │ *)
+    Grid.set_cell grid ~row:(box_top + r) ~col:(box_left + box_w - 1)
+      "\xe2\x94\x82" border_attr  (* │ *)
+  done;
+  (* Input field *)
+  let input_row = box_top + box_h - 3 in
+  ignore (Grid.put_str grid ~row:input_row ~col:(box_left + 2) "> " normal_attr);
+  let input_width = box_w - 5 in
+  let displayed_input =
+    if String.length t.input > input_width then
+      String.sub t.input (String.length t.input - input_width) input_width
+    else t.input
+  in
+  ignore (Grid.put_str grid ~row:input_row ~col:(box_left + 4)
+    displayed_input normal_attr);
+  (* Mode / help bar *)
+  let mode_row = box_top + box_h - 2 in
+  let mode_label = match t.mode with
+    | ProjectFiles -> "project"
+    | AllFiles -> "all .v"
+  in
+  ignore (Grid.put_str grid ~row:mode_row ~col:(box_left + 2)
+    (Printf.sprintf "^T:%s  Tab:complete  Esc:close" mode_label) normal_attr);
+  (* Draw file lines *)
+  let content_width = box_w - 4 in
+  for i = 0 to visible_rows - 1 do
+    let row = box_top + 1 + i in
+    let idx = t.scroll + i in
+    if idx < Array.length t.lines then begin
+      let line = t.lines.(idx) in
+      let is_open_file = not line.is_dir &&
+                    List.mem line.full_path t.open_files in
+      let marker = if is_open_file then "\xe2\x80\xa2 " else "  " in
+      let prefix_text = marker ^ line.connector in
+      let name_text = line.name in
+      let name_trunc =
+        let avail = content_width - String.length prefix_text in
+        if String.length name_text > avail then
+          String.sub name_text 0 (max 0 avail)
+        else name_text
+      in
+      if idx = t.selected then begin
+        let rev_attr = { Grid.default_attr with reverse = true } in
+        ignore (Grid.put_str grid ~row ~col:(box_left + 2)
+          (prefix_text ^ name_trunc) rev_attr);
+        let remaining = content_width - String.length prefix_text
+                        - String.length name_trunc in
+        for c = 1 to remaining do
+          ignore c;
+          Grid.set_cell grid ~row
+            ~col:(box_left + 2 + String.length prefix_text
+                  + String.length name_trunc + c - 1)
+            " " rev_attr
+        done
+      end else begin
+        let dim_attr = { Grid.default_attr with dim = true } in
+        let bold_attr = { Grid.default_attr with bold = true } in
+        let dim = not line.is_dir && not line.in_project
+                  && t.mode = AllFiles in
+        ignore (Grid.put_str grid ~row ~col:(box_left + 2)
+          prefix_text normal_attr);
+        let name_attr =
+          if line.is_dir then bold_attr
+          else if dim then dim_attr
+          else normal_attr
         in
-        if idx = t.selected then begin
-          Curses.wattron win Curses.A.reverse;
-          let _ = Curses.mvwaddstr win row 2 (prefix_text ^ name_trunc) in
-          let remaining = content_width - String.length prefix_text
-                          - String.length name_trunc in
-          for _ = 1 to remaining do
-            let _ = Curses.waddch win (Char.code ' ') in ()
-          done;
-          Curses.wattroff win Curses.A.reverse
-        end else begin
-          let dim = not line.is_dir && not line.in_project
-                    && t.mode = AllFiles in
-          (* Draw prefix (marker + tree chars) at normal brightness *)
-          let _ = Curses.mvwaddstr win row 2 prefix_text in
-          (* Draw name, dimmed if not in project *)
-          if line.is_dir then Curses.wattron win Curses.A.bold;
-          if dim then Curses.wattron win Curses.A.dim;
-          let _ = Curses.waddstr win name_trunc in
-          if dim then Curses.wattroff win Curses.A.dim;
-          if line.is_dir then Curses.wattroff win Curses.A.bold
-        end
+        ignore (Grid.put_str grid ~row
+          ~col:(box_left + 2 + String.length prefix_text)
+          name_trunc name_attr)
       end
-    done;
-    let _ = Curses.wnoutrefresh win in
-    ()
+    end
+  done
 
-let box_geometry () =
+let compute_box_geometry term_h term_w =
+  let box_h = min (term_h - 4) (max 10 (term_h * 3 / 4)) in
+  let box_w = min (term_w - 4) (max 40 (term_w * 2 / 3)) in
+  let box_top = (term_h - box_h) / 2 in
+  let box_left = (term_w - box_w) / 2 in
+  let visible_rows = box_h - 4 in
+  (box_top, box_left, box_w, box_h, visible_rows)
+
+let render _r =
+  match !state with
+  | None -> ()
+  | Some t ->
+    let (term_h, term_w) = Term.size () in
+    let (box_top, box_left, box_w, box_h, _visible_rows) =
+      compute_box_geometry term_h term_w in
+    let rect = { Render.row = box_top; col = box_left;
+                 height = box_h; width = box_w } in
+    Render.set_overlay rect (fun grid rect -> render_overlay grid rect t)
+
+let box_geometry r =
   match !state with
   | None -> (0, 0, 0, 0, 0)
   | Some _t ->
-    let stdscr = Curses.stdscr () in
-    let (term_h, term_w) = Curses.getmaxyx stdscr in
-    let box_h = min (term_h - 4) (max 10 (term_h * 3 / 4)) in
-    let box_w = min (term_w - 4) (max 40 (term_w * 2 / 3)) in
-    let box_top = (term_h - box_h) / 2 in
-    let box_left = (term_w - box_w) / 2 in
-    let visible_rows = box_h - 4 in
-    (box_top, box_left, box_w, box_h, visible_rows)
+    let (term_h, term_w) = Term.size () in
+    ignore r;
+    compute_box_geometry term_h term_w

@@ -201,13 +201,13 @@ let process_token st (tok_text : string) =
 let style_of_ident ctx tok_text =
   (* In Ltac context, check for tactics *)
   if ctx = Ltac && SS.mem tok_text tactics then
-    Some (Curses.A.normal, color_tactic)
+    Some (0, color_tactic)
   (* Vernacular keywords *)
   else if SS.mem tok_text vernac_keywords then
-    Some (Curses.A.bold, color_keyword)
+    Some (1, color_keyword)
   (* Constr/Gallina keywords *)
   else if SS.mem tok_text constr_keywords then
-    Some (Curses.A.bold, color_keyword)
+    Some (1, color_keyword)
   else
     None
 
@@ -323,13 +323,13 @@ let highlight_buffer buf =
              if !in_comment = 0 then
                add_multiline_span result line_offsets buf num_lines
                  !comment_start (ep - !comment_start)
-                 Curses.A.normal color_comment
+                 0 color_comment
            end else if tok_text = ")" && !prev_comment_tok = "*" then begin
              decr in_comment;
              if !in_comment = 0 then
                add_multiline_span result line_offsets buf num_lines
                  !comment_start (ep - !comment_start)
-                 Curses.A.normal color_comment
+                 0 color_comment
            end;
            prev_comment_tok := tok_text
          end else if tok_text = "(*" then begin
@@ -339,9 +339,9 @@ let highlight_buffer buf =
          end else begin
            let ctx = process_token st tok_text in
            let style = match tok with
-             | Tok.STRING _ -> Some (Curses.A.normal, color_string)
-             | Tok.NUMBER _ -> Some (Curses.A.normal, color_number)
-             | Tok.BULLET _ -> Some (Curses.A.bold, color_bullet)
+             | Tok.STRING _ -> Some (0, color_string)
+             | Tok.NUMBER _ -> Some (0, color_number)
+             | Tok.BULLET _ -> Some (1, color_bullet)
              | Tok.IDENT s -> style_of_ident ctx s
              | _ -> None
            in

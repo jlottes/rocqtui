@@ -92,24 +92,24 @@ let solarized_light = {
 let classic = {
   name = "classic";
   bg = -1;
-  keyword_fg = Curses.Color.blue;
-  tactic_fg = Curses.Color.cyan;
-  comment_fg = Curses.Color.green;
-  string_fg = Curses.Color.yellow;
-  bullet_fg = Curses.Color.red;
-  number_fg = Curses.Color.magenta;
+  keyword_fg = 4;   (* blue *)
+  tactic_fg = 6;    (* cyan *)
+  comment_fg = 2;   (* green *)
+  string_fg = 3;    (* yellow *)
+  bullet_fg = 1;    (* red *)
+  number_fg = 5;    (* magenta *)
   default_fg = -1;
-  verified_bg = Curses.Color.green;
-  verified_fg = Curses.Color.black;
-  error_bg = Curses.Color.red;
-  error_fg = Curses.Color.white;
-  processing_bg = Curses.Color.yellow;
-  processing_fg = Curses.Color.black;
-  status_bg = Curses.Color.cyan;
-  status_fg = Curses.Color.black;
-  border_fg = Curses.Color.cyan;
-  selection_bg = Curses.Color.blue;
-  selection_fg = Curses.Color.white;
+  verified_bg = 2;  (* green *)
+  verified_fg = 0;  (* black *)
+  error_bg = 1;     (* red *)
+  error_fg = 7;     (* white *)
+  processing_bg = 3; (* yellow *)
+  processing_fg = 0; (* black *)
+  status_bg = 6;    (* cyan *)
+  status_fg = 0;    (* black *)
+  border_fg = 6;    (* cyan *)
+  selection_bg = 4;  (* blue *)
+  selection_fg = 7;  (* white *)
 }
 
 (* Monokai-inspired *)
@@ -171,34 +171,7 @@ let find name =
   | Some t -> t
   | None -> default
 
-(* Color pair assignments — must match highlight.ml constants *)
-let pair_verified = 1
-let pair_processing = 2
-let pair_error = 3
-let pair_status = 4
-let pair_border = 5
-let pair_keyword = 6
-let pair_tactic = 7
-let pair_comment = 8
-let pair_string = 9
-let pair_bullet = 10
-let pair_number = 11
-(* Verified-region syntax variants *)
-let pair_keyword_v = 16
-let pair_tactic_v = 17
-let pair_comment_v = 18
-let pair_string_v = 19
-let pair_bullet_v = 20
-let pair_number_v = 21
-let pair_default_v = 22
-(* Processing-region syntax variants *)
-let pair_keyword_p = 24
-let pair_tactic_p = 25
-let pair_comment_p = 26
-let pair_string_p = 27
-let pair_bullet_p = 28
-let pair_number_p = 29
-let pair_default_p = 30
+(* Legacy color pair assignments — kept for API compat *)
 let pair_selection = 31
 
 (* --- Grid.attr equivalents --- *)
@@ -283,38 +256,5 @@ let current_attrs : grid_attrs ref = ref (grid_attrs_of_theme default)
 let attrs () = !current_attrs
 
 let apply theme =
-  let _ = Curses.use_default_colors () in
-  (* UI pairs *)
-  let _ = Curses.init_pair pair_verified theme.verified_fg theme.verified_bg in
-  let _ = Curses.init_pair pair_processing theme.processing_fg theme.processing_bg in
-  let _ = Curses.init_pair pair_error theme.error_fg theme.error_bg in
-  let _ = Curses.init_pair pair_status theme.status_fg theme.status_bg in
-  let _ = Curses.init_pair pair_border theme.border_fg theme.bg in
-  (* Syntax pairs — normal background *)
-  let _ = Curses.init_pair pair_keyword theme.keyword_fg theme.bg in
-  let _ = Curses.init_pair pair_tactic theme.tactic_fg theme.bg in
-  let _ = Curses.init_pair pair_comment theme.comment_fg theme.bg in
-  let _ = Curses.init_pair pair_string theme.string_fg theme.bg in
-  let _ = Curses.init_pair pair_bullet theme.bullet_fg theme.bg in
-  let _ = Curses.init_pair pair_number theme.number_fg theme.bg in
-  (* Syntax pairs — verified background *)
-  let _ = Curses.init_pair pair_keyword_v theme.keyword_fg theme.verified_bg in
-  let _ = Curses.init_pair pair_tactic_v theme.tactic_fg theme.verified_bg in
-  let _ = Curses.init_pair pair_comment_v theme.comment_fg theme.verified_bg in
-  let _ = Curses.init_pair pair_string_v theme.string_fg theme.verified_bg in
-  let _ = Curses.init_pair pair_bullet_v theme.bullet_fg theme.verified_bg in
-  let _ = Curses.init_pair pair_number_v theme.number_fg theme.verified_bg in
-  let _ = Curses.init_pair pair_default_v theme.default_fg theme.verified_bg in
-  (* Syntax pairs — processing background *)
-  let _ = Curses.init_pair pair_keyword_p theme.keyword_fg theme.processing_bg in
-  let _ = Curses.init_pair pair_tactic_p theme.tactic_fg theme.processing_bg in
-  let _ = Curses.init_pair pair_comment_p theme.comment_fg theme.processing_bg in
-  let _ = Curses.init_pair pair_string_p theme.string_fg theme.processing_bg in
-  let _ = Curses.init_pair pair_bullet_p theme.bullet_fg theme.processing_bg in
-  let _ = Curses.init_pair pair_number_p theme.number_fg theme.processing_bg in
-  let _ = Curses.init_pair pair_default_p theme.processing_fg theme.processing_bg in
-  let _ = Curses.init_pair pair_selection theme.selection_fg theme.selection_bg in
-  (* Tab bar colors *)
-  let _ = Curses.init_pair 32 theme.status_fg theme.status_bg in  (* active tab *)
-  let _ = Curses.init_pair 33 theme.border_fg theme.bg in  (* inactive tab *)
+  (* No curses color pairs needed — just update Grid attrs *)
   current_attrs := grid_attrs_of_theme theme

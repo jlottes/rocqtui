@@ -32,10 +32,10 @@ val set_status_extra : string -> unit
 val set_open_files_fn : (unit -> string list) -> unit
 
 (** Render the active tab's display. *)
-val render_all : Display.t -> Tab.t -> unit
+val render_all : Render.t -> Tab.t -> unit
 
-val handle_key : int -> Tab.t -> Display.t -> action
-val handle_key_event : Keys.key_event -> Tab.t -> Display.t -> action
+(** Handle an input event. Returns the action to take. *)
+val handle_event : Input.event -> Tab.t -> Render.t -> action
 
 (** After Open_file action, get the target position (line, col) for jump.
     Returns and clears the value. *)

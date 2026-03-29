@@ -25,9 +25,13 @@ let y_per_cell ~num_lines ~available_rows =
   if available_rows <= 0 then min_ypc
   else max min_ypc ((num_lines + available_rows - 1) / available_rows)
 
+(* Region status for coloring *)
+type region_status = RDefault | RVerified | RProcessing | RError
+
 type cell = {
   braille : string;  (* UTF-8 braille character *)
-  color : int;       (* curses color pair *)
+  color : int;       (* legacy color pair -- kept for compat *)
+  status : region_status;  (* region status for Grid attr lookup *)
 }
 
 type row = cell array
@@ -71,21 +75,20 @@ let has_char lines num_lines row col =
     col >= 0 && col < String.length line
     && line.[col] <> ' ' && line.[col] <> '\t'
 
-(* Determine the dominant color for a source line range.
-   Returns a curses color pair. *)
-let region_color ~verified_end ~pending_end ~error_range
+(* Determine the dominant status for a source line range. *)
+let region_status ~verified_end ~pending_end ~error_range
     line_start_offset line_end_offset =
   (* Check error first *)
-  (match error_range with
-   | Some (es, ee) when line_end_offset > es && line_start_offset < ee ->
-     Display.color_error
-   | _ ->
-     if line_end_offset <= verified_end then
-       Display.color_verified
-     else if line_end_offset <= pending_end then
-       Display.color_processing
-     else
-       0)  (* default color *)
+  match error_range with
+  | Some (es, ee) when line_end_offset > es && line_start_offset < ee ->
+    RError
+  | _ ->
+    if line_end_offset <= verified_end then
+      RVerified
+    else if line_end_offset <= pending_end then
+      RProcessing
+    else
+      RDefault
 
 (* Compute line byte offsets: offset.(i) = byte offset of start of line i *)
 let compute_line_offsets lines num_lines =
@@ -107,12 +110,15 @@ let render ~lines ~num_lines ~verified_end ~pending_end ~error_range ~ypc ~cols 
       let grid = Array.init 4 (fun _ -> Array.make 2 false) in
       let first_line = br * ypc in
       let last_line = min num_lines ((br + 1) * ypc) - 1 in
-      let color =
+      let status =
         if first_line < num_lines then
-          region_color ~verified_end ~pending_end ~error_range
+          region_status ~verified_end ~pending_end ~error_range
             line_offsets.(first_line)
             line_offsets.(min num_lines (last_line + 1))
-        else 0
+        else RDefault
+      in
+      let color = match status with
+        | RDefault -> 0 | RVerified -> 1 | RProcessing -> 2 | RError -> 3
       in
       for dr = 0 to 3 do
         for dc = 0 to 1 do
@@ -132,7 +138,7 @@ let render ~lines ~num_lines ~verified_end ~pending_end ~error_range ~ypc ~cols 
         done
       done;
       let cp = encode_braille grid in
-      { braille = utf8_of_codepoint cp; color }
+      { braille = utf8_of_codepoint cp; color; status }
     ))
 
 (* Draw the minimap into a curses window at a given column offset.
@@ -144,7 +150,15 @@ let char_vline = "\xe2\x94\x82"       (* │ U+2502 *)
 let char_round_top = "\xe2\x95\xad"   (* ╭ U+256D *)
 let char_round_bot = "\xe2\x95\xb0"   (* ╰ U+2570 *)
 
-let draw win ~sep_col ~col_offset ~win_rows ~minimap_rows
+let grid_attr_of_status status =
+  let a = Theme.attrs () in
+  match status with
+  | RDefault -> Grid.default_attr
+  | RVerified -> a.ga_verified
+  | RProcessing -> a.ga_processing
+  | RError -> a.ga_error
+
+let draw grid ~base_row ~base_col ~sep_col ~col_offset ~win_rows ~minimap_rows
     ~scroll ~visible_lines ~ypc ~border_attr rows =
   let vp_first = scroll / ypc in
   let vp_last = (scroll + visible_lines - 1) / ypc in
@@ -152,33 +166,29 @@ let draw win ~sep_col ~col_offset ~win_rows ~minimap_rows
     let mr = r in
     let in_viewport = mr >= vp_first && mr <= vp_last in
     (* Draw separator with viewport bracket *)
-    Curses.wattron win border_attr;
     let sep_char =
       if mr = vp_first && vp_first > 0 then char_round_top
       else if mr = vp_last && vp_last < minimap_rows - 1 then char_round_bot
       else char_vline
     in
-    ignore (Curses.mvwaddstr win r sep_col sep_char);
-    Curses.wattroff win border_attr;
+    Grid.set_cell grid ~row:(base_row + r) ~col:(base_col + sep_col) sep_char border_attr;
     (* Draw minimap cells *)
     if mr < minimap_rows && mr < Array.length rows then begin
       let row = rows.(mr) in
       for c = 0 to Array.length row - 1 do
         let cell = row.(c) in
-        let attr = if in_viewport then Curses.A.reverse else 0 in
-        let color_attr = if cell.color <> 0 then
-          Curses.A.color_pair cell.color else 0 in
-        Curses.wattron win (attr lor color_attr);
-        ignore (Curses.mvwaddstr win r (col_offset + c) cell.braille);
-        Curses.wattroff win (attr lor color_attr)
+        let base_attr = grid_attr_of_status cell.status in
+        let attr = if in_viewport then { base_attr with reverse = true }
+                   else base_attr in
+        Grid.set_cell grid ~row:(base_row + r) ~col:(base_col + col_offset + c) cell.braille attr
       done
     end else begin
-      (* Empty row — clear. Use width from first data row if available,
-         otherwise use win width minus col_offset *)
+      (* Empty row — clear *)
       let w = if Array.length rows > 0 then Array.length rows.(0)
-              else let (_, wc) = Curses.getmaxyx win in wc - col_offset in
+              else win_rows in
       for c = 0 to w - 1 do
-        ignore (Curses.mvwaddch win r (col_offset + c) (Char.code ' '))
+        Grid.set_cell grid ~row:(base_row + r) ~col:(base_col + col_offset + c)
+          " " Grid.default_attr
       done
     end
   done

@@ -32,16 +32,19 @@ let () =
   in
   Sys.set_signal Sys.sigint Sys.Signal_ignore;
   Sys.set_signal Sys.sigtstp Sys.Signal_ignore;
-  let display = Display.init () in
+  Term.init ();
+  let r = Render.create () in
   Theme.apply theme;
   Editor.set_current_theme theme.name;
   Editor.init_compose ();
-  Clipboard.enable_bracketed_paste ();
-  (* Keys.enable_kitty ();  — disabled until CSI parser is complete *)
   Rocq_protocol.set_interrupt_hook (fun t ->
-    let ch = Curses.getch () in
-    if ch = 3 then
-      (try Unix.kill (Rocq_protocol.pid t) Sys.sigint with _ -> ()));
+    (* Read input event to check for ^C *)
+    match Input.read_event ~timeout:0.0 Unix.stdin with
+    | Some (Input.Key (99, m)) when m.ctrl ->  (* ctrl+c = codepoint 99 *)
+      (try Unix.kill (Rocq_protocol.pid t) Sys.sigint with _ -> ())
+    | Some (Input.Key (3, _)) ->  (* raw ctrl+c = 3 *)
+      (try Unix.kill (Rocq_protocol.pid t) Sys.sigint with _ -> ())
+    | _ -> ());
   Printexc.record_backtrace true;
   (* Create tabs *)
   let project_dirs = ref [] in
@@ -64,7 +67,7 @@ let () =
     if tab != List.hd initial_tabs then Tab.add_tab mgr tab
   ) initial_tabs;
   if Tab.count mgr > 1 then
-    Display.set_tab_bar display true;
+    Render.set_tab_bar r true;
   (* Tab bar click handler *)
   let needs_render = ref true in
   Editor.set_tab_bar_click_handler (fun x ->
@@ -105,78 +108,93 @@ let () =
         in
         let prefix =
           (if Buffer.modified t.buf then "*" else "") ^
-          (if Buffer.disk_changed t.buf then "\xe2\x9f\xb3" (* ⟳ *) else "") in
+          (if Buffer.disk_changed t.buf then "\xe2\x9f\xb3" (* U+27F3 *) else "") in
         let suffix = match spinner with
           | Some s when Mcp_server.is_tab_active mcp t.id -> " " ^ s
           | _ -> ""
         in
         (prefix ^ name ^ suffix, false)
       ) mgr.tabs in
-      Display.draw_tab_bar display tabs mgr.active
+      Render.draw_tab_bar r tabs mgr.active
     end;
-    Editor.render_all display tab
+    Editor.render_all r tab;
+    Render.present r
   in
-  (* Non-blocking getch *)
-  Curses.timeout 0;
   let stdin_fd = Unix.stdin in
   let running = ref true in
-  let prompt_unsaved msg confirm_key on_confirm =
+  (* Blocking event read helper for prompts *)
+  let read_blocking_event () =
+    let rec loop () =
+      let ready = Main_loop.select_with_watches [stdin_fd] 1.0 in
+      if List.mem stdin_fd ready then
+        match Input.read_event ~timeout:0.0 stdin_fd with
+        | Some ev -> ev
+        | None -> loop ()
+      else loop ()
+    in
+    loop ()
+  in
+  let prompt_unsaved msg confirm_ev on_confirm =
     let tab = Tab.active_tab mgr in
-    Display.set_status display msg;
-    Display.refresh_all display;
-    let ready = Main_loop.select_with_watches [stdin_fd] (-1.0) in
-    if List.mem stdin_fd ready then begin
-      let ch2 = Curses.getch () in
-      if ch2 = confirm_key then
-        on_confirm ()
-      else if ch2 = 19 then begin (* ^S — save *)
-        (match Buffer.filename tab.buf with
-         | Some _ ->
-           if Buffer.save tab.buf then
-             Display.set_status display "Saved."
-           else
-             Display.set_status display "Error saving file."
-         | None ->
-           Display.set_status display "No filename.");
-        needs_render := true
-      end else begin
-        let t = Tab.active_tab mgr in
-        ignore (Editor.handle_key ch2 t display);
-        needs_render := true
-      end
+    Render.set_status r msg;
+    Render.present r;
+    let ev = read_blocking_event () in
+    if ev = confirm_ev then
+      on_confirm ()
+    else if (match ev with
+      | Input.Key (115, m) when m.ctrl -> true  (* ^S *)
+      | Input.Key (19, _) -> true
+      | _ -> false) then begin
+      (match Buffer.filename tab.buf with
+       | Some _ ->
+         if Buffer.save tab.buf then
+           Render.set_status r "Saved."
+         else
+           Render.set_status r "Error saving file."
+       | None ->
+         Render.set_status r "No filename.");
+      needs_render := true
+    end else begin
+      let t = Tab.active_tab mgr in
+      ignore (Editor.handle_event ev t r);
+      needs_render := true
     end
   in
+  (* Check if event matches ^W *)
+  let ctrl_w_ev = Input.Key (119, { Input.shift = false; alt = false;
+                                     ctrl = true; super = false }) in
+  let ctrl_x_ev = Input.Key (120, { Input.shift = false; alt = false;
+                                     ctrl = true; super = false }) in
   let handle_close_tab () =
     let tab = Tab.active_tab mgr in
     if Tab.count mgr > 1 then begin
       if Buffer.modified tab.buf then
-        prompt_unsaved "Unsaved changes! ^W again to close, ^S to save." 23
+        prompt_unsaved "Unsaved changes! ^W again to close, ^S to save." ctrl_w_ev
           (fun () ->
             ignore (Tab.close_active mgr);
             if Tab.count mgr <= 1 then
-              Display.set_tab_bar display false;
+              Render.set_tab_bar r false;
             needs_render := true)
       else begin
         ignore (Tab.close_active mgr);
         if Tab.count mgr <= 1 then
-          Display.set_tab_bar display false;
+          Render.set_tab_bar r false;
         needs_render := true
       end
     end else begin
-      (* Last tab — same as quit *)
+      (* Last tab -- same as quit *)
       if Buffer.modified tab.buf then
-        prompt_unsaved "Unsaved changes! ^W again to quit, ^S to save." 23
+        prompt_unsaved "Unsaved changes! ^W again to quit, ^S to save." ctrl_w_ev
           (fun () -> running := false)
       else
         running := false
     end
   in
   let handle_quit () =
-    (* Check if any tab has unsaved changes *)
     let any_unsaved = List.exists (fun (t : Tab.t) ->
       Buffer.modified t.buf) mgr.tabs in
     if any_unsaved then
-      prompt_unsaved "Unsaved changes! ^X again to quit, ^S to save." 24
+      prompt_unsaved "Unsaved changes! ^X again to quit, ^S to save." ctrl_x_ev
         (fun () -> running := false)
     else
       running := false
@@ -197,9 +215,8 @@ let () =
     (* Handle MCP connections/messages *)
     if Mcp_server.handle_ready mcp ready mgr then begin
       needs_render := true;
-      (* MCP may have opened new tabs *)
       if Tab.count mgr > 1 then
-        Display.set_tab_bar display true
+        Render.set_tab_bar r true
     end;
     (* Poll build subprocess *)
     if Build.poll () then needs_render := true;
@@ -214,21 +231,17 @@ let () =
             let vend = match t.session with
               | Some s -> Session.verified_end s | None -> 0 in
             if Buffer.modified t.buf then begin
-              (* Dirty buffer — just notify, don't reload *)
-              Display.set_status display
+              Render.set_status r
                 (Printf.sprintf "%s changed on disk (buffer has unsaved changes)"
                    (Filename.basename path));
               needs_render := true
             end else if vend > 0 then begin
-              (* Clean buffer but has verified region — check if change
-                 is within the verified region *)
               let old_text = Buffer.text t.buf in
               let new_text = try
                 let ic = open_in path in
                 let s = In_channel.input_all ic in
                 close_in ic; s
               with _ -> old_text in
-              (* Find first differing byte *)
               let min_len = min (String.length old_text) (String.length new_text) in
               let diff_at = ref min_len in
               (try for i = 0 to min_len - 1 do
@@ -237,26 +250,23 @@ let () =
                  end
                done with Exit -> ());
               if !diff_at < vend then begin
-                (* Change is within verified region — don't auto-reload *)
-                Display.set_status display
+                Render.set_status r
                   (Printf.sprintf "%s changed on disk (verified region affected)"
                      (Filename.basename path));
                 needs_render := true
               end else begin
-                (* Change is after verified region — safe to reload *)
                 Buffer.reload t.buf;
                 Buffer.set_disk_changed t.buf false;
                 File_watch.add_watch watcher path;
-                Display.set_status display
+                Render.set_status r
                   (Printf.sprintf "%s reloaded" (Filename.basename path));
                 needs_render := true
               end
             end else begin
-              (* Clean buffer, no verified region — safe to reload *)
               Buffer.reload t.buf;
               Buffer.set_disk_changed t.buf false;
               File_watch.add_watch watcher path;
-              Display.set_status display
+              Render.set_status r
                 (Printf.sprintf "%s reloaded" (Filename.basename path));
               needs_render := true
             end
@@ -267,33 +277,39 @@ let () =
     (* Poll ALL sessions *)
     if Tab.poll_all mgr then begin
       needs_render := true;
-      (* Send MCP notifications for state changes driven by session polling *)
       Mcp_server.poll_notifications mcp mgr
     end;
     (* Handle keyboard input *)
     if List.mem stdin_fd ready then begin
       let rec drain () =
-        let ch = Curses.getch () in
-        if ch = -1 || not !running then ()
-        else begin
-          let ev = Keys.RawKey ch in
+        match Input.read_event ~timeout:0.0 stdin_fd with
+        | None -> ()
+        | Some ev when not !running -> ignore ev
+        | Some ev ->
           let tab = Tab.active_tab mgr in
-          if Keys.match_event ev Keys.new_tab then begin
+          (* Tab management keys *)
+          if (match ev with
+              | Input.Key (110, m) when m.ctrl -> true  (* ^N *)
+              | Input.Key (14, _) -> true | _ -> false) then begin
             let active = Tab.active_tab mgr in
             Tab.add_tab mgr (Tab.create_blank ~args:active.session_args ());
-            Display.set_tab_bar display true;
+            Render.set_tab_bar r true;
             needs_render := true
           end
-          else if Keys.match_event ev Keys.prev_tab then begin
+          else if (match ev with
+              | Input.Special (Input.Left, m) when m.alt -> true
+              | _ -> false) then begin
             Tab.prev_tab mgr;
             needs_render := true
           end
-          else if Keys.match_event ev Keys.next_tab then begin
+          else if (match ev with
+              | Input.Special (Input.Right, m) when m.alt -> true
+              | _ -> false) then begin
             Tab.next_tab mgr;
             needs_render := true
           end
           else begin
-            match Editor.handle_key_event ev tab display with
+            match Editor.handle_event ev tab r with
             | Editor.Quit -> handle_quit ()
             | Editor.Close_tab -> handle_close_tab ()
             | Editor.Reload ->
@@ -301,69 +317,67 @@ let () =
               (match Buffer.filename tab.buf with
                | Some path ->
                  let do_reload () =
-                   (* Rewind session before reload *)
                    (match tab.session with
                     | Some s -> Session.go_to_offset s 0
                     | None -> ());
                    Buffer.reload tab.buf;
                    File_watch.add_watch watcher path;
-                   Display.set_status display
+                   Render.set_status r
                      (Printf.sprintf "%s reloaded" (Filename.basename path));
                    needs_render := true
                  in
                  if Buffer.modified tab.buf then begin
-                   Display.set_status display
+                   Render.set_status r
                      "Buffer has unsaved changes! F4 again to discard and reload.";
-                   Display.refresh_all display;
-                   let ready = Main_loop.select_with_watches [stdin_fd] (-1.0) in
-                   if List.mem stdin_fd ready then begin
-                     let ch2 = Curses.getch () in
-                     if ch2 = Curses.Key.f 4 then
-                       do_reload ()
-                     else
-                       needs_render := true
-                   end
+                   Render.present r;
+                   let ev2 = read_blocking_event () in
+                   let is_f4 = match ev2 with
+                     | Input.Special (Input.F 4, _) -> true | _ -> false in
+                   if is_f4 then
+                     do_reload ()
+                   else
+                     needs_render := true
                  end else
                    do_reload ()
                | None ->
-                 Display.set_status display "No filename.");
+                 Render.set_status r "No filename.");
               needs_render := true
             | Editor.Save_prompt ->
               (match Buffer.filename tab.buf with
                | Some _ ->
                  if Buffer.disk_changed tab.buf then begin
-                   (* File changed on disk — confirm overwrite *)
-                   Display.set_status display
+                   Render.set_status r
                      "File changed on disk! ^S again to overwrite, ^R to reload.";
-                   Display.refresh_all display;
-                   let ready = Main_loop.select_with_watches [stdin_fd] (-1.0) in
-                   if List.mem stdin_fd ready then begin
-                     let ch2 = Curses.getch () in
-                     if ch2 = 19 then begin (* ^S — force save *)
-                       if Buffer.save tab.buf then
-                         Display.set_status display "Saved (overwritten)."
-                       else
-                         Display.set_status display "Error saving file."
-                     end else if ch2 = 18 then begin (* ^R — reload *)
-                       Buffer.reload tab.buf;
-                       File_watch.add_watch watcher
-                         (match Buffer.filename tab.buf with
-                          | Some f -> f | None -> "");
-                       Display.set_status display "Reloaded from disk."
-                     end
-                     (* else: cancelled *)
+                   Render.present r;
+                   let ev2 = read_blocking_event () in
+                   let is_save = match ev2 with
+                     | Input.Key (115, m) when m.ctrl -> true
+                     | Input.Key (19, _) -> true | _ -> false in
+                   let is_reload = match ev2 with
+                     | Input.Key (114, m) when m.ctrl -> true
+                     | Input.Key (18, _) -> true | _ -> false in
+                   if is_save then begin
+                     if Buffer.save tab.buf then
+                       Render.set_status r "Saved (overwritten)."
+                     else
+                       Render.set_status r "Error saving file."
+                   end else if is_reload then begin
+                     Buffer.reload tab.buf;
+                     File_watch.add_watch watcher
+                       (match Buffer.filename tab.buf with
+                        | Some f -> f | None -> "");
+                     Render.set_status r "Reloaded from disk."
                    end
                  end else begin
                    if Buffer.save tab.buf then
-                     Display.set_status display "Saved."
+                     Render.set_status r "Saved."
                    else
-                     Display.set_status display "Error saving file."
+                     Render.set_status r "Error saving file."
                  end
                | None ->
-                 Display.set_status display "No filename.");
+                 Render.set_status r "No filename.");
               needs_render := true
             | Editor.Jump_back jp ->
-              (* Try tab ID first, fall back to filename *)
               let found = match Tab.find_by_id mgr jp.jp_tab_id with
                 | Some _ ->
                   (match Tab.index_of_id mgr jp.jp_tab_id with
@@ -372,7 +386,6 @@ let () =
                 | None -> false
               in
               if not found && jp.jp_file <> "" then begin
-                (* Fall back to filename *)
                 let existing = List.find_opt (fun (t : Tab.t) ->
                   Buffer.filename t.buf = Some jp.jp_file
                 ) mgr.tabs in
@@ -386,14 +399,13 @@ let () =
                    let new_tab = Tab.create_from_file
                                    ~args:(pargs @ extra_args) jp.jp_file in
                    Tab.add_tab mgr new_tab;
-                   Display.set_tab_bar display true)
+                   Render.set_tab_bar r true)
               end;
               let active = Tab.active_tab mgr in
               Buffer.move_to active.buf jp.jp_line jp.jp_col;
               needs_render := true
             | Editor.Open_file path ->
               let jump = Editor.take_jump_target () in
-              (* Check if already open *)
               let existing = List.find_opt (fun (t : Tab.t) ->
                 Buffer.filename t.buf = Some path
               ) mgr.tabs in
@@ -407,8 +419,7 @@ let () =
                  let new_tab = Tab.create_from_file ~args:(pargs @ extra_args) path in
                  Tab.add_tab mgr new_tab;
                  File_watch.add_watch watcher path;
-                 Display.set_tab_bar display true);
-              (* Jump to position if requested *)
+                 Render.set_tab_bar r true);
               (match jump with
                | Some (line, col) ->
                  let active = Tab.active_tab mgr in
@@ -419,7 +430,6 @@ let () =
               needs_render := true
           end;
           if !running then drain ()
-        end
       in
       drain ()
     end;
@@ -431,9 +441,7 @@ let () =
   done;
   Mcp_server.shutdown mcp;
   File_watch.close watcher;
-  Keys.disable_kitty ();
-  Clipboard.disable_bracketed_paste ();
   List.iter (fun (tab : Tab.t) ->
     match tab.session with Some s -> Session.quit s | None -> ()
   ) mgr.tabs;
-  Display.teardown display
+  Term.teardown ()

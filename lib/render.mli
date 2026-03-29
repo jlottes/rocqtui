@@ -44,6 +44,7 @@ val draw_chrome : t ->
 
 (** Layout *)
 val set_tab_bar : t -> bool -> unit
+val minimap_width : t -> int
 val set_minimap_width : t -> int -> unit
 val move_split_v : t -> int -> unit
 val move_split_h : t -> int -> unit

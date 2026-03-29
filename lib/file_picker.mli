@@ -31,8 +31,8 @@ val handle_click :
 (** Handle mouse scroll (direction: positive=down, negative=up). *)
 val handle_scroll : int -> int -> unit
 
-(** Render the picker overlay. *)
-val render : Display.t -> unit
+(** Render the picker as an overlay into the grid. *)
+val render : Render.t -> unit
 
 (** Get box geometry: (top, left, width, height, visible_rows). *)
-val box_geometry : unit -> int * int * int * int * int
+val box_geometry : Render.t -> int * int * int * int * int

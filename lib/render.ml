@@ -234,6 +234,8 @@ let set_tab_bar t enabled =
     compute_layout t
   end
 
+let minimap_width t = t.minimap_width
+
 let set_minimap_width t w =
   let w = max 0 (min w (t.split_col - 12)) in
   if w <> t.minimap_width then begin

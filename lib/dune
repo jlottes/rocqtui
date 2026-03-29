@@ -1,5 +1,5 @@
 (library
  (name rocqtui_lib)
- (libraries curses unix yojson rocq-runtime.parsing rocq-runtime.clib rocq-runtime.gramlib
+ (libraries unix yojson rocq-runtime.parsing rocq-runtime.clib rocq-runtime.gramlib
             rocq-runtime.lib coqide-server.protocol coqide-server.core)
  (foreign_stubs (language c) (names locale_stubs inotify_stubs term_stubs)))

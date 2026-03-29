@@ -144,23 +144,23 @@ let paste = {
 (* --- Function keys --- *)
 
 let help = {
-  name = "help"; codes = [Curses.Key.f 1]; kitty_codes = []; display = "F1";
+  name = "help"; codes = [265]; kitty_codes = []; display = "F1";
   context = Global; description = "Help" }
 
 let minimap = {
-  name = "minimap"; codes = [Curses.Key.f 2]; kitty_codes = [(Char.code 'm', 5)];
+  name = "minimap"; codes = [266]; kitty_codes = [(Char.code 'm', 5)];
   display = "F2"; context = Global; description = "Minimap" }
 
 let theme_menu = {
-  name = "theme_menu"; codes = [Curses.Key.f 3]; kitty_codes = []; display = "F3";
+  name = "theme_menu"; codes = [267]; kitty_codes = []; display = "F3";
   context = Global; description = "Theme" }
 
 let reload = {
-  name = "reload"; codes = [Curses.Key.f 4]; kitty_codes = []; display = "F4";
+  name = "reload"; codes = [268]; kitty_codes = []; display = "F4";
   context = Global; description = "Reload" }
 
 let build_menu = {
-  name = "build_menu"; codes = [Curses.Key.f 5]; kitty_codes = []; display = "F5";
+  name = "build_menu"; codes = [269]; kitty_codes = []; display = "F5";
   context = Global; description = "Build" }
 
 (* --- Query submenu --- *)
@@ -372,14 +372,14 @@ let raw_key_of_event = function
   | KittyKey kk when kk.kk_modifier = 1 -> Some kk.kk_keycode
   | _ -> None
 
-(* Check if event is a mouse event *)
+(* Check if event is a mouse event — legacy, always false in new Input system *)
 let is_mouse_event = function
-  | RawKey ch -> ch = Curses.Key.mouse
+  | RawKey _ch -> false  (* no longer using ncurses mouse codes *)
   | _ -> false
 
-(* Check if event is a resize event *)
+(* Check if event is a resize event — legacy, always false in new Input system *)
 let is_resize_event = function
-  | RawKey ch -> ch = Curses.Key.resize
+  | RawKey _ch -> false  (* no longer using ncurses resize codes *)
   | _ -> false
 
 (* Parse a CSI u sequence from a string of bytes after "ESC [".
@@ -484,8 +484,8 @@ let read_key_event ~peek ~block ~getch () =
         end else begin
           (* Other CSI ~ sequence — try to map to a curses key *)
           match int_of_string_opt params with
-          | Some 5 -> Some (RawKey Curses.Key.ppage)
-          | Some 6 -> Some (RawKey Curses.Key.npage)
+          | Some 5 -> Some (RawKey 339)  (* page up *)
+          | Some 6 -> Some (RawKey 338)  (* page down *)
           | Some n -> Some (RawKey (1000 + n))  (* arbitrary mapping *)
           | None -> Some (RawKey 27)
         end
@@ -499,10 +499,10 @@ let read_key_event ~peek ~block ~getch () =
             | _ -> 1
         in
         let base = match !final with
-          | c when c = Char.code 'A' -> Curses.Key.up
-          | c when c = Char.code 'B' -> Curses.Key.down
-          | c when c = Char.code 'C' -> Curses.Key.right
-          | c when c = Char.code 'D' -> Curses.Key.left
+          | c when c = Char.code 'A' -> 259  (* up *)
+          | c when c = Char.code 'B' -> 258  (* down *)
+          | c when c = Char.code 'C' -> 261  (* right *)
+          | c when c = Char.code 'D' -> 260  (* left *)
           | _ -> 0
         in
         if modifier = 1 then Some (RawKey base)
@@ -533,23 +533,18 @@ let read_key_event ~peek ~block ~getch () =
           Some (RawKey kc)
         end
       end
-      else if !final = Char.code 'H' then Some (RawKey Curses.Key.home)
-      else if !final = Char.code 'F' then Some (RawKey Curses.Key.end_)
+      else if !final = Char.code 'H' then Some (RawKey 262)  (* home *)
+      else if !final = Char.code 'F' then Some (RawKey 360)  (* end *)
       else if !final = Char.code 'M' then begin
-        (* Mouse event — put back ESC [ M and let ncurses handle it.
-           Actually, we can't ungetch a whole sequence. Return as mouse. *)
-        Some (RawKey Curses.Key.mouse)
+        (* Mouse event — legacy path, should not occur with Input.read_event *)
+        Some (RawKey 27)
       end
       else
         Some (RawKey 27)  (* unknown CSI *)
     end
     else begin
       (* ESC + non-[ — could be Alt+key or compose *)
-      (* Return ESC, then the next char needs to be re-processed.
-         We can't really "put back" next, so return a special. *)
-      (* For now, return RawKey 27 and let the existing ESC handler
-         in editor.ml deal with next via peek_getch *)
-      ignore (Curses.ungetch next);
+      (* Return ESC; in the new Input system this path shouldn't be used *)
       Some (RawKey 27)
     end
   end
