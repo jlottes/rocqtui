@@ -69,15 +69,9 @@ let () =
   if Tab.count mgr > 1 then
     Render.set_tab_bar r true;
   (* Tab bar click handler *)
-  (* 0=no render, 1=render, 2=full render *)
-  let needs_render = ref 2 in
-  let request_render () =
-    if !needs_render = 0 then needs_render := 1 in
-  let request_full_render () =
-    needs_render := 2 in
   Editor.set_tab_bar_click_handler (fun x ->
     match Tab.tab_at_x mgr x with
-    | Some i -> mgr.active <- i; request_render ()
+    | Some i -> mgr.active <- i; Render_need.request ()
     | None -> ());
   (* Start MCP server *)
   let mcp = Mcp_server.create () in
@@ -158,11 +152,11 @@ let () =
            Render.set_status r "Error saving file."
        | None ->
          Render.set_status r "No filename.");
-      request_render ()
+      Render_need.request ()
     end else begin
       let t = Tab.active_tab mgr in
       ignore (Editor.handle_event ev t r);
-      request_render ()
+      Render_need.request ()
     end
   in
   (* Check if event matches ^W *)
@@ -179,12 +173,12 @@ let () =
             ignore (Tab.close_active mgr);
             if Tab.count mgr <= 1 then
               Render.set_tab_bar r false;
-            request_render ())
+            Render_need.request ())
       else begin
         ignore (Tab.close_active mgr);
         if Tab.count mgr <= 1 then
           Render.set_tab_bar r false;
-        request_render ()
+        Render_need.request ()
       end
     end else begin
       (* Last tab -- same as quit *)
@@ -219,12 +213,12 @@ let () =
     let ready = Main_loop.select_with_watches extra_fds timeout in
     (* Handle MCP connections/messages *)
     if Mcp_server.handle_ready mcp ready mgr then begin
-      request_render ();
+      Render_need.request ();
       if Tab.count mgr > 1 then
         Render.set_tab_bar r true
     end;
     (* Poll build subprocess *)
-    if Build.poll () then request_render ();
+    if Build.poll () then Render_need.request ();
     (* Poll file watcher *)
     if File_watch.poll watcher then begin
       let changed = File_watch.take_changed watcher in
@@ -239,7 +233,7 @@ let () =
               Render.set_status r
                 (Printf.sprintf "%s changed on disk (buffer has unsaved changes)"
                    (Filename.basename path));
-              request_render ()
+              Render_need.request ()
             end else if vend > 0 then begin
               let old_text = Buffer.text t.buf in
               let new_text = try
@@ -258,14 +252,14 @@ let () =
                 Render.set_status r
                   (Printf.sprintf "%s changed on disk (verified region affected)"
                      (Filename.basename path));
-                request_render ()
+                Render_need.request ()
               end else begin
                 Buffer.reload t.buf;
                 Buffer.set_disk_changed t.buf false;
                 File_watch.add_watch watcher path;
                 Render.set_status r
                   (Printf.sprintf "%s reloaded" (Filename.basename path));
-                request_render ()
+                Render_need.request ()
               end
             end else begin
               Buffer.reload t.buf;
@@ -273,7 +267,7 @@ let () =
               File_watch.add_watch watcher path;
               Render.set_status r
                 (Printf.sprintf "%s reloaded" (Filename.basename path));
-              request_render ()
+              Render_need.request ()
             end
           | _ -> ()
         ) mgr.Tab.tabs
@@ -281,7 +275,7 @@ let () =
     end;
     (* Poll ALL sessions *)
     if Tab.poll_all mgr then begin
-      request_render ();
+      Render_need.request ();
       Mcp_server.poll_notifications mcp mgr
     end;
     (* Handle keyboard input *)
@@ -295,11 +289,11 @@ let () =
           (* Resize and refresh — handled here so we can set FullRender *)
           if (match ev with Input.Resize -> true | _ -> false) then begin
             Render.resize r;
-            request_full_render ()
+            Render_need.request_full ()
           end
           else if (match ev with
               | Input.Special (Input.F 12, _) -> true | _ -> false) then
-            request_full_render ()
+            Render_need.request_full ()
           (* Tab management keys *)
           else if (match ev with
               | Input.Key (110, m) when m.ctrl -> true  (* ^N *)
@@ -307,19 +301,19 @@ let () =
             let active = Tab.active_tab mgr in
             Tab.add_tab mgr (Tab.create_blank ~args:active.session_args ());
             Render.set_tab_bar r true;
-            request_render ()
+            Render_need.request ()
           end
           else if (match ev with
               | Input.Special (Input.Left, m) when m.alt -> true
               | _ -> false) then begin
             Tab.prev_tab mgr;
-            request_render ()
+            Render_need.request ()
           end
           else if (match ev with
               | Input.Special (Input.Right, m) when m.alt -> true
               | _ -> false) then begin
             Tab.next_tab mgr;
-            request_render ()
+            Render_need.request ()
           end
           else begin
             match Editor.handle_event ev tab r with
@@ -337,7 +331,7 @@ let () =
                    File_watch.add_watch watcher path;
                    Render.set_status r
                      (Printf.sprintf "%s reloaded" (Filename.basename path));
-                   request_render ()
+                   Render_need.request ()
                  in
                  if Buffer.modified tab.buf then begin
                    Render.set_status r
@@ -349,12 +343,12 @@ let () =
                    if is_f4 then
                      do_reload ()
                    else
-                     request_render ()
+                     Render_need.request ()
                  end else
                    do_reload ()
                | None ->
                  Render.set_status r "No filename.");
-              request_render ()
+              Render_need.request ()
             | Editor.Save_prompt ->
               (match Buffer.filename tab.buf with
                | Some _ ->
@@ -389,7 +383,7 @@ let () =
                  end
                | None ->
                  Render.set_status r "No filename.");
-              request_render ()
+              Render_need.request ()
             | Editor.Jump_back jp ->
               let found = match Tab.find_by_id mgr jp.jp_tab_id with
                 | Some _ ->
@@ -416,7 +410,7 @@ let () =
               end;
               let active = Tab.active_tab mgr in
               Buffer.move_to active.buf jp.jp_line jp.jp_col;
-              request_render ()
+              Render_need.request ()
             | Editor.Open_file path ->
               let jump = Editor.take_jump_target () in
               let existing = List.find_opt (fun (t : Tab.t) ->
@@ -438,19 +432,19 @@ let () =
                  let active = Tab.active_tab mgr in
                  Buffer.move_to active.buf line col
                | None -> ());
-              request_render ()
+              Render_need.request ()
             | Editor.Continue ->
-              request_render ()
+              Render_need.request ()
           end;
           if !running then drain ()
       in
       drain ()
     end;
     (* Render once at the end if needed *)
-    if !needs_render > 0 then begin
-      render ~force:(!needs_render >= 2) ();
-      needs_render := 0
-    end
+    (match Render_need.take () with
+     | Render_need.No -> ()
+     | Render_need.Yes -> render ()
+     | Render_need.Full -> render ~force:true ())
   done;
   Mcp_server.shutdown mcp;
   File_watch.close watcher;

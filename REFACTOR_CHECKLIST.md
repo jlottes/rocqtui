@@ -2,10 +2,10 @@
 
 Progress tracker for REFACTOR.md items, in priority order.
 
-## H. Render Scheduling
-- [ ] Define `render_need` type in a module (not inline int)
-- [ ] Replace `needs_render : int ref` with proper type
-- [ ] Clean up `request_render` / `request_full_render` helpers
+## H. Render Scheduling ✅
+- [x] Define `render_need` type in a module (not inline int)
+- [x] Replace `needs_render : int ref` with proper type
+- [x] Clean up `request_render` / `request_full_render` helpers
 
 ## E. Extract File Manager
 - [ ] Create `file_manager.ml` module
