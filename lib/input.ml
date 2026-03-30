@@ -43,6 +43,12 @@ type event =
   | Resize
   | Unknown
 
+let debug_log : (string -> unit) option ref = ref None
+
+let set_debug_log f = debug_log := Some f
+
+let log msg = match !debug_log with Some f -> f msg | None -> ()
+
 (* Read a single byte from fd with timeout (seconds).
    Returns -1 on timeout, error, or EINTR (signal interrupted). *)
 let read_byte fd timeout =
@@ -53,7 +59,12 @@ let read_byte fd timeout =
       let buf = Bytes.create 1 in
       let n = Unix.read fd buf 0 1 in
       if n = 0 then -1
-      else Char.code (Bytes.get buf 0)
+      else begin
+        let b = Char.code (Bytes.get buf 0) in
+        log (Printf.sprintf "  read_byte: 0x%02x (%d) '%s'"
+               b b (if b >= 32 && b < 127 then String.make 1 (Char.chr b) else ""));
+        b
+      end
     end
   with
   | Unix.Unix_error (Unix.EINTR, _, _) -> -1  (* signal interrupted *)
@@ -122,6 +133,9 @@ let parse_csi fd =
     end
     else
       (* Final byte 0x40-0x7E *)
+      let _ = log (Printf.sprintf "  parse_csi: final=0x%02x '%c' params=%S"
+             b (if b >= 32 && b < 127 then Char.chr b else '?')
+             (Stdlib.Buffer.contents params)) in
       let param_str = Stdlib.Buffer.contents params in
       let plist = parse_params param_str in
       let mods_from p = if p > 1 then modifier_of_param p else no_mod in
@@ -146,6 +160,10 @@ let parse_csi fd =
          | 3 -> Special (Delete, m)
          | 5 -> Special (PageUp, m)
          | 6 -> Special (PageDown, m)
+         | 11 -> Special (F 1, m)
+         | 12 -> Special (F 2, m)
+         | 13 -> Special (F 3, m)
+         | 14 -> Special (F 4, m)
          | 15 -> Special (F 5, m)
          | 17 -> Special (F 6, m)
          | 18 -> Special (F 7, m)
@@ -206,7 +224,40 @@ let parse_csi fd =
          | 57353 -> Special (Down, m)
          | 57354 -> Special (Right, m)
          | 57355 -> Special (Left, m)
+         | 57358 -> Special (Insert, m)
+         | 57359 -> Special (Delete, m)
+         | 57360 -> Special (Home, m)
+         | 57361 -> Special (End, m)
+         | 57362 -> Special (PageUp, m)
+         | 57363 -> Special (PageDown, m)
+         | n when n >= 57364 && n <= 57375 ->
+           Special (F (n - 57364 + 1), m)  (* F1-F12 *)
          | n -> Key (n, m))
+      | 'M' | 'm' when String.length param_str > 0 && param_str.[0] = '<' ->
+        (* SGR mouse: CSI < Pb ; Px ; Py M/m
+           '<' was consumed as a param byte, so param_str = "<Pb;Px;Py" *)
+        let is_release = (Char.chr b = 'm') in
+        let sgr_params = String.sub param_str 1 (String.length param_str - 1) in
+        let parts = String.split_on_char ';' sgr_params in
+        (match parts with
+         | [btn_s; x_s; y_s] ->
+           let btn = (match int_of_string_opt btn_s with Some n -> n | None -> 0) in
+           let x = (match int_of_string_opt x_s with Some n -> n - 1 | None -> 0) in
+           let y = (match int_of_string_opt y_s with Some n -> n - 1 | None -> 0) in
+           let button =
+             if btn land 64 <> 0 then
+               (if btn land 1 <> 0 then ScrollDown else ScrollUp)
+             else if is_release then Release
+             else (match btn land 3 with
+                   | 0 -> Left | 1 -> Middle | 2 -> Right
+                   | _ -> Left)
+           in
+           let mods = { shift = btn land 4 <> 0;
+                        alt = btn land 8 <> 0;
+                        ctrl = btn land 16 <> 0;
+                        super = false } in
+           Mouse { button; x; y; mods }
+         | _ -> Unknown)
       | 'M' ->
         (* X10 mouse — 3 bytes follow *)
         let cb = read_byte fd 0.05 in
@@ -229,19 +280,6 @@ let parse_csi fd =
                        ctrl = btn land 16 <> 0;
                        super = false } in
           Mouse { button; x; y; mods }
-      | '<' ->
-        (* SGR mouse: CSI < btn ; x ; y [Mm] *)
-        (* We already consumed '<' into params. Re-parse. *)
-        let rest = Stdlib.Buffer.create 16 in
-        Stdlib.Buffer.add_string rest param_str;
-        (* The '<' was a parameter prefix; params has everything after it.
-           Actually, '<' was consumed as a param byte. Let's re-parse.
-           param_str looks like "<btn;x;y" and final byte is 'M' or 'm'. *)
-        (* We need to keep reading — '<' was consumed but M/m is the final byte.
-           This path is entered when final='<', which is wrong. Let me handle
-           SGR mouse differently. *)
-        ignore rest;
-        Unknown
       | _ -> Unknown
   in
   (* Check for SGR mouse: ESC [ < ... M/m
@@ -284,8 +322,48 @@ let parse_csi fd =
        Mouse { button; x; y; mods }
      | _ -> Unknown)
   end
+  else if first >= 0x40 && first <= 0x7E then begin
+    (* First byte is already the final byte (e.g., ESC [ A for arrow up) *)
+    (* Synthesize a call to the final-byte handler with empty params *)
+    Stdlib.Buffer.clear params;
+    let b = first in
+    let param_str = "" in
+    let plist = parse_params param_str in
+    let mods_from p = if p > 1 then modifier_of_param p else no_mod in
+    match Char.chr b with
+    | 'A' -> let m = match plist with _ :: p :: _ -> mods_from p | _ -> no_mod in
+             Special (Up, m)
+    | 'B' -> let m = match plist with _ :: p :: _ -> mods_from p | _ -> no_mod in
+             Special (Down, m)
+    | 'C' -> let m = match plist with _ :: p :: _ -> mods_from p | _ -> no_mod in
+             Special (Right, m)
+    | 'D' -> let m = match plist with _ :: p :: _ -> mods_from p | _ -> no_mod in
+             Special (Left, m)
+    | 'H' -> Special (Home, no_mod)
+    | 'F' -> Special (End, no_mod)
+    | 'M' ->
+      (* X10 mouse with no params *)
+      let cb = read_byte fd 0.05 in
+      let cx = read_byte fd 0.05 in
+      let cy = read_byte fd 0.05 in
+      if cb < 0 || cx < 0 || cy < 0 then Unknown
+      else
+        let btn = cb - 32 in
+        let x = cx - 33 in
+        let y = cy - 33 in
+        let button = match btn land 3 with
+          | 0 -> Left | 1 -> Middle | 2 -> Right | 3 -> Release
+          | _ -> Left in
+        let button = if btn land 64 <> 0 then
+          (if btn land 1 <> 0 then ScrollDown else ScrollUp)
+        else button in
+        let mods = { shift = btn land 4 <> 0; alt = btn land 8 <> 0;
+                     ctrl = btn land 16 <> 0; super = false } in
+        Mouse { button; x; y; mods }
+    | _ -> Unknown
+  end
   else begin
-    (* Regular CSI — put first byte into params and continue *)
+    (* First byte is a parameter byte — accumulate and continue *)
     Stdlib.Buffer.add_char params (Char.chr first);
     read_params ()
   end
@@ -310,9 +388,10 @@ let parse_ss3 fd =
 (* Read one complete input event. Returns None on timeout. *)
 let read_event ?(timeout=(-1.0)) fd =
   (* Check for pending resize before reading *)
-  if Term.check_resize () then Some Resize
+  if Term.check_resize () then (log "read_event: Resize"; Some Resize)
   else
   let b = read_byte fd timeout in
+  log (Printf.sprintf "read_event: first byte = 0x%02x (%d)" (max 0 b) b);
   (* Check again after blocking — signal may have interrupted select *)
   if b < 0 && Term.check_resize () then Some Resize
   else

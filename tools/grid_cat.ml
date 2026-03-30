@@ -4,13 +4,15 @@
 
 let () =
   let use_color = ref false in
+  let debug = ref false in
   let filename = ref "" in
   let args = Array.to_list Sys.argv |> List.tl in
   let rec parse = function
     | "-color" :: rest -> use_color := true; parse rest
+    | "-debug" :: rest -> debug := true; parse rest
     | [f] -> filename := f
     | [] -> ()
-    | _ -> Printf.eprintf "Usage: grid_cat [-color] file\n"; exit 1
+    | _ -> Printf.eprintf "Usage: grid_cat [-color] [-debug] file\n"; exit 1
   in
   parse args;
   if !filename = "" then begin
@@ -34,6 +36,15 @@ let () =
   let starts_with s prefix =
     String.length s >= String.length prefix
     && String.sub s 0 (String.length prefix) = prefix in
+
+  let last_event = ref "" in
+  let last_raw = ref "" in
+  let log_oc = if !debug then Some (open_out "/tmp/grid_cat_debug.log") else None in
+  let log msg = match log_oc with
+    | Some oc -> output_string oc (msg ^ "\n"); Stdlib.flush oc
+    | None -> () in
+
+  if !debug then Input.set_debug_log log;
 
   let render () =
     let g = Render.curr r in
@@ -93,8 +104,10 @@ let () =
     let max_s = max 1 (num_lines - content_h) in
     let pct = if num_lines <= content_h then 100
               else !scroll * 100 / max_s in
+    let debug_info = if !debug && !last_event <> "" then
+      "  | " ^ !last_event else "" in
     ignore (Grid.put_str g ~row:(th - 1) ~col:0
-      (Printf.sprintf " \xe2\x86\x91\xe2\x86\x93:scroll  PgUp/PgDn  q:quit  %d%%  %d lines" pct num_lines)
+      (Printf.sprintf " \xe2\x86\x91\xe2\x86\x93:scroll  q:quit  %d%%  %d lines%s" pct num_lines debug_info)
       status_attr);
 
     Render.present r
@@ -107,6 +120,9 @@ let () =
     match Input.read_event ~timeout:1.0 Unix.stdin with
     | None -> ()
     | Some ev ->
+      let ev_str = Input.show_event ev in
+      last_event := ev_str;
+      log (Printf.sprintf "event: %s" ev_str);
       let (th, _) = Term.size () in
       let content_h = th - 2 in
       let max_scroll = max 0 (num_lines - content_h) in
@@ -140,4 +156,6 @@ let () =
        | _ -> ())
   done;
 
+  (match log_oc with Some oc -> close_out oc | None -> ());
+  ignore last_raw;
   Term.teardown ()

@@ -153,7 +153,7 @@ let chgat t pane ~row ~col ~width attr =
         t.curr.cells.(abs_row).(c).attr <- attr
     done
 
-(* Clear a pane *)
+(* Clear a pane — content panes use theme default, UI panes use their own *)
 let clear_pane t pane =
   let r = match pane with
     | PScript -> t.script | PGoals -> t.goals
@@ -161,8 +161,13 @@ let clear_pane t pane =
     | PMinimap -> t.minimap_rect | PTabBar -> { row = 0; col = 0; height = 1; width = t.term_w }
     | _ -> empty_rect
   in
+  let attr = match pane with
+    | PScript | PGoals | PMessages -> (Theme.attrs ()).ga_default
+    | PStatus -> (Theme.attrs ()).ga_status
+    | _ -> Grid.default_attr
+  in
   Grid.clear_region t.curr ~row:r.row ~col:r.col
-    ~height:r.height ~width:r.width ~attr:Grid.default_attr
+    ~height:r.height ~width:r.width ~attr
 
 (* Get pane dimensions *)
 let pane_dims t pane =
@@ -190,8 +195,7 @@ let curr t = t.curr
 
 let draw_chrome t ?(goals_focused=false) ?(messages_focused=false)
     ?(msg_tab_names=[]) ?(msg_tab_active=0) () =
-  let border_attr = { Grid.default_attr with
-    fg = Grid.Color256 37; bold = false } in  (* cyan border *)
+  let border_attr = (Theme.attrs ()).ga_border in
   let top = if t.has_tab_bar then 1 else 0 in
   (* Vertical divider *)
   for row = top to t.term_h - 2 do
@@ -208,8 +212,7 @@ let draw_chrome t ?(goals_focused=false) ?(messages_focused=false)
   let label_attr = { border_attr with bold = true } in
   ignore (Grid.put_str t.curr ~row:top ~col:(t.split_col + 2) goals_label label_attr);
   (* Messages tab bar *)
-  let tab_active_attr = { Grid.default_attr with bold = true;
-    fg = Grid.Color256 15; bg = Grid.Color256 238 } in
+  let tab_active_attr = (Theme.attrs ()).ga_tab_active in
   let col = ref (t.split_col + 2) in
   List.iteri (fun i name ->
     let is_active = (i = msg_tab_active) in
@@ -279,10 +282,8 @@ let set_cursor_visible t v = t.cursor_visible <- v
 let draw_tab_bar t tabs active =
   if not t.has_tab_bar then ()
   else begin
-    let inactive_attr = { Grid.default_attr with
-      fg = Grid.Color256 250; bg = Grid.Color256 236 } in
-    let active_attr = { Grid.default_attr with
-      fg = Grid.Color256 15; bg = Grid.Color256 238; bold = true } in
+    let inactive_attr = (Theme.attrs ()).ga_tab_inactive in
+    let active_attr = (Theme.attrs ()).ga_tab_active in
     (* Fill background *)
     Grid.fill t.curr ~row:0 ~col:0 ~width:t.term_w ' ' inactive_attr;
     let col = ref 1 in
@@ -305,8 +306,7 @@ let draw_tab_bar t tabs active =
 (* --- Status bar --- *)
 
 let set_status t text =
-  let attr = { Grid.default_attr with
-    fg = Grid.Color256 0; bg = Grid.Color256 37 } in  (* status colors *)
+  let attr = (Theme.attrs ()).ga_status in
   Grid.fill t.curr ~row:t.status.row ~col:0 ~width:t.term_w ' ' attr;
   ignore (Grid.put_str t.curr ~row:t.status.row ~col:1 text attr)
 
@@ -327,15 +327,18 @@ let clear_overlay () =
 
 (* --- Flush --- *)
 
-(* Diff current vs previous, write ANSI to stdout, swap buffers. *)
-let present t =
+(* Diff current vs previous, write ANSI to stdout, swap buffers.
+   [force]: skip diff, emit every cell. *)
+let present ?(force=false) t =
   (* Apply overlay if any *)
   (match !overlay_ref with
    | Some ov -> ov.render t.curr ov.rect
    | None -> ());
-  (* Diff and output *)
   let buf = Stdlib.Buffer.create 4096 in
-  Grid.diff ~prev:t.prev ~curr:t.curr buf;
+  if force then
+    Grid.emit_all t.curr buf
+  else
+    Grid.diff ~prev:t.prev ~curr:t.curr buf;
   (* Position cursor *)
   if t.cursor_visible then begin
     Stdlib.Buffer.add_string buf

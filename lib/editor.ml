@@ -227,7 +227,7 @@ let render_text_pane ?(sel : Tab.pane_selection option) ?set_cache
   List.iteri (fun i line ->
     let row = i - !scroll_ref in
     if row >= 0 && row < rows then
-      ignore (Render.put_str r pane ~row ~col:1 line Grid.default_attr)
+      ignore (Render.put_str r pane ~row ~col:1 line (Theme.attrs ()).ga_default)
   ) wrapped;
   (* Highlight selection if any *)
   (match sel with
@@ -340,7 +340,7 @@ let render_help_screen r =
       let line = List.nth help_lines idx in
       let trunc = if String.length line > cols then String.sub line 0 cols
                   else line in
-      ignore (Render.put_str r Render.PScript ~row ~col:0 trunc Grid.default_attr)
+      ignore (Render.put_str r Render.PScript ~row ~col:0 trunc (Theme.attrs ()).ga_default)
     end
   done
 
@@ -694,7 +694,13 @@ let update_status r (tab : Tab.t) =
   end
 
 let render_all r (tab : Tab.t) =
-  Grid.clear (Render.curr r);
+  (* Clear content panes — not the tab bar or other UI chrome *)
+  Render.clear_pane r Render.PScript;
+  Render.clear_pane r Render.PGoals;
+  Render.clear_pane r Render.PMessages;
+  Render.clear_pane r Render.PStatus;
+  if Render.minimap_width r > 0 then
+    Render.clear_pane r Render.PMinimap;
   let msg_tab_names = List.map (fun (mt : Tab.msg_tab) -> mt.mt_name)
                         tab.msg.mt_tabs in
   Render.draw_chrome r
@@ -859,24 +865,26 @@ let match_binding (ev : Input.event) (b : Keys.binding) =
            let has_alt = mods.alt in
            let has_ctrl = mods.ctrl in
            let has_shift = mods.shift in
+           (* Map modified arrows to ALL legacy ncurses code variants *)
            let mapped = match key with
              | Input.Up ->
-               if has_alt then Some 564 else if has_ctrl then Some 567
-               else if has_shift then Some 337 else None
+               if has_alt then [564; 567; 573; 558]
+               else if has_ctrl then [567; 573; 558]
+               else if has_shift then [337] else []
              | Input.Down ->
-               if has_alt then Some 523 else if has_ctrl then Some 526
-               else if has_shift then Some 336 else None
+               if has_alt then [523; 526; 532; 517]
+               else if has_ctrl then [526; 532; 517]
+               else if has_shift then [336] else []
              | Input.Right ->
-               if has_alt then Some 558 else if has_ctrl then Some 561
-               else if has_shift then Some 402 else None
+               if has_alt then [558; 561] else if has_ctrl then [561]
+               else if has_shift then [402] else []
              | Input.Left ->
-               if has_alt then Some 543 else if has_ctrl then Some 546
-               else if has_shift then Some 393 else None
-             | _ -> None
+               if has_alt then [543; 546; 552]
+               else if has_ctrl then [546]
+               else if has_shift then [393] else []
+             | _ -> []
            in
-           (match mapped with
-            | Some c -> List.mem c b.codes
-            | None -> false)
+           List.exists (fun c -> List.mem c b.codes) mapped
          end
        end
      | None -> false)
@@ -1229,7 +1237,8 @@ let handle_event (ev : Input.event) (tab : Tab.t) r =
       Some Continue
     end
     else if (match ev with Input.Resize -> true | _ -> false) then begin
-      Render.resize r; Some Continue
+      Render.resize r;
+      Some Continue
     end
     else if !in_help_mode then begin
       let (rows, _) = Render.pane_dims r Render.PScript in
@@ -1309,8 +1318,12 @@ let handle_event (ev : Input.event) (tab : Tab.t) r =
              ps.ps_cursor_col <- byte_col
            | None -> ())
         end;
-        if is_release then
-          tab.mouse_selecting <- false
+        if is_release then begin
+          tab.mouse_selecting <- false;
+          (* If no actual drag occurred (anchor == cursor), clear selection *)
+          if Buffer.selection buf = None then
+            Buffer.clear_selection buf
+        end
       end
       else begin
         let pane = Render.pane_at r ~x ~y in
@@ -1405,11 +1418,12 @@ let handle_event (ev : Input.event) (tab : Tab.t) r =
             | None -> ()
           end
           else begin
-            (* Start drag selection *)
+            (* Click — position cursor; set anchor for potential drag *)
             match screen_to_buffer_pos r buf ~x ~y with
             | Some (line, byte_col) ->
               Buffer.clear_selection buf;
               Buffer.move_to buf line byte_col;
+              (* Anchor is set for drag, but cleared on release if no drag occurred *)
               Buffer.set_anchor buf;
               tab.mouse_selecting <- true
             | None -> ()

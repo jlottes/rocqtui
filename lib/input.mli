@@ -40,3 +40,6 @@ val read_event : ?timeout:float -> Unix.file_descr -> event option
 
 (** Pretty-print an event for debugging. *)
 val show_event : event -> string
+
+(** Set a debug logging function. *)
+val set_debug_log : (string -> unit) -> unit

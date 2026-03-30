@@ -68,5 +68,6 @@ val set_overlay : rect -> (Grid.t -> rect -> unit) -> unit
 val clear_overlay : unit -> unit
 
 (** Diff current vs previous, write to terminal, swap buffers.
+    [force]: skip diff, emit every cell (full redraw).
     Call after all rendering is done for this frame. *)
-val present : t -> unit
+val present : ?force:bool -> t -> unit

@@ -198,7 +198,8 @@ let open_picker ~project_dir ~project_file ~open_files =
   state := Some t
 
 let close () =
-  state := None
+  state := None;
+  Render.clear_overlay ()
 
 let move_selection delta =
   match !state with
@@ -416,31 +417,27 @@ let render_overlay grid (rect : Render.rect) t =
       in
       if idx = t.selected then begin
         let rev_attr = { Grid.default_attr with reverse = true } in
-        ignore (Grid.put_str grid ~row ~col:(box_left + 2)
-          (prefix_text ^ name_trunc) rev_attr);
-        let remaining = content_width - String.length prefix_text
-                        - String.length name_trunc in
-        for c = 1 to remaining do
-          ignore c;
+        let cols_used = Grid.put_str grid ~row ~col:(box_left + 2)
+          (prefix_text ^ name_trunc) rev_attr in
+        let remaining = content_width - cols_used in
+        for c = 0 to remaining - 1 do
           Grid.set_cell grid ~row
-            ~col:(box_left + 2 + String.length prefix_text
-                  + String.length name_trunc + c - 1)
-            " " rev_attr
+            ~col:(box_left + 2 + cols_used + c) " " rev_attr
         done
       end else begin
         let dim_attr = { Grid.default_attr with dim = true } in
         let bold_attr = { Grid.default_attr with bold = true } in
         let dim = not line.is_dir && not line.in_project
                   && t.mode = AllFiles in
-        ignore (Grid.put_str grid ~row ~col:(box_left + 2)
-          prefix_text normal_attr);
+        let prefix_cols = Grid.put_str grid ~row ~col:(box_left + 2)
+          prefix_text normal_attr in
         let name_attr =
           if line.is_dir then bold_attr
           else if dim then dim_attr
           else normal_attr
         in
         ignore (Grid.put_str grid ~row
-          ~col:(box_left + 2 + String.length prefix_text)
+          ~col:(box_left + 2 + prefix_cols)
           name_trunc name_attr)
       end
     end

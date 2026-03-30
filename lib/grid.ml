@@ -53,13 +53,13 @@ let resize g rows cols =
   g.rows <- rows;
   g.cols <- cols
 
-let clear g =
+let clear ?(attr=default_attr) g =
   for r = 0 to g.rows - 1 do
     for c = 0 to g.cols - 1 do
       let cell = g.cells.(r).(c) in
       cell.text <- " ";
       cell.width <- 1;
-      cell.attr <- default_attr
+      cell.attr <- attr
     done
   done
 
@@ -271,6 +271,26 @@ let emit_attr buf prev_attr attr =
       Stdlib.Buffer.add_char buf 'm'
     end
   end
+
+(* Generate ANSI output for all cells (full redraw). *)
+let emit_all curr buf =
+  let cur_attr = ref default_attr in
+  Stdlib.Buffer.add_string buf "\x1b[H";  (* home cursor *)
+  for r = 0 to curr.rows - 1 do
+    if r > 0 then
+      Stdlib.Buffer.add_string buf (Printf.sprintf "\x1b[%d;1H" (r + 1));
+    for c = 0 to curr.cols - 1 do
+      let cell = curr.cells.(r).(c) in
+      if cell.width = 0 then ()  (* skip continuation *)
+      else begin
+        emit_attr buf !cur_attr cell.attr;
+        cur_attr := cell.attr;
+        Stdlib.Buffer.add_string buf cell.text
+      end
+    done
+  done;
+  if !cur_attr <> default_attr then
+    Stdlib.Buffer.add_string buf "\x1b[0m"
 
 (* Generate ANSI output for changed cells. *)
 let diff ~prev ~curr buf =

@@ -163,6 +163,10 @@ let build_menu = {
   name = "build_menu"; codes = [269]; kitty_codes = []; display = "F5";
   context = Global; description = "Build" }
 
+let refresh_screen = {
+  name = "refresh_screen"; codes = [276]; kitty_codes = [];
+  display = "F12"; context = Global; description = "Refresh screen" }
+
 (* --- Query submenu --- *)
 
 let query_about = {
@@ -224,7 +228,7 @@ let build_cancel = {
 let navigation_bindings = [step_forward; step_backward; go_to_cursor; cycle_pane]
 let editing_bindings = [open_file; save; close_tab; quit; cut; paste; copy; undo; redo]
 let query_bindings = [about; print_query; jump_to_def; jump_back; query_menu]
-let display_bindings = [toggle_hyps; options_menu; help; minimap; theme_menu; reload; build_menu]
+let display_bindings = [toggle_hyps; options_menu; help; minimap; theme_menu; reload; build_menu; refresh_screen]
 let tab_bindings = [new_tab; prev_tab; next_tab]
 
 (* Generate a hint string from a list of bindings: "^S:Save ^W:Close ..." *)

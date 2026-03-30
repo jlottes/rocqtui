@@ -1,11 +1,10 @@
 (** Color theme system with 256-color support. *)
 
-type color = int  (** ncurses color number: 0-7 basic, 0-255 extended *)
+type color = Grid.color  (** Default, Basic, Color256, or TrueColor *)
 
 type t = {
   name : string;
 
-  (* Editor background: -1 for terminal default *)
   bg : color;
 
   (* Syntax highlighting foreground colors *)

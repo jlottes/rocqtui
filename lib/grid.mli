@@ -39,8 +39,8 @@ val create : int -> int -> t
 (** Resize the grid, preserving existing content where possible. *)
 val resize : t -> int -> int -> unit
 
-(** Clear the entire grid to spaces with default attributes. *)
-val clear : t -> unit
+(** Clear the entire grid to spaces. Uses default attributes unless overridden. *)
+val clear : ?attr:attr -> t -> unit
 
 (** Clear a rectangular region. *)
 val clear_region : t -> row:int -> col:int -> height:int -> width:int -> attr:attr -> unit
@@ -73,3 +73,6 @@ val wcwidth : int -> int
 
 (** Generate ANSI escape sequences for changed cells (diff rendering). *)
 val diff : prev:t -> curr:t -> Stdlib.Buffer.t -> unit
+
+(** Generate ANSI escape sequences for all cells (full redraw). *)
+val emit_all : t -> Stdlib.Buffer.t -> unit

@@ -1,4 +1,4 @@
-type color = int
+type color = Grid.color
 
 type t = {
   name : string;
@@ -23,35 +23,39 @@ type t = {
   selection_fg : color;
 }
 
-(* --- Solarized color palette (256-color approximations) --- *)
-(* Base colors *)
-let sol_base03  = 234  (* #002b36 - darkest bg *)
-let sol_base02  = 235  (* #073642 - dark bg *)
-let sol_base01  = 240  (* #586e75 - dark content / light emphasis *)
-let sol_base00  = 241  (* #657b83 *)
-let sol_base0   = 244  (* #839496 - default text *)
-let sol_base1   = 245  (* #93a1a1 - light content *)
-let _sol_base2  = 254  (* #eee8d5 *)
-let _sol_base3  = 230  (* #fdf6e3 - lightest bg *)
-let sol_yellow  = 136  (* #b58900 *)
-let sol_orange  = 166  (* #cb4b16 *)
-let sol_red     = 160  (* #dc322f *)
-let sol_magenta = 125  (* #d33682 *)
-let _sol_violet = 61   (* #6c71c4 *)
-let sol_blue    = 33   (* #268bd2 *)
-let sol_cyan    = 37   (* #2aa198 *)
-let _sol_green  = 64   (* #859900 *)
+(* Shorthand constructors *)
+let c n = Grid.Color256 n  (* 256-color *)
+let d = Grid.Default        (* terminal default *)
+let rgb r g b = Grid.TrueColor (r, g, b)
+
+(* --- Solarized color palette --- *)
+let sol_base03  = c 234    (* #002b36 - darkest bg *)
+let sol_base02  = c 235    (* #073642 - dark bg *)
+let sol_base01  = c 240    (* #586e75 - dark content / light emphasis *)
+let sol_base00  = c 241    (* #657b83 *)
+let _sol_base0  = c 244    (* #839496 - default text *)
+let sol_base1   = c 245    (* #93a1a1 - light content *)
+let _sol_base2  = c 254    (* #eee8d5 *)
+let _sol_base3  = c 230    (* #fdf6e3 - lightest bg *)
+let sol_yellow  = c 136    (* #b58900 *)
+let sol_orange  = c 166    (* #cb4b16 *)
+let sol_red     = c 160    (* #dc322f *)
+let sol_magenta = c 125    (* #d33682 *)
+let _sol_violet = c 61     (* #6c71c4 *)
+let sol_blue    = c 33   (* #268bd2 *)
+let sol_cyan    = c 37   (* #2aa198 *)
+let _sol_green  = c 64   (* #859900 *)
 
 let solarized_dark = {
   name = "solarized-dark";
-  bg = sol_base03;
+  bg = d;
   keyword_fg = sol_blue;
   tactic_fg = sol_cyan;
   comment_fg = sol_base01;
   string_fg = sol_yellow;
   bullet_fg = sol_orange;
   number_fg = sol_magenta;
-  default_fg = sol_base0;
+  default_fg = d;
   verified_bg = sol_base02;
   verified_fg = sol_base1;
   error_bg = sol_red;
@@ -67,7 +71,7 @@ let solarized_dark = {
 
 let solarized_light = {
   name = "solarized-light";
-  bg = 230;  (* sol_base3 *)
+  bg = c 230;
   keyword_fg = sol_blue;
   tactic_fg = sol_cyan;
   comment_fg = sol_base1;
@@ -75,89 +79,89 @@ let solarized_light = {
   bullet_fg = sol_orange;
   number_fg = sol_magenta;
   default_fg = sol_base00;
-  verified_bg = 254;  (* sol_base2 *)
+  verified_bg = rgb 0xe0 0xee 0xd0;  (* sol_base3 + subtle green tint *)
   verified_fg = sol_base01;
   error_bg = sol_red;
-  error_fg = 230;
-  processing_bg = 254;
-  processing_fg = sol_yellow;
-  status_bg = 254;
+  error_fg = c 230;
+  processing_bg = rgb 0xee 0xe8 0xc5;  (* sol_base3 + subtle warm tint *)
+  processing_fg = sol_base01;
+  status_bg = c 254;
   status_fg = sol_base01;
   border_fg = sol_base1;
   selection_bg = sol_base1;
-  selection_fg = 230;
+  selection_fg = c 230;
 }
 
 (* Classic: basic 8-color theme, works on any terminal *)
 let classic = {
   name = "classic";
-  bg = -1;
-  keyword_fg = 4;   (* blue *)
-  tactic_fg = 6;    (* cyan *)
-  comment_fg = 2;   (* green *)
-  string_fg = 3;    (* yellow *)
-  bullet_fg = 1;    (* red *)
-  number_fg = 5;    (* magenta *)
-  default_fg = -1;
-  verified_bg = 2;  (* green *)
-  verified_fg = 0;  (* black *)
-  error_bg = 1;     (* red *)
-  error_fg = 7;     (* white *)
-  processing_bg = 3; (* yellow *)
-  processing_fg = 0; (* black *)
-  status_bg = 6;    (* cyan *)
-  status_fg = 0;    (* black *)
-  border_fg = 6;    (* cyan *)
-  selection_bg = 4;  (* blue *)
-  selection_fg = 7;  (* white *)
+  bg = d;
+  keyword_fg = c 4;   (* blue *)
+  tactic_fg = c 6;    (* cyan *)
+  comment_fg = c 2;   (* green *)
+  string_fg = c 3;    (* yellow *)
+  bullet_fg = c 1;    (* red *)
+  number_fg = c 5;    (* magenta *)
+  default_fg = d;
+  verified_bg = c 2;  (* green *)
+  verified_fg = c 0;  (* black *)
+  error_bg = c 1;     (* red *)
+  error_fg = c 7;     (* white *)
+  processing_bg = c 3; (* yellow *)
+  processing_fg = c 0; (* black *)
+  status_bg = c 6;    (* cyan *)
+  status_fg = c 0;    (* black *)
+  border_fg = c 6;    (* cyan *)
+  selection_bg = c 4;  (* blue *)
+  selection_fg = c 7;  (* white *)
 }
 
 (* Monokai-inspired *)
 let monokai = {
   name = "monokai";
-  bg = 235;
-  keyword_fg = 197;  (* pinkish red *)
-  tactic_fg = 81;    (* light blue *)
-  comment_fg = 242;  (* gray *)
-  string_fg = 186;   (* light yellow *)
-  bullet_fg = 208;   (* orange *)
-  number_fg = 141;   (* purple *)
-  default_fg = 252;
-  verified_bg = 237;
-  verified_fg = 252;
-  error_bg = 196;
-  error_fg = 255;
-  processing_bg = 58;
-  processing_fg = 252;
-  status_bg = 238;
-  status_fg = 252;
-  border_fg = 245;
-  selection_bg = 239;
-  selection_fg = 255;
+  bg = c 235;
+  keyword_fg = c 197;
+  tactic_fg = c 81;
+  comment_fg = c 242;
+  string_fg = c 186;
+  bullet_fg = c 208;
+  number_fg = c 141;
+  default_fg = c 252;
+  verified_bg = rgb 0x30 0x38 0x28;  (* monokai bg + green tint *)
+  verified_fg = c 252;
+  error_bg = c 196;
+  error_fg = c 255;
+  processing_bg = rgb 0x38 0x34 0x20;  (* monokai bg + warm tint *)
+  processing_fg = c 252;
+  status_bg = c 238;
+  status_fg = c 252;
+  border_fg = c 245;
+  selection_bg = c 239;
+  selection_fg = c 255;
 }
 
 (* Nord *)
 let nord = {
   name = "nord";
-  bg = 236;       (* polar night *)
-  keyword_fg = 110; (* frost blue *)
-  tactic_fg = 108;  (* frost green *)
-  comment_fg = 60;  (* muted *)
-  string_fg = 107;  (* aurora green *)
-  bullet_fg = 173;  (* aurora orange *)
-  number_fg = 139;  (* aurora purple *)
-  default_fg = 253;
-  verified_bg = 238;
-  verified_fg = 253;
-  error_bg = 131;   (* aurora red *)
-  error_fg = 253;
-  processing_bg = 238;
-  processing_fg = 222; (* aurora yellow *)
-  status_bg = 238;
-  status_fg = 253;
-  border_fg = 60;
-  selection_bg = 60;
-  selection_fg = 253;
+  bg = c 236;
+  keyword_fg = c 110;
+  tactic_fg = c 108;
+  comment_fg = c 60;
+  string_fg = c 107;
+  bullet_fg = c 173;
+  number_fg = c 139;
+  default_fg = c 253;
+  verified_bg = rgb 0x30 0x38 0x40;  (* nord bg + subtle blue-green tint *)
+  verified_fg = c 253;
+  error_bg = c 131;
+  error_fg = c 253;
+  processing_bg = rgb 0x38 0x36 0x30;  (* nord bg + warm tint *)
+  processing_fg = c 253;
+  status_bg = c 238;
+  status_fg = c 253;
+  border_fg = c 60;
+  selection_bg = c 60;
+  selection_fg = c 253;
 }
 
 let default = solarized_dark
@@ -210,11 +214,8 @@ type grid_attrs = {
   ga_tab_inactive : Grid.attr;
 }
 
-let gc (c : int) : Grid.color =
-  if c = -1 then Grid.Default else Grid.Color256 c
-
-let make_attr ?(bold=false) fg bg : Grid.attr =
-  { Grid.fg = gc fg; bg = gc bg; bold; dim = false;
+let make_attr ?(bold=false) (fg : color) (bg : color) : Grid.attr =
+  { Grid.fg = fg; bg; bold; dim = false;
     reverse = false; underline = false }
 
 let grid_attrs_of_theme (theme : t) : grid_attrs =
@@ -233,7 +234,7 @@ let grid_attrs_of_theme (theme : t) : grid_attrs =
     ga_string_v = a theme.string_fg theme.verified_bg;
     ga_bullet_v = ab theme.bullet_fg theme.verified_bg;
     ga_number_v = a theme.number_fg theme.verified_bg;
-    ga_default_v = a theme.default_fg theme.verified_bg;
+    ga_default_v = a theme.verified_fg theme.verified_bg;
     ga_keyword_p = ab theme.keyword_fg theme.processing_bg;
     ga_tactic_p = a theme.tactic_fg theme.processing_bg;
     ga_comment_p = a theme.comment_fg theme.processing_bg;
@@ -248,7 +249,7 @@ let grid_attrs_of_theme (theme : t) : grid_attrs =
     ga_border = a theme.border_fg theme.bg;
     ga_selection = a theme.selection_fg theme.selection_bg;
     ga_tab_active = ab theme.status_fg theme.status_bg;
-    ga_tab_inactive = a theme.border_fg theme.bg;
+    ga_tab_inactive = a theme.border_fg theme.status_bg;
   }
 
 let current_attrs : grid_attrs ref = ref (grid_attrs_of_theme default)
