@@ -80,12 +80,11 @@ let () =
   (* Wire up open files callback for file picker *)
   Editor.set_open_files_fn (fun () ->
     List.filter_map (fun (t : Tab.t) -> Buffer.filename t.buf) mgr.tabs);
-  (* File watcher *)
-  let watcher = File_watch.create () in
-  (* Watch all initial files *)
+  (* File manager *)
+  let fm = File_manager.create () in
   List.iter (fun (t : Tab.t) ->
     match Buffer.filename t.buf with
-    | Some f -> File_watch.add_watch watcher f
+    | Some f -> File_manager.add_watch fm f
     | None -> ()
   ) mgr.tabs;
   (* Render helper *)
@@ -208,7 +207,7 @@ let () =
     let mcp_fds = Mcp_server.server_fd mcp :: Mcp_server.client_fds mcp in
     let build_fds = match Build.watch_fd () with
       | Some fd -> [fd] | None -> [] in
-    let watch_fds = [File_watch.watch_fd watcher] in
+    let watch_fds = [File_manager.watch_fd fm] in
     let extra_fds = stdin_fd :: mcp_fds @ build_fds @ watch_fds in
     let ready = Main_loop.select_with_watches extra_fds timeout in
     (* Handle MCP connections/messages *)
@@ -219,60 +218,21 @@ let () =
     end;
     (* Poll build subprocess *)
     if Build.poll () then Render_need.request ();
-    (* Poll file watcher *)
-    if File_watch.poll watcher then begin
-      let changed = File_watch.take_changed watcher in
-      List.iter (fun path ->
-        List.iter (fun (t : Tab.t) ->
-          match Buffer.filename t.buf with
-          | Some f when f = path ->
-            Buffer.set_disk_changed t.buf true;
-            let vend = match t.session with
-              | Some s -> Session.verified_end s | None -> 0 in
-            if Buffer.modified t.buf then begin
-              Render.set_status r
-                (Printf.sprintf "%s changed on disk (buffer has unsaved changes)"
-                   (Filename.basename path));
-              Render_need.request ()
-            end else if vend > 0 then begin
-              let old_text = Buffer.text t.buf in
-              let new_text = try
-                let ic = open_in path in
-                let s = In_channel.input_all ic in
-                close_in ic; s
-              with _ -> old_text in
-              let min_len = min (String.length old_text) (String.length new_text) in
-              let diff_at = ref min_len in
-              (try for i = 0 to min_len - 1 do
-                 if old_text.[i] <> new_text.[i] then begin
-                   diff_at := i; raise Exit
-                 end
-               done with Exit -> ());
-              if !diff_at < vend then begin
-                Render.set_status r
-                  (Printf.sprintf "%s changed on disk (verified region affected)"
-                     (Filename.basename path));
-                Render_need.request ()
-              end else begin
-                Buffer.reload t.buf;
-                Buffer.set_disk_changed t.buf false;
-                File_watch.add_watch watcher path;
-                Render.set_status r
-                  (Printf.sprintf "%s reloaded" (Filename.basename path));
-                Render_need.request ()
-              end
-            end else begin
-              Buffer.reload t.buf;
-              Buffer.set_disk_changed t.buf false;
-              File_watch.add_watch watcher path;
-              Render.set_status r
-                (Printf.sprintf "%s reloaded" (Filename.basename path));
-              Render_need.request ()
-            end
-          | _ -> ()
-        ) mgr.Tab.tabs
-      ) changed
-    end;
+    (* Poll file manager *)
+    List.iter (fun ev ->
+      let msg = match ev with
+        | File_manager.Reloaded p ->
+          Printf.sprintf "%s reloaded" (Filename.basename p)
+        | File_manager.DiskChanged p ->
+          Printf.sprintf "%s changed on disk (buffer has unsaved changes)"
+            (Filename.basename p)
+        | File_manager.VerifiedAffected p ->
+          Printf.sprintf "%s changed on disk (verified region affected)"
+            (Filename.basename p)
+      in
+      Render.set_status r msg;
+      Render_need.request ()
+    ) (File_manager.poll fm mgr.Tab.tabs);
     (* Poll ALL sessions *)
     if Tab.poll_all mgr then begin
       Render_need.request ();
@@ -324,11 +284,7 @@ let () =
               (match Buffer.filename tab.buf with
                | Some path ->
                  let do_reload () =
-                   (match tab.session with
-                    | Some s -> Session.go_to_offset s 0
-                    | None -> ());
-                   Buffer.reload tab.buf;
-                   File_watch.add_watch watcher path;
+                   File_manager.reload_tab fm tab path;
                    Render.set_status r
                      (Printf.sprintf "%s reloaded" (Filename.basename path));
                    Render_need.request ()
@@ -369,10 +325,9 @@ let () =
                      else
                        Render.set_status r "Error saving file."
                    end else if is_reload then begin
-                     Buffer.reload tab.buf;
-                     File_watch.add_watch watcher
-                       (match Buffer.filename tab.buf with
-                        | Some f -> f | None -> "");
+                     (match Buffer.filename tab.buf with
+                      | Some f -> File_manager.reload_tab fm tab f
+                      | None -> ());
                      Render.set_status r "Reloaded from disk."
                    end
                  end else begin
@@ -425,7 +380,7 @@ let () =
                  let (_pd, pargs) = Project.find_args (Some path) in
                  let new_tab = Tab.create_from_file ~args:(pargs @ extra_args) path in
                  Tab.add_tab mgr new_tab;
-                 File_watch.add_watch watcher path;
+                 File_manager.add_watch fm path;
                  Render.set_tab_bar r true);
               (match jump with
                | Some (line, col) ->
@@ -447,7 +402,7 @@ let () =
      | Render_need.Full -> render ~force:true ())
   done;
   Mcp_server.shutdown mcp;
-  File_watch.close watcher;
+  File_manager.close fm;
   List.iter (fun (tab : Tab.t) ->
     match tab.session with Some s -> Session.quit s | None -> ()
   ) mgr.tabs;

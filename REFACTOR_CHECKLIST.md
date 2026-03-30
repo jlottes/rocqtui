@@ -7,13 +7,14 @@ Progress tracker for REFACTOR.md items, in priority order.
 - [x] Replace `needs_render : int ref` with proper type
 - [x] Clean up `request_render` / `request_full_render` helpers
 
-## E. Extract File Manager
-- [ ] Create `file_manager.ml` module
-- [ ] Move file watching setup from main.ml
-- [ ] Move reload heuristics (verified region check, disk_changed)
-- [ ] Move reload prompting logic
-- [ ] Define `file_event` type for poll results
-- [ ] main.ml calls `File_manager.poll` and handles events
+## E. Extract File Manager ✅
+- [x] Create `file_manager.ml` module
+- [x] Move file watching setup from main.ml
+- [x] Move reload heuristics (verified region check, disk_changed)
+- [x] Move `reload_tab` (rewind session + reload + re-watch)
+- [x] Define `file_event` type (Reloaded, DiskChanged, VerifiedAffected)
+- [x] main.ml calls `File_manager.poll` and handles events
+- Note: prompt logic stays in main.ml (will move with Modal Manager)
 
 ## F. Dependency Injection for Callbacks
 - [ ] Define `editor_context` record type
