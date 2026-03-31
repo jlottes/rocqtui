@@ -255,6 +255,7 @@ let codepoint_of_event = function
   | Input.Special (Input.Tab, _) -> Some 9
   | Input.Special (Input.Enter, _) -> Some 13
   | Input.Special (Input.Backspace, _) -> Some 127
+  | Input.Special (Input.Escape, _) -> Some 27
   | _ -> None
 
 let rec handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r =
