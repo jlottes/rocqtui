@@ -26,12 +26,13 @@ Progress tracker for REFACTOR.md items, in priority order.
 - [x] Pass context to `handle_event` and `render_all`
 - [x] Remove all `set_*` functions from editor.mli
 
-## I. Tab Manager Enhancement
-- [ ] Add `Tab.open_or_switch` (create tab or switch to existing)
-- [ ] Move project args lookup into Tab module
-- [ ] Move file watcher registration into Tab module (or File_manager)
-- [ ] Move display bar enable/disable into Tab module
-- [ ] Simplify main.ml's Open_file / Jump_back handlers
+## I. Tab Manager Enhancement ✅
+- [x] Add `Tab.open_or_switch` (create tab or switch to existing)
+- [x] Add `Tab.switch_to_id` (switch by tab ID)
+- [x] Move project args lookup into `open_or_switch`
+- [x] Simplify main.ml's Open_file handler (30→10 lines)
+- [x] Simplify main.ml's Jump_back handler (25→12 lines)
+- Note: file watcher + tab bar enable stay in main.ml (per-action)
 
 ## B. Modal Manager
 - [ ] Define `modal` variant type (Help, QueryMenu, OptionsMenu, etc.)

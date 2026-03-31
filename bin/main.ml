@@ -341,48 +341,26 @@ let () =
                  Render.set_status r "No filename.");
               Render_need.request ()
             | Editor.Jump_back jp ->
-              let found = match Tab.find_by_id mgr jp.jp_tab_id with
-                | Some _ ->
-                  (match Tab.index_of_id mgr jp.jp_tab_id with
-                   | Some idx -> mgr.active <- idx; true
-                   | None -> false)
-                | None -> false
-              in
+              let found = Tab.switch_to_id mgr jp.jp_tab_id in
               if not found && jp.jp_file <> "" then begin
-                let existing = List.find_opt (fun (t : Tab.t) ->
-                  Buffer.filename t.buf = Some jp.jp_file
-                ) mgr.tabs in
-                (match existing with
-                 | Some t ->
-                   (match Tab.index_of_id mgr t.id with
-                    | Some idx -> mgr.active <- idx
-                    | None -> ())
-                 | None ->
-                   let (_pd, pargs) = Project.find_args (Some jp.jp_file) in
-                   let new_tab = Tab.create_from_file
-                                   ~args:(pargs @ extra_args) jp.jp_file in
-                   Tab.add_tab mgr new_tab;
-                   Render.set_tab_bar r true)
+                let (_, created) = Tab.open_or_switch mgr
+                  ~extra_args jp.jp_file in
+                if created then begin
+                  File_manager.add_watch fm jp.jp_file;
+                  if Tab.count mgr > 1 then Render.set_tab_bar r true
+                end
               end;
               let active = Tab.active_tab mgr in
               Buffer.move_to active.buf jp.jp_line jp.jp_col;
               Render_need.request ()
             | Editor.Open_file path ->
               let jump = Editor.take_jump_target () in
-              let existing = List.find_opt (fun (t : Tab.t) ->
-                Buffer.filename t.buf = Some path
-              ) mgr.tabs in
-              (match existing with
-               | Some t ->
-                 (match Tab.index_of_id mgr t.id with
-                  | Some idx -> mgr.active <- idx
-                  | None -> ())
-               | None ->
-                 let (_pd, pargs) = Project.find_args (Some path) in
-                 let new_tab = Tab.create_from_file ~args:(pargs @ extra_args) path in
-                 Tab.add_tab mgr new_tab;
-                 File_manager.add_watch fm path;
-                 Render.set_tab_bar r true);
+              let (_, created) = Tab.open_or_switch mgr
+                ~extra_args path in
+              if created then begin
+                File_manager.add_watch fm path;
+                if Tab.count mgr > 1 then Render.set_tab_bar r true
+              end;
               (match jump with
                | Some (line, col) ->
                  let active = Tab.active_tab mgr in

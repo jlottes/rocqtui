@@ -145,6 +145,28 @@ let add_tab mgr tab =
   mgr.tabs <- insert 0 mgr.tabs;
   mgr.active <- mgr.active + 1
 
+(* Switch to a tab by ID. Returns true if found. *)
+let switch_to_id mgr id =
+  match index_of_id mgr id with
+  | Some idx -> mgr.active <- idx; true
+  | None -> false
+
+(* Open a file in a new tab, or switch to it if already open.
+   Returns (tab, created) where created=true if a new tab was made. *)
+let open_or_switch mgr ?(extra_args=[]) path =
+  let existing = List.find_opt (fun t ->
+    Buffer.filename t.buf = Some path
+  ) mgr.tabs in
+  match existing with
+  | Some t ->
+    ignore (switch_to_id mgr t.id);
+    (t, false)
+  | None ->
+    let (_pd, pargs) = Project.find_args (Some path) in
+    let new_tab = create_from_file ~args:(pargs @ extra_args) path in
+    add_tab mgr new_tab;
+    (new_tab, true)
+
 let close_active mgr =
   let n = List.length mgr.tabs in
   if n <= 1 then false

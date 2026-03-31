@@ -51,6 +51,14 @@ val find_by_id : manager -> int -> t option
 val index_of_id : manager -> int -> int option
 val count : manager -> int
 val add_tab : manager -> t -> unit
+
+(** Switch to a tab by ID. Returns true if found. *)
+val switch_to_id : manager -> int -> bool
+
+(** Open a file or switch to it if already open.
+    Returns (tab, created) where created=true if new tab was made. *)
+val open_or_switch : manager -> ?extra_args:string list -> string -> t * bool
+
 val close_active : manager -> bool
 val next_tab : manager -> unit
 val prev_tab : manager -> unit
