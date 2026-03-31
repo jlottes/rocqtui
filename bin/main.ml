@@ -245,6 +245,11 @@ let () =
       Render_need.request ();
       Mcp_server.poll_notifications mcp mgr
     end;
+    (* Check for terminal resize (SIGWINCH may have fired during select) *)
+    if Term.check_resize () then begin
+      Render.resize r;
+      Render_need.request_full ()
+    end;
     (* Handle keyboard input *)
     if List.mem stdin_fd ready then begin
       let rec drain () =

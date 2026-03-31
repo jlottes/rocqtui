@@ -1141,7 +1141,8 @@ let handle_ready t ready_fds mgr =
        t.clients <- { fd = client_fd; buf = ""; initialized = false }
                     :: t.clients
      with Unix.Unix_error (Unix.EAGAIN, _, _) -> ()
-        | Unix.Unix_error (Unix.EWOULDBLOCK, _, _) -> ())
+        | Unix.Unix_error (Unix.EWOULDBLOCK, _, _) -> ()
+        | Unix.Unix_error (Unix.EINTR, _, _) -> ())
   end;
   (* Read from clients *)
   let dead = ref [] in
@@ -1160,6 +1161,7 @@ let handle_ready t ready_fds mgr =
        with
        | Unix.Unix_error (Unix.EAGAIN, _, _) -> ()
        | Unix.Unix_error (Unix.EWOULDBLOCK, _, _) -> ()
+       | Unix.Unix_error (Unix.EINTR, _, _) -> ()
        | _ -> dead := client :: !dead)
     end
   ) t.clients;

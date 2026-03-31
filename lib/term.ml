@@ -76,8 +76,10 @@ let write_stdout s =
   let len = String.length s in
   let written = ref 0 in
   while !written < len do
-    let n = Unix.write_substring Unix.stdout s !written (len - !written) in
-    written := !written + n
+    try
+      let n = Unix.write_substring Unix.stdout s !written (len - !written) in
+      written := !written + n
+    with Unix.Unix_error (Unix.EINTR, _, _) -> ()  (* retry *)
   done
 
 (* Flush — Unix.write is unbuffered, but we may want to batch *)

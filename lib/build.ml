@@ -101,6 +101,7 @@ let poll () = match !active with
        with
        | Unix.Unix_error (Unix.EAGAIN, _, _) -> keep_reading := false
        | Unix.Unix_error (Unix.EWOULDBLOCK, _, _) -> keep_reading := false
+       | Unix.Unix_error (Unix.EINTR, _, _) -> ()  (* retry *)
        | _ -> keep_reading := false)
     done;
     !changed
