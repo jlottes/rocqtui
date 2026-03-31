@@ -298,7 +298,7 @@ let visible_portion line hscroll cols =
 let help_lines = String.split_on_char '\n' (Keys.generate_help ())
 
 let render_help_screen (ctx : Editor_context.t) r =
-  let (rows, cols) = Render.pane_dims r Render.PScript in
+  let (rows, _cols) = Render.pane_dims r Render.PScript in
   Render.clear_pane r Render.PScript;
   let n = List.length help_lines in
   let scroll = get_help_scroll ctx in
@@ -306,9 +306,7 @@ let render_help_screen (ctx : Editor_context.t) r =
     let idx = scroll + row in
     if idx < n then begin
       let line = List.nth help_lines idx in
-      let trunc = if String.length line > cols then String.sub line 0 cols
-                  else line in
-      ignore (Render.put_str r Render.PScript ~row ~col:0 trunc (Theme.attrs ()).ga_default)
+      ignore (Render.put_str r Render.PScript ~row ~col:0 line (Theme.attrs ()).ga_default)
     end
   done
 
