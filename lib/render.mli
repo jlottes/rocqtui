@@ -64,8 +64,8 @@ val set_status : t -> string -> unit
 val msg_tab_at_x : t -> x:int -> tab_names:string list -> int option
 
 (** Overlay support *)
-val set_overlay : rect -> (Grid.t -> rect -> unit) -> unit
-val clear_overlay : unit -> unit
+val set_overlay : t -> rect -> (Grid.t -> rect -> unit) -> unit
+val clear_overlay : t -> unit
 
 (** Diff current vs previous, write to terminal, swap buffers.
     [force]: skip diff, emit every cell (full redraw).

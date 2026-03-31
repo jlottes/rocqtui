@@ -198,8 +198,7 @@ let open_picker ~project_dir ~project_file ~open_files =
   state := Some t
 
 let close () =
-  state := None;
-  Render.clear_overlay ()
+  state := None
 
 let move_selection delta =
   match !state with
@@ -451,16 +450,16 @@ let compute_box_geometry term_h term_w =
   let visible_rows = box_h - 4 in
   (box_top, box_left, box_w, box_h, visible_rows)
 
-let render _r =
+let render r =
   match !state with
-  | None -> ()
+  | None -> Render.clear_overlay r
   | Some t ->
     let (term_h, term_w) = Term.size () in
     let (box_top, box_left, box_w, box_h, _visible_rows) =
       compute_box_geometry term_h term_w in
     let rect = { Render.row = box_top; col = box_left;
                  height = box_h; width = box_w } in
-    Render.set_overlay rect (fun grid rect -> render_overlay grid rect t)
+    Render.set_overlay r rect (fun grid rect -> render_overlay grid rect t)
 
 let box_geometry r =
   match !state with

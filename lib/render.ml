@@ -12,6 +12,11 @@ type pane_id =
   | PScript | PMinimap | PGoals | PMessages | PStatus | PTabBar
   | PBorderV | PBorderH | PBorderMinimap | PNone
 
+type overlay = {
+  rect : rect;
+  render : Grid.t -> rect -> unit;
+}
+
 type t = {
   curr : Grid.t;
   prev : Grid.t;
@@ -24,6 +29,7 @@ type t = {
   mutable cursor_row : int;
   mutable cursor_col : int;
   mutable cursor_visible : bool;
+  mutable overlay : overlay option;
   (* Pane rects — computed from layout *)
   mutable script : rect;
   mutable goals : rect;
@@ -67,6 +73,7 @@ let create () =
     has_tab_bar = false;
     cursor_row = 0; cursor_col = 0;
     cursor_visible = true;
+    overlay = None;
     script = empty_rect; goals = empty_rect;
     messages = empty_rect; status = empty_rect;
     minimap_rect = empty_rect;
@@ -310,20 +317,11 @@ let set_status t text =
   Grid.fill t.curr ~row:t.status.row ~col:0 ~width:t.term_w ' ' attr;
   ignore (Grid.put_str t.curr ~row:t.status.row ~col:1 text attr)
 
-(* --- Overlay --- *)
+let set_overlay t rect render_fn =
+  t.overlay <- Some { rect; render = render_fn }
 
-type overlay = {
-  rect : rect;
-  render : Grid.t -> rect -> unit;
-}
-
-let overlay_ref : overlay option ref = ref None
-
-let set_overlay rect render_fn =
-  overlay_ref := Some { rect; render = render_fn }
-
-let clear_overlay () =
-  overlay_ref := None
+let clear_overlay t =
+  t.overlay <- None
 
 (* --- Flush --- *)
 
@@ -331,7 +329,7 @@ let clear_overlay () =
    [force]: skip diff, emit every cell. *)
 let present ?(force=false) t =
   (* Apply overlay if any *)
-  (match !overlay_ref with
+  (match t.overlay with
    | Some ov -> ov.render t.curr ov.rect
    | None -> ());
   let buf = Stdlib.Buffer.create 4096 in
