@@ -35,7 +35,6 @@ let () =
   Term.init ();
   let r = Render.create () in
   Theme.apply theme;
-  Editor.set_current_theme theme.name;
   Editor.init_compose ();
   Rocq_protocol.set_interrupt_hook (fun t ->
     (* Read input event to check for ^C *)
@@ -68,18 +67,20 @@ let () =
   ) initial_tabs;
   if Tab.count mgr > 1 then
     Render.set_tab_bar r true;
-  (* Tab bar click handler *)
-  Editor.set_tab_bar_click_handler (fun x ->
-    match Tab.tab_at_x mgr x with
-    | Some i -> mgr.active <- i; Render_need.request ()
-    | None -> ());
+  (* Editor context *)
+  let ctx = Editor_context.create
+    ~switch_tab:(fun x ->
+      match Tab.tab_at_x mgr x with
+      | Some i -> mgr.active <- i; Render_need.request ()
+      | None -> ())
+    ~open_files:(fun () ->
+      List.filter_map (fun (t : Tab.t) -> Buffer.filename t.buf) mgr.tabs)
+    () in
+  ctx.theme_name <- theme.Theme.name;
   (* Start MCP server *)
   let mcp = Mcp_server.create () in
   (* Create MCP socket symlinks in project directories *)
   List.iter (Mcp_server.create_project_symlink mcp) !project_dirs;
-  (* Wire up open files callback for file picker *)
-  Editor.set_open_files_fn (fun () ->
-    List.filter_map (fun (t : Tab.t) -> Buffer.filename t.buf) mgr.tabs);
   (* File manager *)
   let fm = File_manager.create () in
   List.iter (fun (t : Tab.t) ->
@@ -92,9 +93,9 @@ let () =
     (* Set MCP status indicator *)
     let active = Tab.active_tab mgr in
     (if Mcp_server.has_clients mcp && Mcp_server.is_tab_active mcp active.id then
-       Editor.set_status_extra (Mcp_server.spinner_char mcp ^ " Claude")
+       ctx.status_extra <- Mcp_server.spinner_char mcp ^ " Claude"
      else
-       Editor.set_status_extra "");
+       ctx.status_extra <- "");
     let tab = Tab.active_tab mgr in
     if Tab.count mgr > 1 then begin
       let spinner = if Mcp_server.has_clients mcp then
@@ -115,7 +116,7 @@ let () =
       ) mgr.tabs in
       Render.draw_tab_bar r tabs mgr.active
     end;
-    Editor.render_all r tab;
+    Editor.render_all ctx r tab;
     Render.present ~force r
   in
   let stdin_fd = Unix.stdin in
@@ -154,7 +155,7 @@ let () =
       Render_need.request ()
     end else begin
       let t = Tab.active_tab mgr in
-      ignore (Editor.handle_event ev t r);
+      ignore (Editor.handle_event ctx ev t r);
       Render_need.request ()
     end
   in
@@ -276,7 +277,7 @@ let () =
             Render_need.request ()
           end
           else begin
-            match Editor.handle_event ev tab r with
+            match Editor.handle_event ctx ev tab r with
             | Editor.Quit -> handle_quit ()
             | Editor.Close_tab -> handle_close_tab ()
             | Editor.Reload ->

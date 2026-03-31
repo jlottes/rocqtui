@@ -1,4 +1,4 @@
-(** Keyboard input handling for the editor. *)
+(** Editor: rendering and input handling. *)
 
 type jump_point = {
   jp_tab_id : int;
@@ -16,30 +16,13 @@ type action =
   | Open_file of string
   | Jump_back of jump_point
 
-(** Set a persistent error message to show when there's no session. *)
-val set_init_error : string -> unit
-
-(** Load XCompose sequences for input. *)
 val init_compose : unit -> unit
 
-(** Set callback for tab bar clicks. Called with x coordinate. *)
-val set_tab_bar_click_handler : (int -> unit) -> unit
+(** Render the active tab. *)
+val render_all : Editor_context.t -> Render.t -> Tab.t -> unit
 
-(** Set extra text to append to the status bar (e.g., MCP spinner). *)
-val set_status_extra : string -> unit
+(** Handle an input event. *)
+val handle_event : Editor_context.t -> Input.event -> Tab.t -> Render.t -> action
 
-(** Set callback to get list of open file paths (for file picker). *)
-val set_open_files_fn : (unit -> string list) -> unit
-
-(** Render the active tab's display. *)
-val render_all : Render.t -> Tab.t -> unit
-
-(** Handle an input event. Returns the action to take. *)
-val handle_event : Input.event -> Tab.t -> Render.t -> action
-
-(** After Open_file action, get the target position (line, col) for jump.
-    Returns and clears the value. *)
+(** After Open_file action, get the target position (line, col) for jump. *)
 val take_jump_target : unit -> (int * int) option
-
-(** Set the current theme name (for tracking the active theme). *)
-val set_current_theme : string -> unit

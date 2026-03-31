@@ -14,12 +14,6 @@ type action =
   | Open_file of string
   | Jump_back of jump_point
 
-let init_error_msg = ref ""
-let set_init_error msg = init_error_msg := msg
-
-(* Extra status text (e.g., MCP spinner) set by main.ml *)
-let status_extra = ref ""
-let set_status_extra s = status_extra := s
 
 (* Clipboard -- shared across tabs *)
 let clipboard = ref ""
@@ -64,13 +58,6 @@ let pane_selection_text (ps : Tab.pane_selection) lines_cache =
     if text = "" then None else Some text
   end
 
-(* Tab bar click callback *)
-let tab_bar_click_handler : (int -> unit) option ref = ref None
-let set_tab_bar_click_handler f = tab_bar_click_handler := Some f
-
-(* Callback to get list of open file paths (for file picker markers) *)
-let open_files_fn : (unit -> string list) ref = ref (fun () -> [])
-let set_open_files_fn f = open_files_fn := f
 
 (* Target position for jump-to-definition (consumed by main.ml after Open_file) *)
 let jump_target : (int * int) option ref = ref None  (* (line, col) *)
@@ -79,8 +66,6 @@ let take_jump_target () =
   jump_target := None;
   v
 
-let current_theme_name = ref "solarized-dark"
-let set_current_theme name = current_theme_name := name
 
 (* Jump stack for go-back. *)
 let jump_stack : jump_point list ref = ref []
@@ -259,11 +244,11 @@ let render_text_pane ?(sel : Tab.pane_selection option) ?set_cache
      done
    | _ -> ())
 
-let render_goals r (tab : Tab.t) =
+let render_goals (ctx : Editor_context.t) r (tab : Tab.t) =
   let session = tab.session in
   let lines = match session with
     | None ->
-      let msg = if !init_error_msg <> "" then !init_error_msg
+      let msg = if ctx.init_error <> "" then ctx.init_error
                 else "No Rocq session." in
       String.split_on_char '\n' msg
     | Some sess ->
@@ -344,7 +329,7 @@ let render_help_screen r =
     end
   done
 
-let render_script r (tab : Tab.t) =
+let render_script _ctx r (tab : Tab.t) =
   let buf = tab.buf in
   let session = tab.session in
   if !in_help_mode then
@@ -575,10 +560,10 @@ let render_query_bar r =
     Keys.query_existentials.display Keys.query_menu.display in
   Render.set_status r text
 
-let render_theme_bar r =
+let render_theme_bar (ctx : Editor_context.t) r =
   let parts = List.mapi (fun i name ->
     let key = Char.chr (Char.code '1' + i) in
-    let marker = if name = !current_theme_name then "*" else "" in
+    let marker = if name = ctx.theme_name then "*" else "" in
     Printf.sprintf "[%c]%s%s" key name marker
   ) Theme.available in
   Render.set_status r (String.concat "  " parts ^ "  F3:close")
@@ -606,7 +591,7 @@ let render_options_bar r =
   let text = String.concat " " parts in
   Render.set_status r text
 
-let update_status r (tab : Tab.t) =
+let update_status (ctx : Editor_context.t) r (tab : Tab.t) =
   let buf = tab.buf in
   let session = tab.session in
   if !in_help_mode then
@@ -614,7 +599,7 @@ let update_status r (tab : Tab.t) =
   else if !in_build_mode then
     render_build_bar r
   else if !in_theme_mode then
-    render_theme_bar r
+    render_theme_bar ctx r
   else if !in_options_mode then
     render_options_bar r
   else if !in_query_mode then
@@ -686,14 +671,14 @@ let update_status r (tab : Tab.t) =
         Stdlib.Buffer.contents b
       else ""
     in
-    let extra = if !status_extra <> "" then "  " ^ !status_extra else "" in
+    let extra = if ctx.status_extra <> "" then "  " ^ ctx.status_extra else "" in
     let status = Printf.sprintf "%s%s  Ln %d, Col %d%s%s%s%s"
       fname mod_flag (cl + 1) (vcol + 1) rocq_status extra hscroll_ind focus_info
     in
     Render.set_status r status
   end
 
-let render_all r (tab : Tab.t) =
+let render_all (ctx : Editor_context.t) r (tab : Tab.t) =
   (* Clear content panes — not the tab bar or other UI chrome *)
   Render.clear_pane r Render.PScript;
   Render.clear_pane r Render.PGoals;
@@ -709,10 +694,10 @@ let render_all r (tab : Tab.t) =
     ~msg_tab_names
     ~msg_tab_active:tab.msg.mt_active
     ();
-  render_script r tab;
-  render_goals r tab;
+  render_script ctx r tab;
+  render_goals ctx r tab;
   render_messages r tab;
-  update_status r tab;
+  update_status ctx r tab;
   (* Hide cursor when not in Script pane or when cursor is scrolled off-screen *)
   let cursor_visible =
     if tab.focused_pane <> `Script then false
@@ -898,7 +883,7 @@ let codepoint_of_event = function
   | Input.Special (Input.Backspace, _) -> Some 127
   | _ -> None
 
-let handle_event (ev : Input.event) (tab : Tab.t) r =
+let handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r =
   let buf = tab.buf in
   let session = tab.session in
   (* Handle compose mode first *)
@@ -999,7 +984,7 @@ let handle_event (ev : Input.event) (tab : Tab.t) r =
       (match Project.find_project_file dir with
        | Some (project_dir, project_file) ->
          File_picker.open_picker ~project_dir ~project_file
-           ~open_files:(!open_files_fn ())
+           ~open_files:(ctx.open_files ())
        | None ->
          Render.set_status r "No _RocqProject found.");
       Some Continue
@@ -1089,7 +1074,7 @@ let handle_event (ev : Input.event) (tab : Tab.t) r =
            let name = List.nth themes idx in
            let theme = Theme.find name in
            Theme.apply theme;
-           current_theme_name := name
+           ctx.theme_name <- name
          end
        | None -> ());
       Some Continue
@@ -1342,9 +1327,7 @@ let handle_event (ev : Input.event) (tab : Tab.t) r =
           | _ -> ()
         end
         else if pane = Render.PTabBar && is_left then begin
-          (match !tab_bar_click_handler with
-           | Some f -> f x
-           | None -> ())
+          ctx.switch_tab x
         end
         else if pane = Render.PBorderH && is_left then begin
           let tab_names = List.map (fun (mt : Tab.msg_tab) -> mt.mt_name)

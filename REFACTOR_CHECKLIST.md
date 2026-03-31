@@ -16,12 +16,15 @@ Progress tracker for REFACTOR.md items, in priority order.
 - [x] main.ml calls `File_manager.poll` and handles events
 - Note: prompt logic stays in main.ml (will move with Modal Manager)
 
-## F. Dependency Injection for Callbacks
-- [ ] Define `editor_context` record type
-- [ ] Replace `set_tab_bar_click_handler` with context field
-- [ ] Replace `set_open_files_fn` with context field
-- [ ] Replace `set_status_extra` with context field
-- [ ] Pass context to `handle_event` and `render_all`
+## F. Dependency Injection for Callbacks ✅
+- [x] Define `Editor_context.t` record type
+- [x] Replace `set_tab_bar_click_handler` with `ctx.switch_tab`
+- [x] Replace `set_open_files_fn` with `ctx.open_files`
+- [x] Replace `set_status_extra` with `ctx.status_extra`
+- [x] Replace `set_init_error` with `ctx.init_error`
+- [x] Replace `set_current_theme` with `ctx.theme_name`
+- [x] Pass context to `handle_event` and `render_all`
+- [x] Remove all `set_*` functions from editor.mli
 
 ## I. Tab Manager Enhancement
 - [ ] Add `Tab.open_or_switch` (create tab or switch to existing)
