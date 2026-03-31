@@ -28,9 +28,8 @@ type t = {
   mutable load_paths : Project.load_path_entry list;
 }
 
-let state : t option ref = ref None
-
-let is_open () = !state <> None
+(* State is now held in Modal.FilePicker, not a global ref. *)
+(* is_open is checked via Modal.get_file_picker *)
 
 (* Build a tree from a list of absolute file paths, relative to project_dir *)
 let build_tree project_dir files =
@@ -187,7 +186,7 @@ let tab_complete t =
       end
   end
 
-let open_picker ~project_dir ~project_file ~open_files =
+let create ~project_dir ~project_file ~open_files =
   let load_paths = Project.load_paths project_file in
   let t = {
     lines = [||]; selected = 0; scroll = 0;
@@ -195,93 +194,76 @@ let open_picker ~project_dir ~project_file ~open_files =
     project_dir; project_file; open_files; load_paths;
   } in
   rebuild_lines t;
-  state := Some t
+  t
 
-let close () =
-  state := None
+let move_selection t delta =
+  let n = Array.length t.lines in
+  if n > 0 then
+    t.selected <- max 0 (min (n - 1) (t.selected + delta))
 
-let move_selection delta =
-  match !state with
-  | None -> ()
-  | Some t ->
-    let n = Array.length t.lines in
-    if n = 0 then ()
-    else begin
-      t.selected <- max 0 (min (n - 1) (t.selected + delta))
-    end
-
-let ensure_visible visible_rows =
-  match !state with
-  | None -> ()
-  | Some t ->
-    if t.selected < t.scroll then
-      t.scroll <- t.selected
-    else if t.selected >= t.scroll + visible_rows then
-      t.scroll <- t.selected - visible_rows + 1
+let ensure_visible t visible_rows =
+  if t.selected < t.scroll then
+    t.scroll <- t.selected
+  else if t.selected >= t.scroll + visible_rows then
+    t.scroll <- t.selected - visible_rows + 1
 
 type action =
   | PickerContinue
   | PickerClose
   | PickerOpen of string  (* file path to open *)
 
-let handle_key ch visible_rows =
-  match !state with
-  | None -> PickerContinue
-  | Some t ->
+let handle_key t ch visible_rows =
     if ch = 27 then begin (* Escape *)
-      close ();
       PickerClose
     end
     else if ch = 259 then begin (* up *)
-      move_selection (-1);
-      ensure_visible visible_rows;
+      move_selection t (-1);
+      ensure_visible t visible_rows;
       PickerContinue
     end
     else if ch = 258 then begin (* down *)
-      move_selection 1;
-      ensure_visible visible_rows;
+      move_selection t 1;
+      ensure_visible t visible_rows;
       PickerContinue
     end
     else if ch = 339 then begin (* page up *)
-      move_selection (-visible_rows);
-      ensure_visible visible_rows;
+      move_selection t (-visible_rows);
+      ensure_visible t visible_rows;
       PickerContinue
     end
     else if ch = 338 then begin (* page down *)
-      move_selection visible_rows;
-      ensure_visible visible_rows;
+      move_selection t visible_rows;
+      ensure_visible t visible_rows;
       PickerContinue
     end
     else if ch = 10 || ch = 13 then begin (* Enter *)
       let n = Array.length t.lines in
       if n > 0 && t.selected >= 0 && t.selected < n then begin
         let line = t.lines.(t.selected) in
-        if not line.is_dir && line.full_path <> "" then begin
-          let path = line.full_path in
-          close ();
-          PickerOpen path
-        end else
+        if not line.is_dir && line.full_path <> "" then
+          PickerOpen line.full_path
+        else
           PickerContinue
       end else
         PickerContinue
     end
     else if ch = 9 then begin (* Tab -- complete *)
       tab_complete t;
-      ensure_visible visible_rows;
+      ensure_visible t visible_rows;
       PickerContinue
     end
     else if ch = 20 then begin (* ^T -- toggle project/all *)
       t.mode <- (match t.mode with ProjectFiles -> AllFiles | AllFiles -> ProjectFiles);
       rebuild_lines t;
       navigate_to_input t;
-      ensure_visible visible_rows;
+      ensure_visible t visible_rows;
       PickerContinue
     end
     else if ch = 127 || ch = 263 then begin (* Backspace *)
       if String.length t.input > 0 then begin
         t.input <- String.sub t.input 0 (String.length t.input - 1);
         navigate_to_input t;
-        ensure_visible visible_rows
+        ensure_visible t visible_rows
       end;
       PickerContinue
     end
@@ -291,48 +273,40 @@ let handle_key ch visible_rows =
          && t.input.[String.length t.input - 1] <> '/' then
         t.input <- t.input ^ "/";
       navigate_to_input t;
-      ensure_visible visible_rows;
+      ensure_visible t visible_rows;
       PickerContinue
     end
     else if ch >= 32 && ch < 127 then begin (* Printable character *)
       t.input <- t.input ^ String.make 1 (Char.chr ch);
       navigate_to_input t;
-      ensure_visible visible_rows;
+      ensure_visible t visible_rows;
       PickerContinue
     end
     else
       PickerContinue
 
 (* Handle mouse click -- returns action if a file was clicked *)
-let handle_click ~y ~x:_ ~box_top ~box_left:_ ~box_width:_ ~visible_rows =
-  match !state with
-  | None -> PickerContinue
-  | Some t ->
-    let content_row = y - box_top - 1 in  (* -1 for title bar *)
-    if content_row >= 0 && content_row < visible_rows then begin
-      let idx = t.scroll + content_row in
-      if idx >= 0 && idx < Array.length t.lines then begin
-        t.selected <- idx;
-        let line = t.lines.(idx) in
-        if not line.is_dir && line.full_path <> "" then begin
-          let path = line.full_path in
-          close ();
-          PickerOpen path
-        end else
-          PickerContinue
-      end else
+let handle_click t ~y ~x:_ ~box_top ~box_left:_ ~box_width:_ ~visible_rows =
+  let content_row = y - box_top - 1 in
+  if content_row >= 0 && content_row < visible_rows then begin
+    let idx = t.scroll + content_row in
+    if idx >= 0 && idx < Array.length t.lines then begin
+      t.selected <- idx;
+      let line = t.lines.(idx) in
+      if not line.is_dir && line.full_path <> "" then
+        PickerOpen line.full_path
+      else
         PickerContinue
-    end
-    else
+    end else
       PickerContinue
+  end
+  else
+    PickerContinue
 
-let handle_scroll direction visible_rows =
-  match !state with
-  | None -> ()
-  | Some t ->
-    let n = Array.length t.lines in
-    let delta = if direction > 0 then 3 else -3 in
-    t.scroll <- max 0 (min (n - visible_rows) (t.scroll + delta))
+let handle_scroll t direction visible_rows =
+  let n = Array.length t.lines in
+  let delta = if direction > 0 then 3 else -3 in
+  t.scroll <- max 0 (min (n - visible_rows) (t.scroll + delta))
 
 let render_overlay grid (rect : Render.rect) t =
   let box_h = rect.height in
@@ -450,21 +424,14 @@ let compute_box_geometry term_h term_w =
   let visible_rows = box_h - 4 in
   (box_top, box_left, box_w, box_h, visible_rows)
 
-let render r =
-  match !state with
-  | None -> Render.clear_overlay r
-  | Some t ->
-    let (term_h, term_w) = Term.size () in
-    let (box_top, box_left, box_w, box_h, _visible_rows) =
-      compute_box_geometry term_h term_w in
-    let rect = { Render.row = box_top; col = box_left;
-                 height = box_h; width = box_w } in
-    Render.set_overlay r rect (fun grid rect -> render_overlay grid rect t)
+let render t r =
+  let (term_h, term_w) = Term.size () in
+  let (box_top, box_left, box_w, box_h, _visible_rows) =
+    compute_box_geometry term_h term_w in
+  let rect = { Render.row = box_top; col = box_left;
+               height = box_h; width = box_w } in
+  Render.set_overlay r rect (fun grid rect -> render_overlay grid rect t)
 
-let box_geometry r =
-  match !state with
-  | None -> (0, 0, 0, 0, 0)
-  | Some _t ->
-    let (term_h, term_w) = Term.size () in
-    ignore r;
-    compute_box_geometry term_h term_w
+let box_geometry () =
+  let (term_h, term_w) = Term.size () in
+  compute_box_geometry term_h term_w

@@ -6,7 +6,7 @@ type kind =
   | OptionsMenu
   | ThemeMenu
   | BuildMenu
-  | FilePicker
+  | FilePicker of File_picker.t
   | Prompt of {
       message : string;
       handler : Input.event -> prompt_result;
@@ -44,7 +44,7 @@ let same_kind a b =
   | OptionsMenu, OptionsMenu -> true
   | ThemeMenu, ThemeMenu -> true
   | BuildMenu, BuildMenu -> true
-  | FilePicker, FilePicker -> true
+  | FilePicker _, FilePicker _ -> true
   | Prompt _, Prompt _ -> true
   | _ -> false
 
@@ -66,3 +66,8 @@ let dismiss t =
   match t.stack with
   | [] -> false
   | _ :: rest -> t.stack <- rest; true
+
+let get_file_picker t =
+  match t.stack with
+  | FilePicker fp :: _ -> Some fp
+  | _ -> None

@@ -60,9 +60,9 @@ Progress tracker for REFACTOR.md items, in priority order.
 - [x] Thread through handle_event, render_all, init_compose, take_jump_target
 - [x] Remove 5 bare refs from editor.ml (now zero)
 - [x] Move Render.overlay_ref into Render.t (no more global ref)
+- [x] Move File_picker.state into Modal.FilePicker (no more global ref)
 - Remaining module-level refs (acceptable — module-internal state):
   - build.ml active (singleton build process)
-  - file_picker.ml state (singleton modal — could move to Modal)
   - keys.ml kitty_enabled (terminal capability)
   - theme.ml current_attrs (active theme)
   - render_need.ml state (render scheduling)

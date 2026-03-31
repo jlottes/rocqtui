@@ -11,7 +11,7 @@ type kind =
   | OptionsMenu
   | ThemeMenu
   | BuildMenu
-  | FilePicker
+  | FilePicker of File_picker.t
   | Prompt of {
       message : string;
       handler : Input.event -> prompt_result;
@@ -30,3 +30,6 @@ val clear : t -> unit
 
 (** Dismiss top modal. Returns true if something was dismissed. *)
 val dismiss : t -> bool
+
+(** Get the file picker state if it's the active modal. *)
+val get_file_picker : t -> File_picker.t option

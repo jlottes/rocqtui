@@ -71,7 +71,7 @@ let is_options ctx = Modal.is_open ctx.Editor_context.modal Modal.OptionsMenu
 let is_query ctx = Modal.is_open ctx.Editor_context.modal Modal.QueryMenu
 let is_theme ctx = Modal.is_open ctx.Editor_context.modal Modal.ThemeMenu
 let is_build ctx = Modal.is_open ctx.Editor_context.modal Modal.BuildMenu
-let [@warning "-32"] is_picker _ctx = File_picker.is_open ()
+let get_picker ctx = Modal.get_file_picker ctx.Editor_context.modal
 
 let get_help_scroll ctx = match Modal.top ctx.Editor_context.modal with
   | Some (Modal.Help { scroll }) -> scroll
@@ -694,11 +694,12 @@ let render_all (ctx : Editor_context.t) r (tab : Tab.t) =
       let (rows, _) = Render.pane_dims r Render.PScript in
       cl >= scroll && cl < scroll + rows
   in
-  let picker_open = File_picker.is_open () in
-  let cursor_visible = cursor_visible && not picker_open in
+  let picker = get_picker ctx in
+  let cursor_visible = cursor_visible && picker = None in
   Render.set_cursor_visible r cursor_visible;
-  if picker_open then
-    File_picker.render r
+  (match picker with
+   | Some fp -> File_picker.render fp r
+   | None -> Render.clear_overlay r)
 
 (* Convert screen coordinates to buffer (line, byte_col) position.
    Returns None if the coordinates are outside the script pane content. *)
@@ -913,34 +914,38 @@ let rec handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r
        handle_event ctx ev tab r
      | Modal.Ignored -> Continue)
   | _ ->
-  if File_picker.is_open () then begin
+  match get_picker ctx with
+  | Some fp ->
     let (_box_top, box_left, box_w, _box_h, visible_rows) =
-      File_picker.box_geometry r in
-    match ev with
+      File_picker.box_geometry () in
+    let handle_picker_action = function
+      | File_picker.PickerOpen path ->
+        Modal.pop ctx.modal; Open_file path
+      | File_picker.PickerClose ->
+        Modal.pop ctx.modal; Continue
+      | File_picker.PickerContinue -> Continue
+    in
+    (match ev with
     | Input.Mouse mev ->
       let b1_click = mev.button = Input.Left in
       let scroll_up = mev.button = Input.ScrollUp in
       let scroll_down = mev.button = Input.ScrollDown in
       if b1_click then begin
-        let (box_top, _, _, _, _) = File_picker.box_geometry r in
-        match File_picker.handle_click ~y:mev.y ~x:mev.x ~box_top ~box_left
-                ~box_width:box_w ~visible_rows with
-        | File_picker.PickerOpen path -> Open_file path
-        | _ -> Continue
+        let (box_top, _, _, _, _) = File_picker.box_geometry () in
+        handle_picker_action
+          (File_picker.handle_click fp ~y:mev.y ~x:mev.x ~box_top ~box_left
+             ~box_width:box_w ~visible_rows)
       end
       else if scroll_up then
-        (File_picker.handle_scroll (-1) visible_rows; Continue)
+        (File_picker.handle_scroll fp (-1) visible_rows; Continue)
       else if scroll_down then
-        (File_picker.handle_scroll 1 visible_rows; Continue)
+        (File_picker.handle_scroll fp 1 visible_rows; Continue)
       else Continue
     | Input.Special (Input.Escape, _) ->
-      File_picker.close (); Continue
+      Modal.pop ctx.modal; Continue
     | Input.Key (cp, mods) ->
       let ch = if mods.ctrl && cp >= 97 && cp <= 122 then cp - 96 else cp in
-      (match File_picker.handle_key ch visible_rows with
-       | File_picker.PickerOpen path -> Open_file path
-       | File_picker.PickerClose -> Continue
-       | File_picker.PickerContinue -> Continue)
+      handle_picker_action (File_picker.handle_key fp ch visible_rows)
     | Input.Special (key, _mods) ->
       let ch = match key with
         | Input.Up -> 259 | Input.Down -> 258
@@ -950,14 +955,10 @@ let rec handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r
         | _ -> 0
       in
       if ch <> 0 then
-        (match File_picker.handle_key ch visible_rows with
-         | File_picker.PickerOpen path -> Open_file path
-         | File_picker.PickerClose -> Continue
-         | File_picker.PickerContinue -> Continue)
+        handle_picker_action (File_picker.handle_key fp ch visible_rows)
       else Continue
-    | _ -> Continue
-  end
-  else
+    | _ -> Continue)
+  | None ->
   (* --- Global keys (work in any pane) --- *)
   let handle_global () =
     if match_binding ev Keys.quit then Some Quit
@@ -980,8 +981,9 @@ let rec handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r
       in
       (match Project.find_project_file dir with
        | Some (project_dir, project_file) ->
-         File_picker.open_picker ~project_dir ~project_file
-           ~open_files:(ctx.open_files ())
+         let fp = File_picker.create ~project_dir ~project_file
+           ~open_files:(ctx.open_files ()) in
+         Modal.push ctx.modal (Modal.FilePicker fp)
        | None ->
          Render.set_status r "No _RocqProject found.");
       Some Continue
