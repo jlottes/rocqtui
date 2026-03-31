@@ -1,9 +1,4 @@
-type jump_point = {
-  jp_tab_id : int;
-  jp_file : string;
-  jp_line : int;
-  jp_col : int;
-}
+type jump_point = Editor_context.jump_point
 
 type action =
   | Continue
@@ -15,18 +10,8 @@ type action =
   | Jump_back of jump_point
 
 
-(* Clipboard -- shared across tabs *)
-let clipboard = ref ""
-
-(* Compose input method *)
-let compose_state : Compose.t option ref = ref None
-
-let init_compose () =
-  compose_state := Some (Compose.load ())
-
-(* Drag state for resizing pane borders -- global since it's display-level *)
-type drag_mode = NoDrag | DragV | DragH | DragMinimap | DragMinimapScroll
-let dragging = ref NoDrag
+let init_compose (ctx : Editor_context.t) =
+  ctx.compose <- Some (Compose.load ())
 
 let clear_pane_selection (ps : Tab.pane_selection) =
   ps.ps_active <- false
@@ -59,29 +44,25 @@ let pane_selection_text (ps : Tab.pane_selection) lines_cache =
   end
 
 
-(* Target position for jump-to-definition (consumed by main.ml after Open_file) *)
-let jump_target : (int * int) option ref = ref None  (* (line, col) *)
-let take_jump_target () =
-  let v = !jump_target in
-  jump_target := None;
+let take_jump_target (ctx : Editor_context.t) =
+  let v = ctx.jump_target in
+  ctx.jump_target <- None;
   v
 
 
-(* Jump stack for go-back. *)
-let jump_stack : jump_point list ref = ref []
 
-let push_jump (tab : Tab.t) =
+let push_jump (ctx : Editor_context.t) (tab : Tab.t) =
   let (line, col) = Buffer.cursor tab.buf in
   let file = match Buffer.filename tab.buf with
     | Some f -> f | None -> "" in
-  jump_stack := { jp_tab_id = tab.id; jp_file = file;
-                  jp_line = line; jp_col = col } :: !jump_stack
+  ctx.jump_stack <- { Editor_context.jp_tab_id = tab.id; jp_file = file;
+                      jp_line = line; jp_col = col } :: ctx.jump_stack
 
-let pop_jump () =
-  match !jump_stack with
+let pop_jump (ctx : Editor_context.t) =
+  match ctx.jump_stack with
   | [] -> None
   | jp :: rest ->
-    jump_stack := rest;
+    ctx.jump_stack <- rest;
     Some jp
 
 (* Modal helpers — access ctx.modal *)
@@ -338,7 +319,7 @@ let render_script (ctx : Editor_context.t) r (tab : Tab.t) =
     render_help_screen ctx r
   else begin
   let (rows, cols) = Render.pane_dims r Render.PScript in
-  if tab.suppress_ensure_visible || !dragging = DragMinimapScroll then
+  if tab.suppress_ensure_visible || ctx.dragging = Editor_context.DragMinimapScroll then
     tab.suppress_ensure_visible <- false
   else
     Buffer.ensure_visible_h buf rows cols;
@@ -610,7 +591,7 @@ let update_status (ctx : Editor_context.t) r (tab : Tab.t) =
     render_options_bar r
   else if is_query ctx then
     render_query_bar r
-  else match !compose_state with
+  else match ctx.compose with
   | Some cs when Compose.active cs ->
     Render.set_status r (format_compose_status r cs)
   | _ -> begin
@@ -893,7 +874,7 @@ let rec handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r
   let buf = tab.buf in
   let session = tab.session in
   (* Handle compose mode first *)
-  let compose_handled = match !compose_state with
+  let compose_handled = match ctx.compose with
     | Some cs when Compose.active cs ->
       (match codepoint_of_event ev with
        | Some cp ->
@@ -983,9 +964,9 @@ let rec handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r
     else if match_binding ev Keys.close_tab then Some Close_tab
     else if match_binding ev Keys.save then Some Save_prompt
     else if match_binding ev Keys.jump_back then begin
-      match pop_jump () with
+      match pop_jump ctx with
       | Some jp ->
-        jump_target := Some (jp.jp_line, jp.jp_col);
+        ctx.jump_target <- Some (jp.jp_line, jp.jp_col);
         Some (Jump_back jp)
       | None ->
         Render.set_status r "No previous location.";
@@ -1036,7 +1017,7 @@ let rec handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r
         (match session with Some s -> Session.sync_options_and_refresh s | None -> ())
       end else begin
         (* Plain Escape -- start compose *)
-        match !compose_state with
+        match ctx.compose with
         | Some cs ->
           Compose.start cs;
           Render.set_status r (format_compose_status r cs);
@@ -1279,13 +1260,13 @@ let rec handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r
       let is_scroll_down = mev.button = Input.ScrollDown in
       let has_shift = mev.mods.shift in
       let has_cmd = mev.mods.ctrl in  (* Ctrl acts as Cmd on most terminals *)
-      if !dragging <> NoDrag then begin
+      if ctx.dragging <> Editor_context.NoDrag then begin
         (* Active border drag *)
-        (match !dragging with
-         | DragV -> Render.move_split_v r x
-         | DragH -> Render.move_split_h r y
-         | DragMinimap -> Render.move_minimap_border r x
-         | DragMinimapScroll ->
+        (match ctx.dragging with
+         | Editor_context.DragV -> Render.move_split_v r x
+         | Editor_context.DragH -> Render.move_split_h r y
+         | Editor_context.DragMinimap -> Render.move_minimap_border r x
+         | Editor_context.DragMinimapScroll ->
            let mm_rect = Render.pane_rect r Render.PMinimap in
            let mm_row = y - mm_rect.row in
            if mm_row >= 0 && mm_row < mm_rect.height then begin
@@ -1298,8 +1279,8 @@ let rec handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r
              Buffer.set_scroll_top buf (min target_scroll max_scroll);
              tab.suppress_ensure_visible <- true
            end
-         | NoDrag -> ());
-        if is_release then dragging := NoDrag
+         | Editor_context.NoDrag -> ());
+        if is_release then ctx.dragging <- Editor_context.NoDrag
       end
       else if tab.mouse_selecting then begin
         (* Active text selection drag *)
@@ -1352,13 +1333,13 @@ let rec handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r
           | Some i ->
             tab.msg.mt_active <- i
           | None ->
-            dragging := DragH
+            ctx.dragging <- Editor_context.DragH
         end
         else if (pane = Render.PBorderV || pane = Render.PBorderMinimap)
                 && is_left then
-          dragging := (match pane with
-            | Render.PBorderMinimap -> DragMinimap
-            | _ -> DragV)
+          ctx.dragging <- (match pane with
+            | Render.PBorderMinimap -> Editor_context.DragMinimap
+            | _ -> Editor_context.DragV)
         else if (pane = Render.PGoals || pane = Render.PMessages)
                 && is_left then begin
           tab.focused_pane <- (if pane = Render.PGoals then `Goals else `Messages);
@@ -1394,7 +1375,7 @@ let rec handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r
             Buffer.set_scroll_top buf (min target_scroll max_scroll);
             tab.suppress_ensure_visible <- true
           end;
-          dragging := DragMinimapScroll
+          ctx.dragging <- Editor_context.DragMinimapScroll
         end
         else if pane = Render.PScript && is_left then begin
           tab.focused_pane <- `Script;
@@ -1438,7 +1419,7 @@ let rec handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r
         (match session with Some s -> Session.clear_error s | None -> ());
         ignore (Buffer.delete_selection buf);
         insert_string tab text;
-        clipboard := text
+        ctx.clipboard <- text
       end;
       Some Continue
     end
@@ -1538,10 +1519,10 @@ let rec handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r
       in
       (match result with
        | Some (path, line_opt) ->
-         push_jump tab;
+         push_jump ctx tab;
          (match line_opt with
-          | Some l -> jump_target := Some (l, 0)
-          | None -> jump_target := None);
+          | Some l -> ctx.jump_target <- Some (l, 0)
+          | None -> ctx.jump_target <- None);
          Some (Open_file path)
        | None -> Some Continue)
     end
@@ -1594,7 +1575,7 @@ let rec handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r
       in
       (match text with
        | Some t ->
-         clipboard := t;
+         ctx.clipboard <- t;
          Clipboard.copy_to_system t
        | None -> ());
       Some Continue
@@ -1683,10 +1664,10 @@ let rec handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r
         (match session with Some s -> Session.clear_error s | None -> ());
         match Buffer.delete_selection buf with
         | Some text ->
-          clipboard := text;
+          ctx.clipboard <- text;
           Clipboard.copy_to_system text
         | None ->
-          clipboard := "";
+          ctx.clipboard <- "";
           Buffer.cut_line buf
       end;
       Some Continue
@@ -1694,11 +1675,11 @@ let rec handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r
       if not (cursor_in_target tab) then begin
         (match session with Some s -> Session.clear_error s | None -> ());
         ignore (Buffer.delete_selection buf);
-        if !clipboard <> "" then
+        if ctx.clipboard <> "" then
           String.iter (fun c ->
             if c = '\n' then Buffer.insert_newline buf
             else Buffer.insert_char buf c
-          ) !clipboard
+          ) ctx.clipboard
         else Buffer.paste buf
       end;
       Some Continue

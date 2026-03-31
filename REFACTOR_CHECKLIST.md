@@ -53,14 +53,13 @@ Progress tracker for REFACTOR.md items, in priority order.
 - [x] Remove `prompt_unsaved`, `read_blocking_event`, `ctrl_w_ev`, `ctrl_x_ev`
 - [x] handle_event dispatches to Prompt handler, re-processes on Dismissed
 
-## A. App State Record
-- [ ] Define `App_state.t` record
-- [ ] Move editor.ml globals (clipboard, compose, dragging, jump_stack, etc.)
-- [ ] Move build.ml global (active)
-- [ ] Move keys.ml global (kitty_enabled)
-- [ ] Move theme.ml global (current_attrs)
-- [ ] Thread App_state through handle_event and render_all
-- [ ] Remove bare refs from modules
+## A. App State Record (partial) ✅
+- [x] Move editor.ml globals to Editor_context.t:
+  clipboard, compose, dragging, jump_stack, jump_target
+- [x] Move drag_mode and jump_point types to Editor_context
+- [x] Thread through handle_event, render_all, init_compose, take_jump_target
+- [x] Remove 5 bare refs from editor.ml
+- Note: build.ml, keys.ml, theme.ml, render.ml globals remain (lower priority)
 
 ## C. Split editor.ml
 - [ ] Extract rendering into `view.ml` (render_script, render_goals, etc.)

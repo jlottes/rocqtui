@@ -35,7 +35,6 @@ let () =
   Term.init ();
   let r = Render.create () in
   Theme.apply theme;
-  Editor.init_compose ();
   Rocq_protocol.set_interrupt_hook (fun t ->
     (* Read input event to check for ^C *)
     match Input.read_event ~timeout:0.0 Unix.stdin with
@@ -77,6 +76,7 @@ let () =
       List.filter_map (fun (t : Tab.t) -> Buffer.filename t.buf) mgr.tabs)
     () in
   ctx.theme_name <- theme.Theme.name;
+  Editor.init_compose ctx;
   (* Start MCP server *)
   let mcp = Mcp_server.create () in
   (* Create MCP socket symlinks in project directories *)
@@ -354,7 +354,7 @@ let () =
               Buffer.move_to active.buf jp.jp_line jp.jp_col;
               Render_need.request ()
             | Editor.Open_file path ->
-              let jump = Editor.take_jump_target () in
+              let jump = Editor.take_jump_target ctx in
               let (_, created) = Tab.open_or_switch mgr
                 ~extra_args path in
               if created then begin
