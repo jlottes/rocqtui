@@ -116,7 +116,7 @@ let () =
       ) mgr.tabs in
       Render.draw_tab_bar r tabs mgr.active
     end;
-    Editor.render_all ctx r tab;
+    View.render_all ctx r tab;
     Render.present ~force r
   in
   let stdin_fd = Unix.stdin in

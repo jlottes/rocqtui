@@ -71,12 +71,14 @@ Progress tracker for REFACTOR.md items, in priority order.
   - tab.ml next_id (counter)
   - input.ml debug_log (debug infrastructure)
 
-## C. Split editor.ml
-- [ ] Extract rendering into `view.ml` (render_script, render_goals, etc.)
-- [ ] Extract input handling into `handler.ml` (handle_event dispatch)
-- [ ] Extract mouse handling (drag, selection, hit testing)
-- [ ] Keep editor.ml as thin coordinator
-- [ ] Update interfaces
+## C. Split editor.ml ✅
+- [x] Extract rendering into `view.ml` (render_script, render_goals,
+  render_messages, render_help, render_all, update_status, etc.)
+- [x] Move modal helpers, pane selection helpers, compose display to view.ml
+- [x] editor.ml: 1765→1153 lines (input handling only)
+- [x] view.ml: 612 lines (all rendering)
+- [x] main.ml calls View.render_all, editor.ml calls View helpers
+- Note: further splitting (handler.ml, mouse.ml) possible but not urgent
 
 ## D. Event-Driven Architecture (optional)
 - [ ] Define unified `event` type (input, file, session, build, mcp, timer)

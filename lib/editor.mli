@@ -1,4 +1,4 @@
-(** Editor: rendering and input handling. *)
+(** Editor: input handling. *)
 
 type jump_point = Editor_context.jump_point
 
@@ -12,9 +12,6 @@ type action =
   | Jump_back of jump_point
 
 val init_compose : Editor_context.t -> unit
-
-(** Render the active tab. *)
-val render_all : Editor_context.t -> Render.t -> Tab.t -> unit
 
 (** Handle an input event. *)
 val handle_event : Editor_context.t -> Input.event -> Tab.t -> Render.t -> action
