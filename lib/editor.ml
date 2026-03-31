@@ -84,19 +84,21 @@ let pop_jump () =
     jump_stack := rest;
     Some jp
 
-(* Print options mode *)
-let in_options_mode = ref false
+(* Modal helpers — access ctx.modal *)
+let is_help ctx = Modal.is_open ctx.Editor_context.modal (Modal.Help { scroll = 0 })
+let is_options ctx = Modal.is_open ctx.Editor_context.modal Modal.OptionsMenu
+let is_query ctx = Modal.is_open ctx.Editor_context.modal Modal.QueryMenu
+let is_theme ctx = Modal.is_open ctx.Editor_context.modal Modal.ThemeMenu
+let is_build ctx = Modal.is_open ctx.Editor_context.modal Modal.BuildMenu
+let [@warning "-32"] is_picker _ctx = File_picker.is_open ()
 
-(* Query mode *)
-let in_query_mode = ref false
+let get_help_scroll ctx = match Modal.top ctx.Editor_context.modal with
+  | Some (Modal.Help { scroll }) -> scroll
+  | _ -> 0
 
-(* Help screen mode *)
-let in_help_mode = ref false
-let help_scroll = ref 0
-
-(* Theme/Build modes *)
-let in_theme_mode = ref false
-let in_build_mode = ref false
+let set_help_scroll ctx v = match Modal.top ctx.Editor_context.modal with
+  | Some (Modal.Help h) -> h.scroll <- v
+  | _ -> ()
 
 
 (* Apply a chgat to a byte range within a line, adjusting for hscroll *)
@@ -314,11 +316,11 @@ let visible_portion line hscroll cols =
 
 let help_lines = String.split_on_char '\n' (Keys.generate_help ())
 
-let render_help_screen r =
+let render_help_screen (ctx : Editor_context.t) r =
   let (rows, cols) = Render.pane_dims r Render.PScript in
   Render.clear_pane r Render.PScript;
   let n = List.length help_lines in
-  let scroll = !help_scroll in
+  let scroll = get_help_scroll ctx in
   for row = 0 to rows - 1 do
     let idx = scroll + row in
     if idx < n then begin
@@ -329,11 +331,11 @@ let render_help_screen r =
     end
   done
 
-let render_script _ctx r (tab : Tab.t) =
+let render_script (ctx : Editor_context.t) r (tab : Tab.t) =
   let buf = tab.buf in
   let session = tab.session in
-  if !in_help_mode then
-    render_help_screen r
+  if is_help ctx then
+    render_help_screen ctx r
   else begin
   let (rows, cols) = Render.pane_dims r Render.PScript in
   if tab.suppress_ensure_visible || !dragging = DragMinimapScroll then
@@ -594,15 +596,15 @@ let render_options_bar r =
 let update_status (ctx : Editor_context.t) r (tab : Tab.t) =
   let buf = tab.buf in
   let session = tab.session in
-  if !in_help_mode then
+  if is_help ctx then
     Render.set_status r "F1:close  Up/Down/PgUp/PgDn:scroll  any other key:close"
-  else if !in_build_mode then
+  else if is_build ctx then
     render_build_bar r
-  else if !in_theme_mode then
+  else if is_theme ctx then
     render_theme_bar ctx r
-  else if !in_options_mode then
+  else if is_options ctx then
     render_options_bar r
-  else if !in_query_mode then
+  else if is_query ctx then
     render_query_bar r
   else match !compose_state with
   | Some cs when Compose.active cs ->
@@ -1011,12 +1013,12 @@ let handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r =
       Some Continue
     end
     else if (match ev with Input.Special (Input.Escape, _) -> true | _ -> false) then begin
-      if !in_build_mode then
-        in_build_mode := false
-      else if !in_theme_mode then
-        in_theme_mode := false
-      else if !in_options_mode then begin
-        in_options_mode := false;
+      if is_build ctx then
+        Modal.pop ctx.modal
+      else if is_theme ctx then
+        Modal.pop ctx.modal
+      else if is_options ctx then begin
+        Modal.pop ctx.modal;
         (match session with Some s -> Session.sync_options_and_refresh s | None -> ())
       end else begin
         (* Plain Escape -- start compose *)
@@ -1032,13 +1034,13 @@ let handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r =
     else if match_binding ev Keys.toggle_hyps then begin
       tab.show_all_hyps <- not tab.show_all_hyps; Some Continue end
     else if match_binding ev Keys.options_menu then begin
-      if !in_options_mode then begin
-        in_options_mode := false;
+      if is_options ctx then begin
+        Modal.pop ctx.modal;
         (match session with Some s -> Session.sync_options_and_refresh s | None -> ())
-      end else in_options_mode := true;
+      end else Modal.push ctx.modal Modal.OptionsMenu;
       Some Continue
     end
-    else if !in_options_mode then begin
+    else if is_options ctx then begin
       let ch_opt = codepoint_of_event ev in
       match ch_opt with
       | Some ch ->
@@ -1049,11 +1051,11 @@ let handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r =
            (match session with Some s -> Session.sync_options_and_refresh s | None -> ());
            Some Continue
          | None ->
-           in_options_mode := false;
+           Modal.pop ctx.modal;
            (match session with Some s -> Session.sync_options_and_refresh s | None -> ());
            None)
       | None ->
-        in_options_mode := false;
+        Modal.pop ctx.modal;
         (match session with Some s -> Session.sync_options_and_refresh s | None -> ());
         None
     end
@@ -1061,11 +1063,11 @@ let handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r =
       Some Reload
     end
     else if match_binding ev Keys.theme_menu then begin
-      in_theme_mode := not !in_theme_mode;
+      Modal.toggle ctx.modal Modal.ThemeMenu;
       Some Continue
     end
-    else if !in_theme_mode then begin
-      in_theme_mode := false;
+    else if is_theme ctx then begin
+      Modal.pop ctx.modal;
       (match codepoint_of_event ev with
        | Some ch ->
          let idx = ch - Char.code '1' in
@@ -1080,11 +1082,11 @@ let handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r =
       Some Continue
     end
     else if match_binding ev Keys.build_menu then begin
-      in_build_mode := not !in_build_mode;
+      Modal.toggle ctx.modal Modal.BuildMenu;
       Some Continue
     end
-    else if !in_build_mode then begin
-      in_build_mode := false;
+    else if is_build ctx then begin
+      Modal.pop ctx.modal;
       (match codepoint_of_event ev with
        | Some ch ->
          let c = Char.lowercase_ascii (Char.chr (ch land 0xFF)) in
@@ -1145,11 +1147,11 @@ let handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r =
        | None -> Some Continue)
     end
     else if match_binding ev Keys.query_menu then begin
-      in_query_mode := not !in_query_mode;
+      Modal.toggle ctx.modal Modal.QueryMenu;
       Some Continue
     end
-    else if !in_query_mode then begin
-      in_query_mode := false;
+    else if is_query ctx then begin
+      Modal.pop ctx.modal;
       match codepoint_of_event ev with
       | Some ch ->
         let c = Char.lowercase_ascii (Char.chr (ch land 0xFF)) in
@@ -1225,12 +1227,12 @@ let handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r =
       Render.resize r;
       Some Continue
     end
-    else if !in_help_mode then begin
+    else if is_help ctx then begin
       let (rows, _) = Render.pane_dims r Render.PScript in
       let n = List.length help_lines in
       let max_scroll = max 0 (n - rows) in
       let scroll_by delta =
-        help_scroll := max 0 (min max_scroll (!help_scroll + delta)) in
+        set_help_scroll ctx (max 0 (min max_scroll (get_help_scroll ctx + delta))) in
       (match ev with
        | Input.Special (Input.Up, _) ->
          scroll_by (-1); Some Continue
@@ -1241,16 +1243,16 @@ let handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r =
        | Input.Special (Input.PageDown, _) ->
          scroll_by rows; Some Continue
        | Input.Special (Input.Home, _) ->
-         help_scroll := 0; Some Continue
+         set_help_scroll ctx 0; Some Continue
        | Input.Special (Input.End, _) ->
-         help_scroll := max_scroll; Some Continue
+         set_help_scroll ctx max_scroll; Some Continue
        | Input.Mouse mev ->
          if mev.button = Input.ScrollUp then scroll_by (-3)
          else if mev.button = Input.ScrollDown then scroll_by 3;
          Some Continue
        | _ ->
-         in_help_mode := false;
-         help_scroll := 0;
+         Modal.pop ctx.modal;
+         set_help_scroll ctx 0;
          Some Continue)
     end
     else if (match ev with Input.Mouse _ -> true | _ -> false) then begin
@@ -1530,11 +1532,11 @@ let handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r =
        | None -> Some Continue)
     end
     else if match_binding ev Keys.help then begin
-      if !in_help_mode then begin
-        in_help_mode := false;
-        help_scroll := 0
+      if is_help ctx then begin
+        Modal.pop ctx.modal;
+        set_help_scroll ctx 0
       end else
-        in_help_mode := true;
+        Modal.push ctx.modal (Modal.Help { scroll = 0 });
       Some Continue
     end
     else if match_binding ev Keys.minimap then begin

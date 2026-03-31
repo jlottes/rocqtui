@@ -34,17 +34,14 @@ Progress tracker for REFACTOR.md items, in priority order.
 - [x] Simplify main.ml's Jump_back handler (25→12 lines)
 - Note: file watcher + tab bar enable stay in main.ml (per-action)
 
-## B. Modal Manager
-- [ ] Define `modal` variant type (Help, QueryMenu, OptionsMenu, etc.)
-- [ ] Create `modal_manager.ml` with stack
-- [ ] Extract help screen state and handlers from editor.ml
-- [ ] Extract query menu state and handlers
-- [ ] Extract options menu state and handlers
-- [ ] Extract theme menu state and handlers
-- [ ] Extract build menu state and handlers
-- [ ] Integrate file_picker as a modal
-- [ ] Replace `Render.overlay_ref` with modal manager rendering
-- [ ] Update `handle_event` to dispatch to modal manager
+## B. Modal Manager ✅
+- [x] Define `Modal.kind` variant (Help, QueryMenu, OptionsMenu, ThemeMenu, BuildMenu, FilePicker)
+- [x] Create `modal.ml` with stack (push/pop/toggle/dismiss)
+- [x] Add `Modal.t` to `Editor_context.t`
+- [x] Replace 5 boolean refs with Modal.is_open/push/pop/toggle
+- [x] Replace help_scroll ref with Modal.Help mutable field
+- [x] Update all modal checks in render_all and handle_event
+- Note: event dispatch still in editor.ml (handlers not extracted to separate files yet — that's item C)
 
 ## G. Prompts as Modals
 - [ ] Define `Prompt` modal variant with message, confirm_key, callbacks

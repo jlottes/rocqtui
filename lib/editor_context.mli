@@ -3,6 +3,7 @@
 type t = {
   switch_tab : int -> unit;       (** switch to tab at screen x *)
   open_files : unit -> string list; (** get list of open file paths *)
+  modal : Modal.t;                (** modal dialog manager *)
   mutable status_extra : string;  (** extra status text (e.g. MCP spinner) *)
   mutable init_error : string;    (** error message if session init failed *)
   mutable theme_name : string;    (** current theme name *)
