@@ -152,6 +152,14 @@ let parse_csi fd =
                Special (Home, m)
       | 'F' -> let m = match plist with _ :: p :: _ -> mods_from p | _ -> no_mod in
                Special (End, m)
+      | 'P' -> let m = match plist with _ :: p :: _ -> mods_from p | _ -> no_mod in
+               Special (F 1, m)
+      | 'Q' -> let m = match plist with _ :: p :: _ -> mods_from p | _ -> no_mod in
+               Special (F 2, m)
+      | 'R' -> let m = match plist with _ :: p :: _ -> mods_from p | _ -> no_mod in
+               Special (F 3, m)
+      | 'S' -> let m = match plist with _ :: p :: _ -> mods_from p | _ -> no_mod in
+               Special (F 4, m)
       | '~' ->
         let key_num = match plist with n :: _ -> n | [] -> 0 in
         let m = match plist with _ :: p :: _ -> mods_from p | _ -> no_mod in
@@ -341,6 +349,10 @@ let parse_csi fd =
              Special (Left, m)
     | 'H' -> Special (Home, no_mod)
     | 'F' -> Special (End, no_mod)
+    | 'P' -> Special (F 1, no_mod)
+    | 'Q' -> Special (F 2, no_mod)
+    | 'R' -> Special (F 3, no_mod)
+    | 'S' -> Special (F 4, no_mod)
     | 'M' ->
       (* X10 mouse with no params *)
       let cb = read_byte fd 0.05 in
