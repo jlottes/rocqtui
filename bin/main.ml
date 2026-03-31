@@ -122,28 +122,29 @@ let () =
   let stdin_fd = Unix.stdin in
   let running = ref true in
   (* Blocking event read helper for prompts *)
-  let read_blocking_event () =
-    let rec loop () =
-      let ready = Main_loop.select_with_watches [stdin_fd] 1.0 in
-      if List.mem stdin_fd ready then
-        match Input.read_event ~timeout:0.0 stdin_fd with
-        | Some ev -> ev
-        | None -> loop ()
-      else loop ()
-    in
-    loop ()
+  let is_ctrl_key ev cp =
+    match ev with
+    | Input.Key (c, m) when c = cp && m.ctrl -> true
+    | _ -> false in
+  let match_binding_input (ev : Input.event) (b : Keys.binding) =
+    match ev with
+    | Input.Key (cp, mods) ->
+      if mods.Input.ctrl && not mods.alt then
+        let ctrl_code = if cp >= 97 && cp <= 122 then cp - 96 else cp in
+        List.mem ctrl_code b.Keys.codes
+      else if not mods.ctrl && not mods.alt && not mods.shift then
+        List.mem cp b.codes
+      else false
+    | Input.Special (key, _) ->
+      let code = match key with
+        | Input.F n -> Some (264 + n)
+        | _ -> None in
+      (match code with Some c -> List.mem c b.codes | None -> false)
+    | _ -> false
   in
-  let prompt_unsaved msg confirm_ev on_confirm =
-    let tab = Tab.active_tab mgr in
-    Render.set_status r msg;
-    Render.present r;
-    let ev = read_blocking_event () in
-    if ev = confirm_ev then
-      on_confirm ()
-    else if (match ev with
-      | Input.Key (115, m) when m.ctrl -> true  (* ^S *)
-      | Input.Key (19, _) -> true
-      | _ -> false) then begin
+  let make_unsaved_prompt msg confirm_binding on_confirm =
+    let save_and_report () =
+      let tab = Tab.active_tab mgr in
       (match Buffer.filename tab.buf with
        | Some _ ->
          if Buffer.save tab.buf then
@@ -153,27 +154,29 @@ let () =
        | None ->
          Render.set_status r "No filename.");
       Render_need.request ()
-    end else begin
-      let t = Tab.active_tab mgr in
-      ignore (Editor.handle_event ctx ev t r);
-      Render_need.request ()
-    end
+    in
+    Modal.Prompt {
+      message = msg;
+      handler = (fun ev ->
+        if match_binding_input ev confirm_binding then
+          (on_confirm (); Modal.Handled)
+        else if is_ctrl_key ev 115 || is_ctrl_key ev 19 then
+          (save_and_report (); Modal.Handled)
+        else Modal.Dismissed)
+    }
   in
-  (* Check if event matches ^W *)
-  let ctrl_w_ev = Input.Key (119, { Input.shift = false; alt = false;
-                                     ctrl = true; super = false }) in
-  let ctrl_x_ev = Input.Key (120, { Input.shift = false; alt = false;
-                                     ctrl = true; super = false }) in
   let handle_close_tab () =
     let tab = Tab.active_tab mgr in
     if Tab.count mgr > 1 then begin
       if Buffer.modified tab.buf then
-        prompt_unsaved "Unsaved changes! ^W again to close, ^S to save." ctrl_w_ev
-          (fun () ->
-            ignore (Tab.close_active mgr);
-            if Tab.count mgr <= 1 then
-              Render.set_tab_bar r false;
-            Render_need.request ())
+        Modal.push ctx.modal
+          (make_unsaved_prompt "Unsaved changes! ^W again to close, ^S to save."
+             Keys.close_tab
+             (fun () ->
+               ignore (Tab.close_active mgr);
+               if Tab.count mgr <= 1 then
+                 Render.set_tab_bar r false;
+               Render_need.request ()))
       else begin
         ignore (Tab.close_active mgr);
         if Tab.count mgr <= 1 then
@@ -181,10 +184,11 @@ let () =
         Render_need.request ()
       end
     end else begin
-      (* Last tab -- same as quit *)
       if Buffer.modified tab.buf then
-        prompt_unsaved "Unsaved changes! ^W again to quit, ^S to save." ctrl_w_ev
-          (fun () -> running := false)
+        Modal.push ctx.modal
+          (make_unsaved_prompt "Unsaved changes! ^W again to quit, ^S to save."
+             Keys.close_tab
+             (fun () -> running := false))
       else
         running := false
     end
@@ -193,8 +197,10 @@ let () =
     let any_unsaved = List.exists (fun (t : Tab.t) ->
       Buffer.modified t.buf) mgr.tabs in
     if any_unsaved then
-      prompt_unsaved "Unsaved changes! ^X again to quit, ^S to save." ctrl_x_ev
-        (fun () -> running := false)
+      Modal.push ctx.modal
+        (make_unsaved_prompt "Unsaved changes! ^X again to quit, ^S to save."
+           Keys.quit
+           (fun () -> running := false))
     else
       running := false
   in
@@ -278,8 +284,8 @@ let () =
           end
           else begin
             match Editor.handle_event ctx ev tab r with
-            | Editor.Quit -> handle_quit ()
-            | Editor.Close_tab -> handle_close_tab ()
+            | Editor.Quit -> handle_quit (); Render_need.request ()
+            | Editor.Close_tab -> handle_close_tab (); Render_need.request ()
             | Editor.Reload ->
               let tab = Tab.active_tab mgr in
               (match Buffer.filename tab.buf with
@@ -290,18 +296,16 @@ let () =
                      (Printf.sprintf "%s reloaded" (Filename.basename path));
                    Render_need.request ()
                  in
-                 if Buffer.modified tab.buf then begin
-                   Render.set_status r
-                     "Buffer has unsaved changes! F4 again to discard and reload.";
-                   Render.present r;
-                   let ev2 = read_blocking_event () in
-                   let is_f4 = match ev2 with
-                     | Input.Special (Input.F 4, _) -> true | _ -> false in
-                   if is_f4 then
-                     do_reload ()
-                   else
-                     Render_need.request ()
-                 end else
+                 if Buffer.modified tab.buf then
+                   Modal.push ctx.modal (Modal.Prompt {
+                     message = "Buffer has unsaved changes! F4 again to discard and reload.";
+                     handler = (fun ev ->
+                       match ev with
+                       | Input.Special (Input.F 4, _) ->
+                         do_reload (); Modal.Handled
+                       | _ -> Modal.Dismissed)
+                   })
+                 else
                    do_reload ()
                | None ->
                  Render.set_status r "No filename.");
@@ -309,29 +313,25 @@ let () =
             | Editor.Save_prompt ->
               (match Buffer.filename tab.buf with
                | Some _ ->
-                 if Buffer.disk_changed tab.buf then begin
-                   Render.set_status r
-                     "File changed on disk! ^S again to overwrite, ^R to reload.";
-                   Render.present r;
-                   let ev2 = read_blocking_event () in
-                   let is_save = match ev2 with
-                     | Input.Key (115, m) when m.ctrl -> true
-                     | Input.Key (19, _) -> true | _ -> false in
-                   let is_reload = match ev2 with
-                     | Input.Key (114, m) when m.ctrl -> true
-                     | Input.Key (18, _) -> true | _ -> false in
-                   if is_save then begin
-                     if Buffer.save tab.buf then
-                       Render.set_status r "Saved (overwritten)."
-                     else
-                       Render.set_status r "Error saving file."
-                   end else if is_reload then begin
-                     (match Buffer.filename tab.buf with
-                      | Some f -> File_manager.reload_tab fm tab f
-                      | None -> ());
-                     Render.set_status r "Reloaded from disk."
-                   end
-                 end else begin
+                 if Buffer.disk_changed tab.buf then
+                   Modal.push ctx.modal (Modal.Prompt {
+                     message = "File changed on disk! ^S again to overwrite, ^R to reload.";
+                     handler = (fun ev ->
+                       if is_ctrl_key ev 115 || is_ctrl_key ev 19 then begin
+                         if Buffer.save tab.buf then
+                           Render.set_status r "Saved (overwritten)."
+                         else
+                           Render.set_status r "Error saving file.";
+                         Modal.Handled
+                       end else if is_ctrl_key ev 114 || is_ctrl_key ev 18 then begin
+                         (match Buffer.filename tab.buf with
+                          | Some f -> File_manager.reload_tab fm tab f
+                          | None -> ());
+                         Render.set_status r "Reloaded from disk.";
+                         Modal.Handled
+                       end else Modal.Dismissed)
+                   })
+                 else begin
                    if Buffer.save tab.buf then
                      Render.set_status r "Saved."
                    else

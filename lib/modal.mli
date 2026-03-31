@@ -1,5 +1,10 @@
 (** Modal manager: variant stack replacing scattered boolean refs. *)
 
+type prompt_result =
+  | Handled    (** prompt consumed the event, dismiss *)
+  | Dismissed  (** event didn't match, dismiss and re-process *)
+  | Ignored    (** event didn't match, stay in prompt *)
+
 type kind =
   | Help of { mutable scroll : int }
   | QueryMenu
@@ -7,6 +12,10 @@ type kind =
   | ThemeMenu
   | BuildMenu
   | FilePicker
+  | Prompt of {
+      message : string;
+      handler : Input.event -> prompt_result;
+    }
 
 type t
 

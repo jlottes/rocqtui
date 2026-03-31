@@ -7,6 +7,15 @@ type kind =
   | ThemeMenu
   | BuildMenu
   | FilePicker
+  | Prompt of {
+      message : string;
+      handler : Input.event -> prompt_result;
+    }
+
+and prompt_result =
+  | Handled    (* prompt consumed the event, dismiss *)
+  | Dismissed  (* event didn't match, dismiss and re-process *)
+  | Ignored    (* event didn't match, stay in prompt *)
 
 type t = {
   mutable stack : kind list;
@@ -36,6 +45,7 @@ let same_kind a b =
   | ThemeMenu, ThemeMenu -> true
   | BuildMenu, BuildMenu -> true
   | FilePicker, FilePicker -> true
+  | Prompt _, Prompt _ -> true
   | _ -> false
 
 let toggle t kind =

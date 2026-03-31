@@ -596,6 +596,10 @@ let render_options_bar r =
 let update_status (ctx : Editor_context.t) r (tab : Tab.t) =
   let buf = tab.buf in
   let session = tab.session in
+  match Modal.top ctx.modal with
+  | Some (Modal.Prompt p) ->
+    Render.set_status r p.message
+  | _ ->
   if is_help ctx then
     Render.set_status r "F1:close  Up/Down/PgUp/PgDn:scroll  any other key:close"
   else if is_build ctx then
@@ -885,7 +889,7 @@ let codepoint_of_event = function
   | Input.Special (Input.Backspace, _) -> Some 127
   | _ -> None
 
-let handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r =
+let rec handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r =
   let buf = tab.buf in
   let session = tab.session in
   (* Handle compose mode first *)
@@ -918,7 +922,17 @@ let handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r =
   in
   if compose_handled then
     Continue
-  else if File_picker.is_open () then begin
+  else begin match Modal.top ctx.modal with
+  | Some (Modal.Prompt p) ->
+    let result = p.handler ev in
+    (match result with
+     | Modal.Handled -> Modal.pop ctx.modal; Continue
+     | Modal.Dismissed -> Modal.pop ctx.modal;
+       (* Re-process the event now that prompt is dismissed *)
+       handle_event ctx ev tab r
+     | Modal.Ignored -> Continue)
+  | _ ->
+  if File_picker.is_open () then begin
     let (_box_top, box_left, box_w, _box_h, visible_rows) =
       File_picker.box_geometry r in
     match ev with
@@ -1767,3 +1781,4 @@ let handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r =
          | Some a -> a | None -> Continue)
   in
   action
+  end

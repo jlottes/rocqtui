@@ -43,13 +43,15 @@ Progress tracker for REFACTOR.md items, in priority order.
 - [x] Update all modal checks in render_all and handle_event
 - Note: event dispatch still in editor.ml (handlers not extracted to separate files yet — that's item C)
 
-## G. Prompts as Modals
-- [ ] Define `Prompt` modal variant with message, confirm_key, callbacks
-- [ ] Convert "unsaved changes on quit" prompt
-- [ ] Convert "unsaved changes on close tab" prompt
-- [ ] Convert "save conflict" prompt (disk_changed)
-- [ ] Convert "reload confirm" prompt
-- [ ] Remove `prompt_unsaved` and `read_blocking_event` from main.ml
+## G. Prompts as Modals ✅
+- [x] Define `Prompt` modal variant with message + handler callback
+- [x] Define `prompt_result`: Handled, Dismissed, Ignored
+- [x] Convert "unsaved changes on quit" prompt
+- [x] Convert "unsaved changes on close tab" prompt
+- [x] Convert "save conflict" prompt (disk_changed)
+- [x] Convert "reload confirm" prompt
+- [x] Remove `prompt_unsaved`, `read_blocking_event`, `ctrl_w_ev`, `ctrl_x_ev`
+- [x] handle_event dispatches to Prompt handler, re-processes on Dismissed
 
 ## A. App State Record
 - [ ] Define `App_state.t` record
