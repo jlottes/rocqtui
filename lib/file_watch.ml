@@ -48,12 +48,27 @@ let remove_watch t path =
     t.watches <- List.filter (fun w2 -> w2.path <> path) t.watches
   | None -> ()
 
+(* Masks for detecting file replacement (atomic rename) *)
+let mask_delete_self = in_delete_self ()
+let mask_move_self = in_move_self ()
+
 (* Read pending events. Returns list of changed file paths. *)
 let poll t =
   let events = try inotify_read t.ifd with _ -> [] in
-  let paths = List.filter_map (fun (wd, _mask, _name) ->
+  let paths = List.filter_map (fun (wd, emask, _name) ->
     match List.find_opt (fun w -> w.wd = wd) t.watches with
-    | Some w -> Some w.path
+    | Some w ->
+      (* If the file was replaced (atomic rename), the old watch is dead.
+         Re-add the watch on the new inode at the same path. *)
+      if emask land mask_delete_self <> 0
+         || emask land mask_move_self <> 0 then begin
+        t.watches <- List.filter (fun w2 -> w2.wd <> wd) t.watches;
+        (try
+           let new_wd = inotify_add_watch t.ifd w.path mask in
+           t.watches <- { wd = new_wd; path = w.path } :: t.watches
+         with _ -> ())
+      end;
+      Some w.path
     | None -> None
   ) events in
   (* Deduplicate and accumulate *)
