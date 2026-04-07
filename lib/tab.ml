@@ -72,6 +72,7 @@ type t = {
   goals_sel : pane_selection;
   mutable goals_lines_cache : string list;
   msg : msg_tabs;
+  mutable locked : bool;
 }
 
 type manager = {
@@ -94,7 +95,8 @@ let make_tab ?(args=[]) buf session =
     suppress_ensure_visible = false;
     goals_sel = fresh_pane_sel ();
     goals_lines_cache = [];
-    msg = fresh_msg_tabs () }
+    msg = fresh_msg_tabs ();
+    locked = false }
 
 let create_blank ?(args=[]) () =
   let buf = Buffer.create () in

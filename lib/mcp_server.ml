@@ -6,6 +6,7 @@ type client = {
   fd : Unix.file_descr;
   mutable buf : string;  (* accumulated input *)
   mutable initialized : bool;
+  id : int;  (* unique client ID for lock tracking *)
 }
 
 type t = {
@@ -19,6 +20,8 @@ type t = {
   mutable last_verified_end : int;
   mutable last_messages : string list;
   mutable symlinks : string list;  (* symlink paths to clean up *)
+  mutable next_client_id : int;
+  mutable locked_tabs : (int * int) list;  (* (tab_id, client_id) pairs *)
 }
 
 let spinner_chars = [| "·"; "✶"; "✢"; "✻" |]
@@ -280,6 +283,21 @@ let tool_defs = [
      "type", `String "object";
      "properties", `Assoc [];
    ]);
+  ("lock", "Lock the buffer (prevent user edits on this tab)",
+   `Assoc [
+     "type", `String "object";
+     "properties", `Assoc [];
+   ]);
+  ("unlock", "Unlock the buffer (allow user edits again)",
+   `Assoc [
+     "type", `String "object";
+     "properties", `Assoc [];
+   ]);
+  ("build_deps", "Build dependencies of the current file via make",
+   `Assoc [
+     "type", `String "object";
+     "properties", `Assoc [];
+   ]);
 ]
 
 let resource_defs = [
@@ -292,6 +310,7 @@ let resource_defs = [
   ("rocqtui://regions", "Verified and target regions", "application/json");
   ("rocqtui://sentences", "Sentence list with status", "application/json");
   ("rocqtui://tabs", "Open tabs", "application/json");
+  ("rocqtui://state", "Batched state (buffer, regions, goals, errors, sentences, busy, locked)", "application/json");
 ]
 
 (* --- Resource handlers --- *)
@@ -316,7 +335,7 @@ let parse_resource_uri uri mgr =
     (base, tab)
   | _ -> (uri, Tab.active_tab mgr)
 
-let handle_resource uri mgr =
+let handle_resource _t uri mgr =
   let (uri, tab) = parse_resource_uri uri mgr in
   match uri with
   | "rocqtui://buffer" ->
@@ -474,6 +493,64 @@ let handle_resource uri mgr =
         ]
       ]
     ])
+  | "rocqtui://state" ->
+    let vend = match tab.session with
+      | Some s -> Session.verified_end s | None -> 0 in
+    let tend = match tab.session with
+      | Some s -> Session.pending_end s | None -> 0 in
+    let busy = match tab.session with
+      | Some s -> Session.is_busy s | None -> false in
+    let goals = match tab.session with
+      | Some s -> Session.goals_text s | None -> None in
+    let msgs = match tab.session with
+      | Some s -> Session.messages s | None -> [] in
+    let (err_range, err_msg) = match tab.session with
+      | Some s ->
+        let range = Session.error_range s in
+        let msg = match Session.messages s with
+          | m :: _ -> m | [] -> "" in
+        (range, msg)
+      | None -> (None, "")
+    in
+    let error_json = match err_range with
+      | Some (s, e) -> `Assoc [
+          "start", `Int s; "end", `Int e;
+          "message", `String err_msg ]
+      | None -> `Null
+    in
+    let ranges = match tab.session with
+      | Some s -> Session.sentence_ranges s | None -> [] in
+    let sentences = List.map (fun (sd : Session.sentence_display) ->
+      `Assoc [
+        "start", `Int sd.sd_start;
+        "end", `Int sd.sd_end;
+        "status", `String (match sd.sd_status with
+          | Session.Processing -> "processing"
+          | Session.Verified -> "verified"
+          | Session.Error msg -> "error: " ^ msg);
+      ]
+    ) ranges in
+    let locked = tab.Tab.locked in
+    let state_json = `Assoc [
+      "buffer", `String (Buffer.text tab.buf);
+      "verified_end", `Int vend;
+      "target_end", `Int tend;
+      "is_busy", `Bool busy;
+      "goals", (match goals with Some g -> `String g | None -> `Null);
+      "messages", `List (List.map (fun m -> `String m) msgs);
+      "error", error_json;
+      "sentences", `List sentences;
+      "locked", `Bool locked;
+    ] in
+    Some (`Assoc [
+      "contents", `List [
+        `Assoc [
+          "uri", `String uri;
+          "mimeType", `String "application/json";
+          "text", `String (Yojson.Safe.to_string state_json);
+        ]
+      ]
+    ])
   | _ -> None
 
 let symlink_name = ".rocqtui-mcp.sock"
@@ -529,7 +606,7 @@ let resolve_tab args mgr =
     let tab = Tab.active_tab mgr in
     tab, tab.Tab.id
 
-let handle_tool t name args mgr =
+let handle_tool t client name args mgr =
   let (tab, tab_idx) = resolve_tab args mgr in
   mark_tab_active t tab_idx;
   t.last_activity <- Unix.gettimeofday ();
@@ -932,6 +1009,53 @@ let handle_tool t name args mgr =
       `Assoc ["type", `String "text"; "text",
         `String (if busy then "true" else "false")]
     ]])
+  | "lock" ->
+    if tab.locked then
+      (false, `Assoc ["content", `List [
+        `Assoc ["type", `String "text"; "text", `String "Already locked"]
+      ]; "isError", `Bool true])
+    else begin
+      tab.Tab.locked <- true;
+      t.locked_tabs <- (tab_idx, client.id) :: t.locked_tabs;
+      (true, `Assoc ["content", `List [
+        `Assoc ["type", `String "text"; "text", `String "OK"]
+      ]])
+    end
+  | "unlock" ->
+    let was_locked = List.exists (fun (tid, cid) ->
+      tid = tab_idx && cid = client.id) t.locked_tabs in
+    if was_locked then begin
+      t.locked_tabs <- List.filter (fun (tid, cid) ->
+        not (tid = tab_idx && cid = client.id)) t.locked_tabs;
+      (* Only unlock the tab if no other client holds a lock on it *)
+      if not (List.exists (fun (tid, _) -> tid = tab_idx) t.locked_tabs) then
+        tab.Tab.locked <- false
+    end;
+    (was_locked, `Assoc ["content", `List [
+      `Assoc ["type", `String "text"; "text",
+        `String (if was_locked then "OK" else "Was not locked")]
+    ]])
+  | "build_deps" ->
+    let filename = match Buffer.filename tab.buf with
+      | Some f -> f | None -> "" in
+    if filename = "" then
+      (false, `Assoc ["content", `List [
+        `Assoc ["type", `String "text"; "text", `String "No file open"]
+      ]; "isError", `Bool true])
+    else begin
+      let (project_dir, _) = Project.find_args (Some filename) in
+      match project_dir with
+      | Some pd ->
+        let started = Build.build_deps ~project_dir:pd filename in
+        (false, `Assoc ["content", `List [
+          `Assoc ["type", `String "text"; "text",
+            `String (if started then "Build started" else "Build already running")]
+        ]])
+      | None ->
+        (false, `Assoc ["content", `List [
+          `Assoc ["type", `String "text"; "text", `String "No project directory found"]
+        ]; "isError", `Bool true])
+    end
   | _ ->
     (false, `Assoc ["content", `List [
       `Assoc ["type", `String "text"; "text", `String ("Unknown tool: " ^ name)]
@@ -966,7 +1090,7 @@ let dispatch_message t client msg mgr =
     let params = msg |> member "params" in
     let name = params |> member "name" |> to_string in
     let args = params |> member "arguments" in
-    let (changed, result) = handle_tool t name args mgr in
+    let (changed, result) = handle_tool t client name args mgr in
     (changed, Some (json_result id result))
   | Some "resources/list" ->
     let resources = List.map (fun (uri, desc, mime) ->
@@ -981,7 +1105,7 @@ let dispatch_message t client msg mgr =
   | Some "resources/read" ->
     let params = msg |> member "params" in
     let uri = params |> member "uri" |> to_string in
-    (match handle_resource uri mgr with
+    (match handle_resource t uri mgr with
      | Some result -> (false, Some (json_result id result))
      | None -> (false, Some (json_error id (-32602) ("Unknown resource: " ^ uri))))
   | Some "ping" ->
@@ -1125,7 +1249,7 @@ let create ?(socket_path="") () =
     active_tab_ids = []; spinner_frame = 0;
     last_activity = 0.0;
     last_goals = ""; last_verified_end = 0; last_messages = [];
-    symlinks = [] }
+    symlinks = []; next_client_id = 1; locked_tabs = [] }
 
 let server_fd t = t.server_fd
 
@@ -1138,7 +1262,9 @@ let handle_ready t ready_fds mgr =
     (try
        let client_fd, _ = Unix.accept ~cloexec:true t.server_fd in
        Unix.set_nonblock client_fd;
-       t.clients <- { fd = client_fd; buf = ""; initialized = false }
+       let cid = t.next_client_id in
+       t.next_client_id <- cid + 1;
+       t.clients <- { fd = client_fd; buf = ""; initialized = false; id = cid }
                     :: t.clients
      with Unix.Unix_error (Unix.EAGAIN, _, _) -> ()
         | Unix.Unix_error (Unix.EWOULDBLOCK, _, _) -> ()
@@ -1165,9 +1291,19 @@ let handle_ready t ready_fds mgr =
        | _ -> dead := client :: !dead)
     end
   ) t.clients;
-  (* Remove dead clients *)
+  (* Remove dead clients and release their locks *)
   List.iter (fun c ->
     (try Unix.close c.fd with _ -> ());
+    (* Find tabs locked by this client and unlock them *)
+    let client_locks = List.filter (fun (_, cid) -> cid = c.id) t.locked_tabs in
+    t.locked_tabs <- List.filter (fun (_, cid) -> cid <> c.id) t.locked_tabs;
+    List.iter (fun (tid, _) ->
+      (* Unlock the tab if no other client holds a lock on it *)
+      if not (List.exists (fun (tid2, _) -> tid2 = tid) t.locked_tabs) then
+        match Tab.find_by_id mgr tid with
+        | Some tab -> tab.Tab.locked <- false
+        | None -> ()
+    ) client_locks;
     t.clients <- List.filter (fun c2 -> c2.fd != c.fd) t.clients
   ) !dead;
   (* Clear active tabs if no clients remain *)
@@ -1186,3 +1322,4 @@ let shutdown t =
 let socket_path t = t.path
 
 let has_clients t = t.clients <> []
+

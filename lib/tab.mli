@@ -36,6 +36,7 @@ type t = {
   goals_sel : pane_selection;
   mutable goals_lines_cache : string list;
   msg : msg_tabs;
+  mutable locked : bool;
 }
 
 type manager = {

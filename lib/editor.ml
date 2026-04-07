@@ -56,6 +56,10 @@ let cursor_in_target ?(for_backspace=false) (tab : Tab.t) =
       if for_backspace then off <= tend
       else off < tend
 
+(* Check if editing is blocked (cursor in target region, or buffer locked by MCP). *)
+let edit_blocked ?(for_backspace=false) (tab : Tab.t) =
+  tab.locked || cursor_in_target ~for_backspace tab
+
 (* After undo/redo, retract target if the edit is inside the target region *)
 let rewind_if_needed (tab : Tab.t) =
   let buf = tab.buf in
@@ -88,7 +92,7 @@ let run_query session phrase =
   | None -> ()
 
 let insert_string (tab : Tab.t) s =
-  if not (cursor_in_target tab) then
+  if not (edit_blocked tab) then
     let buf = tab.buf in
     String.iter (fun c ->
       if c = '\n' then Buffer.insert_newline buf
@@ -804,7 +808,7 @@ let rec handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r
     (* Paste event *)
     else if (match ev with Input.Paste _ -> true | _ -> false) then begin
       let text = match ev with Input.Paste t -> t | _ -> "" in
-      if text <> "" && not (cursor_in_target tab) then begin
+      if text <> "" && not (edit_blocked tab) then begin
         (match session with Some s -> Session.clear_error s | None -> ());
         ignore (Buffer.delete_selection buf);
         insert_string tab text;
@@ -1049,7 +1053,7 @@ let rec handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r
       Buffer.move_page_up buf (rows - 1); Some Continue
     (* Clipboard *)
     | _ when match_binding ev Keys.cut ->
-      if not (cursor_in_target tab) then begin
+      if not (edit_blocked tab) then begin
         (match session with Some s -> Session.clear_error s | None -> ());
         match Buffer.delete_selection buf with
         | Some text ->
@@ -1061,7 +1065,7 @@ let rec handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r
       end;
       Some Continue
     | _ when match_binding ev Keys.paste ->
-      if not (cursor_in_target tab) then begin
+      if not (edit_blocked tab) then begin
         (match session with Some s -> Session.clear_error s | None -> ());
         ignore (Buffer.delete_selection buf);
         if ctx.clipboard <> "" then
@@ -1074,7 +1078,7 @@ let rec handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r
       Some Continue
     (* Delete *)
     | Input.Special (Input.Delete, _) ->
-      if not (cursor_in_target tab) then begin
+      if not (edit_blocked tab) then begin
         (match session with Some s -> Session.clear_error s | None -> ());
         (match Buffer.delete_selection buf with
          | Some _ -> () | None -> Buffer.delete_char_at buf)
@@ -1082,7 +1086,7 @@ let rec handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r
       Some Continue
     (* Backspace *)
     | Input.Special (Input.Backspace, _) ->
-      if not (cursor_in_target ~for_backspace:true tab) then begin
+      if not (edit_blocked ~for_backspace:true tab) then begin
         (match session with Some s -> Session.clear_error s | None -> ());
         (match Buffer.delete_selection buf with
          | Some _ -> () | None -> Buffer.delete_char_before buf)
@@ -1090,7 +1094,7 @@ let rec handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r
       Some Continue
     (* Enter *)
     | Input.Special (Input.Enter, _) ->
-      if not (cursor_in_target tab) then begin
+      if not (edit_blocked tab) then begin
         (match session with Some s -> Session.clear_error s | None -> ());
         ignore (Buffer.delete_selection buf);
         Buffer.insert_newline buf
@@ -1098,7 +1102,7 @@ let rec handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r
       Some Continue
     (* Printable character *)
     | Input.Key (cp, mods) when cp >= 32 && not mods.ctrl && not mods.alt ->
-      if not (cursor_in_target tab) then begin
+      if not (edit_blocked tab) then begin
         (match session with Some s -> Session.clear_error s | None -> ());
         ignore (Buffer.delete_selection buf);
         (* Encode codepoint as UTF-8 and insert *)
