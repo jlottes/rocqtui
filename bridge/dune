@@ -1,0 +1,3 @@
+(executable
+ (name rocqtui_mcp)
+ (libraries rocqtui_lib unix yojson))
