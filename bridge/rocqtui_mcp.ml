@@ -207,11 +207,8 @@ let handle_verify_to conn args state =
       (match Text_match.find_unique ~haystack:text ~needle
                ?after_text ?line () with
        | Text_match.Unique off ->
-         (* Snap to sentence boundary at or after match *)
-         let snapped = match Sentence.find_end text ~start:off with
-           | Some e -> e
-           | None -> off in
-         snapped
+         (* go_to_offset already snaps to sentence boundary at or before *)
+         off
        | Text_match.No_match ->
          let err = Mcp_json.tool_error "No match found for before_text" in
          raise (Failure (Yojson.Safe.to_string err))

@@ -57,7 +57,8 @@ Standalone tools: `dune exec tools/grid_cat.exe -- -color file.v`,
 - `bin/main.ml` (~390 lines) — main loop, tab management, render scheduling
 
 ### MCP bridge
-- `scripts/rocqtui-mcp-bridge` — Python bridge: stdio↔Unix socket, sync stepping
+- `bridge/rocqtui_mcp.ml` — OCaml bridge: stdio↔Unix socket, high-level proving tools
+- `scripts/rocqtui-mcp-bridge` — old Python bridge (deprecated)
 
 ## Key Design Decisions
 
@@ -106,27 +107,26 @@ to drive the editor programmatically. Full API docs: `CLAUDE_MCP.md`
 (projects import it via `@~/rocq/rocqtui/CLAUDE_MCP.md`).
 
 ### Architecture
-- `mcp_server.ml` — JSON-RPC 2.0 server, resources + tools
-- `scripts/rocqtui-mcp-bridge` — Python bridge (stdio↔socket) with sync stepping
+- `mcp_server.ml` — JSON-RPC 2.0 low-level server, resources + tools
+- `bridge/rocqtui_mcp.ml` — OCaml bridge (stdio↔socket), high-level proving tools
 - `.rocqtui-mcp.sock` symlink created in project dirs for discovery
 
-### Key tools
-- **Stepping** (sync via bridge): `step_forward`, `step_backward`, `go_to_offset`, `go_to_end`
-  — block until done, return goals + errors + executed/next sentence
-- **Editing**: `replace_text` (preferred, text-based), `insert_text`, `replace_range`,
-  `delete_range`, `batch_edit`, `undo`, `redo` — all return context snippets
-- **Queries**: `query`, `get_goals`, `get_position`, `get_context`, `offset_of_line`
-- **Session**: `is_busy`, `interrupt`, `save`, `switch_tab`, `open_file`
+### Key tools (via bridge)
+- **Proving**: `verify_to`, `proof_insert`, `proof_forward`, `proof_rewind`
+  — all synchronous, text-based (no byte offsets), auto-lock buffer
+- **Queries**: `query` (About, Print, Search, Check, Locate)
+- **Session**: `save`, `open_file`, `build_deps`
 
 ### Key resources
-- `rocqtui://buffer`, `goals`, `messages`, `error`, `regions`, `sentences`,
-  `tabs`, `cursor`, `line_offsets` — all support `?tab=N` for per-tab access
+- `rocqtui://proof_status` — goals, context (sentence-aligned), verified position
+- `rocqtui://buffer` — full file text
+- `rocqtui://tabs` — open tabs
 
 ### Connection
 Configure in project `.mcp.json`:
 ```json
 { "mcpServers": { "rocqtui": {
-    "command": "/home/jlottes/rocq/rocqtui/scripts/rocqtui-mcp-bridge"
+    "command": "/home/jlottes/rocq/rocqtui/_build/default/bridge/rocqtui_mcp.exe"
 } } }
 ```
 
