@@ -748,7 +748,12 @@ let rec handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r
                             tab.msg.mt_tabs in
           match Render.msg_tab_at_x r ~x ~tab_names with
           | Some i ->
-            tab.msg.mt_active <- i
+            tab.msg.mt_active <- i;
+            let clicked = Tab.active_msg_tab tab.msg in
+            if clicked.mt_terminal = None then
+              Tab.set_sticky_terminal None
+            else
+              Tab.set_sticky_terminal clicked.mt_terminal
           | None ->
             ctx.dragging <- Editor_context.DragH
         end

@@ -265,10 +265,16 @@ let update_msg_tabs (tab : Tab.t) =
         String.split_on_char '\n' msg
       ) (Session.messages sess)
   in
+  (* Don't auto-switch away from a terminal sub-tab *)
+  let active_is_terminal =
+    let mt = Tab.active_msg_tab tab.msg in
+    mt.mt_terminal <> None
+  in
   (* Auto-activate Rocq tab if content changed *)
   if rocq_lines <> rocq.mt_lines && rocq_lines <> [] then begin
     rocq.mt_lines <- rocq_lines;
-    Tab.activate_msg_tab tab.msg "Rocq"
+    if not active_is_terminal then
+      Tab.activate_msg_tab tab.msg "Rocq"
   end else
     rocq.mt_lines <- rocq_lines;
   (* Update Build tab *)
@@ -277,7 +283,7 @@ let update_msg_tabs (tab : Tab.t) =
     let build = Tab.ensure_msg_tab tab.msg "Build" in
     if build_lines <> build.mt_lines then begin
       build.mt_lines <- build_lines;
-      if Build.is_running () then
+      if Build.is_running () && not active_is_terminal then
         Tab.activate_msg_tab tab.msg "Build"
     end
   end

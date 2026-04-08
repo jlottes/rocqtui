@@ -68,10 +68,22 @@ let msg_tab_display_name (tab : msg_tab) =
   | Some term -> Terminal.title term
   | None -> tab.mt_name
 
+(* Sticky terminal: when set, sync_terminals will activate this
+   terminal across file tab switches. *)
+let sticky_terminal : Terminal.t option ref = ref None
+
+let set_sticky_terminal term = sticky_terminal := term
+let get_sticky_terminal () = !sticky_terminal
+
 (* Sync global terminals into msg_tabs. Adds/removes terminal sub-tabs
    to match Terminal.all(). Called before rendering. *)
 let sync_terminals mt =
   let live = Terminal.all () in
+  (* Remember the currently active terminal (if any) *)
+  let cur_active = active_msg_tab mt in
+  (match cur_active.mt_terminal with
+   | Some _ as t -> sticky_terminal := t
+   | None -> ());
   (* Remove stale terminal tabs *)
   mt.mt_tabs <- List.filter (fun tab ->
     match tab.mt_terminal with
@@ -96,7 +108,19 @@ let sync_terminals mt =
   ) live;
   (* Clamp active index *)
   let n = List.length mt.mt_tabs in
-  if mt.mt_active >= n then mt.mt_active <- max 0 (n - 1)
+  if mt.mt_active >= n then mt.mt_active <- max 0 (n - 1);
+  (* Restore sticky terminal if set *)
+  (match !sticky_terminal with
+   | Some term ->
+     let rec find i = function
+       | [] -> ()
+       | tab :: _ when tab.mt_terminal <> None &&
+           (match tab.mt_terminal with Some t -> t == term | None -> false) ->
+         mt.mt_active <- i
+       | _ :: rest -> find (i + 1) rest
+     in
+     find 0 mt.mt_tabs
+   | None -> ())
 
 type t = {
   id : int;

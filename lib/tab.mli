@@ -79,3 +79,5 @@ val ensure_msg_tab : msg_tabs -> string -> msg_tab
 val activate_msg_tab : msg_tabs -> string -> unit
 val msg_tab_display_name : msg_tab -> string
 val sync_terminals : msg_tabs -> unit
+val set_sticky_terminal : Terminal.t option -> unit
+val get_sticky_terminal : unit -> Terminal.t option
