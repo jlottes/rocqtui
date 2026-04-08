@@ -8,13 +8,14 @@ type pane_selection = {
   mutable ps_active : bool;
 }
 
-(** A sub-tab in the messages pane (e.g. "Rocq", "Build"). *)
+(** A sub-tab in the messages pane (e.g. "Rocq", "Build", or a terminal). *)
 type msg_tab = {
   mt_name : string;
   mutable mt_lines : string list;
   mutable mt_scroll : int;
   mt_sel : pane_selection;
   mutable mt_lines_cache : string list;
+  mt_terminal : Terminal.t option;  (** Some = terminal sub-tab *)
 }
 
 (** Messages pane tab manager. *)
@@ -76,3 +77,5 @@ val active_msg_tab : msg_tabs -> msg_tab
 val find_msg_tab : msg_tabs -> string -> (int * msg_tab) option
 val ensure_msg_tab : msg_tabs -> string -> msg_tab
 val activate_msg_tab : msg_tabs -> string -> unit
+val msg_tab_display_name : msg_tab -> string
+val sync_terminals : msg_tabs -> unit

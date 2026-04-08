@@ -18,6 +18,7 @@ type msg_tab = {
   mutable mt_scroll : int;
   mt_sel : pane_selection;
   mutable mt_lines_cache : string list;
+  mt_terminal : Terminal.t option;
 }
 
 type msg_tabs = {
@@ -27,7 +28,8 @@ type msg_tabs = {
 
 let fresh_msg_tab name =
   { mt_name = name; mt_lines = []; mt_scroll = 0;
-    mt_sel = fresh_pane_sel (); mt_lines_cache = [] }
+    mt_sel = fresh_pane_sel (); mt_lines_cache = [];
+    mt_terminal = None }
 
 let fresh_msg_tabs () =
   { mt_tabs = [fresh_msg_tab "Rocq"]; mt_active = 0 }
@@ -58,6 +60,43 @@ let activate_msg_tab mt name =
   match find_msg_tab mt name with
   | Some (i, _) -> mt.mt_active <- i
   | None -> ()
+
+(* Get the display name for a msg_tab. Terminal tabs use their
+   dynamic title; text tabs use mt_name. *)
+let msg_tab_display_name (tab : msg_tab) =
+  match tab.mt_terminal with
+  | Some term -> Terminal.title term
+  | None -> tab.mt_name
+
+(* Sync global terminals into msg_tabs. Adds/removes terminal sub-tabs
+   to match Terminal.all(). Called before rendering. *)
+let sync_terminals mt =
+  let live = Terminal.all () in
+  (* Remove stale terminal tabs *)
+  mt.mt_tabs <- List.filter (fun tab ->
+    match tab.mt_terminal with
+    | None -> true
+    | Some term -> List.exists (fun t -> t == term) live
+  ) mt.mt_tabs;
+  (* Add new terminals *)
+  List.iter (fun term ->
+    let exists = List.exists (fun tab ->
+      match tab.mt_terminal with
+      | Some t -> t == term
+      | None -> false
+    ) mt.mt_tabs in
+    if not exists then begin
+      let tab = { mt_name = "Terminal";
+                  mt_lines = []; mt_scroll = 0;
+                  mt_sel = fresh_pane_sel ();
+                  mt_lines_cache = [];
+                  mt_terminal = Some term } in
+      mt.mt_tabs <- mt.mt_tabs @ [tab]
+    end
+  ) live;
+  (* Clamp active index *)
+  let n = List.length mt.mt_tabs in
+  if mt.mt_active >= n then mt.mt_active <- max 0 (n - 1)
 
 type t = {
   id : int;

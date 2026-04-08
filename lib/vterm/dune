@@ -1,0 +1,8 @@
+(library
+ (name vterm_lib)
+ (libraries unix)
+ (foreign_stubs (language c)
+  (names vterm term wrap sel acs fail sys
+         keyseq kitty_keyseq mouseseq
+         vterm_stubs)
+  (flags (:standard -std=c99 -D_XOPEN_SOURCE=600))))

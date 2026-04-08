@@ -215,8 +215,23 @@ let () =
     let build_fds = match Build.watch_fd () with
       | Some fd -> [fd] | None -> [] in
     let watch_fds = [File_manager.watch_fd fm] in
-    let extra_fds = stdin_fd :: mcp_fds @ build_fds @ watch_fds in
+    let term_fds = Terminal.fds () in
+    let extra_fds = stdin_fd :: mcp_fds @ build_fds @ watch_fds
+      @ List.map fst term_fds in
     let ready = Main_loop.select_with_watches extra_fds timeout in
+    (* Poll terminals *)
+    List.iter (fun (fd, term) ->
+      if List.mem fd ready then begin
+        if Terminal.poll term then
+          Render_need.request ()
+      end
+    ) term_fds;
+    (* Flush terminal write buffers *)
+    List.iter (fun (_, term) ->
+      let pty = Terminal.pty term in
+      if Vterm_lib.Pty.has_buffered pty then
+        Vterm_lib.Pty.flush_write pty
+    ) term_fds;
     (* Handle MCP connections/messages *)
     if Mcp_server.handle_ready mcp ready mgr then begin
       Render_need.request ();
@@ -248,6 +263,11 @@ let () =
     (* Check for terminal resize (SIGWINCH may have fired during select) *)
     if Term.check_resize () then begin
       Render.resize r;
+      (* Resize all embedded terminals to match messages pane *)
+      let (h, w) = Render.pane_dims r Render.PMessages in
+      List.iter (fun term ->
+        Terminal.resize term ~w ~h
+      ) (Terminal.all ());
       Render_need.request_full ()
     end;
     (* Handle keyboard input *)

@@ -223,6 +223,14 @@ let build_cancel = {
   name = "build_cancel"; codes = [Char.code 'c']; kitty_codes = [];
   display = "c"; context = BuildMenu; description = "Cancel" }
 
+let build_terminal = {
+  name = "build_terminal"; codes = [Char.code 't']; kitty_codes = [];
+  display = "t"; context = BuildMenu; description = "Terminal" }
+
+let build_claude = {
+  name = "build_claude"; codes = [Char.code 'l']; kitty_codes = [];
+  display = "l"; context = BuildMenu; description = "Claude" }
+
 (* --- Grouped for help/status generation --- *)
 
 let navigation_bindings = [step_forward; step_backward; go_to_cursor; cycle_pane]

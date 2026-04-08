@@ -530,6 +530,24 @@ let rec handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r
               Render.set_status r "No project found.");
            Some Continue
          end
+         else if c = 't' then begin
+           let (h, w) = Render.pane_dims r Render.PMessages in
+           let _term = Terminal.create ~w ~h () in
+           Tab.sync_terminals tab.msg;
+           let n = List.length tab.msg.mt_tabs in
+           tab.msg.mt_active <- n - 1;
+           tab.focused_pane <- `Messages;
+           Some Continue
+         end
+         else if c = 'l' then begin
+           let (h, w) = Render.pane_dims r Render.PMessages in
+           let _term = Terminal.create ~cmd:"claude" ~args:["--chat"] ~w ~h () in
+           Tab.sync_terminals tab.msg;
+           let n = List.length tab.msg.mt_tabs in
+           tab.msg.mt_active <- n - 1;
+           tab.focused_pane <- `Messages;
+           Some Continue
+         end
          else
            (Some Continue)
        | None -> Some Continue)
@@ -720,7 +738,7 @@ let rec handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r
           ctx.switch_tab x
         end
         else if pane = Render.PBorderH && is_left then begin
-          let tab_names = List.map (fun (mt : Tab.msg_tab) -> mt.mt_name)
+          let tab_names = List.map Tab.msg_tab_display_name
                             tab.msg.mt_tabs in
           match Render.msg_tab_at_x r ~x ~tab_names with
           | Some i ->
@@ -1146,10 +1164,108 @@ let rec handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r
         tab.goals_scroll <- !scroll_r;
         (match result with Some a -> a | None -> Continue)
       | `Messages ->
-        let scroll_r = ref (Tab.active_msg_tab tab.msg).mt_scroll in
-        let result = handle_pane_scroll scroll_r Render.PMessages in
-        (Tab.active_msg_tab tab.msg).mt_scroll <- !scroll_r;
-        (match result with Some a -> a | None -> Continue)
+        let active_mt = Tab.active_msg_tab tab.msg in
+        (match active_mt.mt_terminal with
+         | Some term ->
+           (* Terminal sub-tab is focused: route input to PTY *)
+           let vt = Terminal.vterm term in
+           let pty = Terminal.pty term in
+           let mode = Vterm_lib.Vterm_api.term_mode vt
+             land (Vterm_lib.Vterm_api.mode_app_keypad
+                   lor Vterm_lib.Vterm_api.mode_app_cursor
+                   lor Vterm_lib.Vterm_api.mode_meta) in
+           let kitty_fl = Vterm_lib.Vterm_api.kitty_flags vt in
+           let write_pty s = Vterm_lib.Pty.write pty s in
+           let send_key ~keysym ?(base_keysym=keysym) ~mods ?(text="") () =
+             let seq =
+               if kitty_fl > 0 then
+                 Vterm_lib.Vterm_api.kitty_keyseq ~keysym ~base_keysym
+                   ~modifiers:mods ~mode ~kitty_flags:kitty_fl
+                   ~event_type:1 ~text
+               else
+                 Vterm_lib.Vterm_api.keyseq ~keysym ~modifiers:mods
+                   ~mode ~event_type:0
+             in
+             match seq with
+             | Some s -> write_pty s
+             | None ->
+               (* Fallback: basic keys that keyseq doesn't handle *)
+               let fallback = match keysym with
+                 | 0xff0d -> Some "\r"        (* Return *)
+                 | 0xff08 -> Some "\x7f"      (* Backspace *)
+                 | 0xff09 -> Some "\t"        (* Tab *)
+                 | 0xff1b -> Some "\x1b"      (* Escape *)
+                 | ks when ks < 0x100 && mods = 0 ->
+                   (* ASCII-range keysym, no modifiers *)
+                   let s = String.make 1 (Char.chr ks) in
+                   Some s
+                 | _ -> None
+               in
+               (match fallback with
+                | Some s -> write_pty s
+                | None -> ())
+           in
+           let input_mod (m : Input.modifier) =
+             (if m.shift then 1 else 0)
+             lor (if m.alt then 2 else 0)
+             lor (if m.ctrl then 4 else 0)
+           in
+           (match ev with
+            | Input.Key (cp, mods) when cp >= 32 && not mods.ctrl && not mods.alt ->
+              (* Plain printable character *)
+              let buf = Stdlib.Buffer.create 4 in
+              let encode_utf8 buf cp =
+                if cp < 0x80 then
+                  Stdlib.Buffer.add_char buf (Char.chr cp)
+                else if cp < 0x800 then begin
+                  Stdlib.Buffer.add_char buf (Char.chr (0xC0 lor (cp lsr 6)));
+                  Stdlib.Buffer.add_char buf (Char.chr (0x80 lor (cp land 0x3F)))
+                end else if cp < 0x10000 then begin
+                  Stdlib.Buffer.add_char buf (Char.chr (0xE0 lor (cp lsr 12)));
+                  Stdlib.Buffer.add_char buf (Char.chr (0x80 lor ((cp lsr 6) land 0x3F)));
+                  Stdlib.Buffer.add_char buf (Char.chr (0x80 lor (cp land 0x3F)))
+                end else begin
+                  Stdlib.Buffer.add_char buf (Char.chr (0xF0 lor (cp lsr 18)));
+                  Stdlib.Buffer.add_char buf (Char.chr (0x80 lor ((cp lsr 12) land 0x3F)));
+                  Stdlib.Buffer.add_char buf (Char.chr (0x80 lor ((cp lsr 6) land 0x3F)));
+                  Stdlib.Buffer.add_char buf (Char.chr (0x80 lor (cp land 0x3F)))
+                end
+              in
+              encode_utf8 buf cp;
+              write_pty (Stdlib.Buffer.contents buf)
+            | Input.Key (cp, mods) ->
+              (* Ctrl/Alt modified key *)
+              let mods_i = input_mod mods in
+              send_key ~keysym:cp ~mods:mods_i ()
+            | Input.Special (key, mods) ->
+              let mods_i = input_mod mods in
+              (* Map Input.special_key to X11 keysyms *)
+              let keysym = match key with
+                | Input.Up -> 0xff52 | Input.Down -> 0xff54
+                | Input.Left -> 0xff51 | Input.Right -> 0xff53
+                | Input.Home -> 0xff50 | Input.End -> 0xff57
+                | Input.PageUp -> 0xff55 | Input.PageDown -> 0xff56
+                | Input.Insert -> 0xff63 | Input.Delete -> 0xffff
+                | Input.Backspace -> 0xff08
+                | Input.Tab -> 0xff09 | Input.Enter -> 0xff0d
+                | Input.Escape -> 0xff1b
+                | Input.F n -> 0xffbd + n  (* F1=0xffbe, F2=0xffbf, etc. *)
+              in
+              send_key ~keysym ~mods:mods_i ()
+            | Input.Paste text ->
+              if Vterm_lib.Vterm_api.bracketed_paste vt then begin
+                write_pty "\027[200~";
+                write_pty text;
+                write_pty "\027[201~"
+              end else
+                write_pty text
+            | _ -> ());
+           Continue
+         | None ->
+           let scroll_r = ref active_mt.mt_scroll in
+           let result = handle_pane_scroll scroll_r Render.PMessages in
+           active_mt.mt_scroll <- !scroll_r;
+           (match result with Some a -> a | None -> Continue))
       | `Script ->
         (match handle_script () with
          | Some a -> a | None -> Continue)

@@ -284,12 +284,19 @@ let update_msg_tabs (tab : Tab.t) =
 
 let render_messages r (tab : Tab.t) =
   update_msg_tabs tab;
+  Tab.sync_terminals tab.msg;
   let mt = Tab.active_msg_tab tab.msg in
-  let ms = ref mt.mt_scroll in
-  render_text_pane ~sel:mt.mt_sel
-    ~set_cache:(fun l -> mt.mt_lines_cache <- l)
-    r Render.PMessages ms mt.mt_lines;
-  mt.mt_scroll <- !ms
+  match mt.mt_terminal with
+  | Some term ->
+    let rect = Render.pane_rect r Render.PMessages in
+    Terminal.render term (Render.curr r) ~row:rect.row ~col:rect.col
+      ~width:rect.width ~height:rect.height
+  | None ->
+    let ms = ref mt.mt_scroll in
+    render_text_pane ~sel:mt.mt_sel
+      ~set_cache:(fun l -> mt.mt_lines_cache <- l)
+      r Render.PMessages ms mt.mt_lines;
+    mt.mt_scroll <- !ms
 
 (* Extract the visible substring of a line given horizontal scroll.
    Returns (display_string, byte_offset_of_first_visible_char). *)
@@ -468,9 +475,11 @@ let render_build_bar r =
       | Some d -> d | None -> "building" in
     Printf.sprintf "  Building: %s  [c]Cancel" desc
   else
-    Printf.sprintf "[%s]File [%s]Deps [%s]All [%s]Cursor [%s]Clean  %s:close"
+    Printf.sprintf "[%s]File [%s]Deps [%s]All [%s]Cursor [%s]Clean [%s]Term [%s]Claude  %s:close"
       Keys.build_file.display Keys.build_deps.display Keys.build_all.display
-      Keys.build_cursor.display Keys.build_clean.display Keys.build_menu.display
+      Keys.build_cursor.display Keys.build_clean.display
+      Keys.build_terminal.display Keys.build_claude.display
+      Keys.build_menu.display
   in
   Render.set_status r text
 
@@ -583,8 +592,7 @@ let render_all (ctx : Editor_context.t) r (tab : Tab.t) =
   Render.clear_pane r Render.PStatus;
   if Render.minimap_width r > 0 then
     Render.clear_pane r Render.PMinimap;
-  let msg_tab_names = List.map (fun (mt : Tab.msg_tab) -> mt.mt_name)
-                        tab.msg.mt_tabs in
+  let msg_tab_names = List.map Tab.msg_tab_display_name tab.msg.mt_tabs in
   Render.draw_chrome r
     ~goals_focused:(tab.focused_pane = `Goals)
     ~messages_focused:(tab.focused_pane = `Messages)
@@ -595,9 +603,26 @@ let render_all (ctx : Editor_context.t) r (tab : Tab.t) =
   render_goals ctx r tab;
   render_messages r tab;
   update_status ctx r tab;
-  (* Hide cursor when not in Script pane or when cursor is scrolled off-screen *)
+  (* Cursor visibility and positioning *)
+  let active_mt = Tab.active_msg_tab tab.msg in
+  let term_focused = tab.focused_pane = `Messages
+    && active_mt.mt_terminal <> None in
   let cursor_visible =
-    if tab.focused_pane <> `Script then false
+    if term_focused then begin
+      (* Position hardware cursor at vterm cursor location *)
+      match active_mt.mt_terminal with
+      | Some term ->
+        (match Vterm_lib.Vterm_api.cursor_info (Terminal.vterm term) with
+         | Some ci ->
+           let rect = Render.pane_rect r Render.PMessages in
+           Render.place_cursor r
+             ~row:(rect.row + ci.y)
+             ~col:(rect.col + ci.x);
+           true
+         | None -> false)
+      | None -> false
+    end
+    else if tab.focused_pane <> `Script then false
     else
       let (cl, _) = Buffer.cursor tab.buf in
       let scroll = Buffer.scroll_top tab.buf in
