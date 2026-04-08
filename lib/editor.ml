@@ -674,8 +674,14 @@ let rec handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r
       if ctx.dragging <> Editor_context.NoDrag then begin
         (* Active border drag *)
         (match ctx.dragging with
-         | Editor_context.DragV -> Render.move_split_v r x
-         | Editor_context.DragH -> Render.move_split_h r y
+         | Editor_context.DragV ->
+           Render.move_split_v r x;
+           let (h, w) = Render.pane_dims r Render.PMessages in
+           List.iter (fun t -> Terminal.resize t ~w ~h) (Terminal.all ())
+         | Editor_context.DragH ->
+           Render.move_split_h r y;
+           let (h, w) = Render.pane_dims r Render.PMessages in
+           List.iter (fun t -> Terminal.resize t ~w ~h) (Terminal.all ())
          | Editor_context.DragMinimap -> Render.move_minimap_border r x
          | Editor_context.DragMinimapScroll ->
            let mm_rect = Render.pane_rect r Render.PMinimap in
