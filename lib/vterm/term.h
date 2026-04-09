@@ -5,19 +5,20 @@
 #warning "term.h" requires "mem.h" and "sys.h"
 #endif
 
-#define ATTRB_BD 1u
-#define ATTRB_UL 2u
-#define ATTRB_BL 4u
-#define ATTRB_IN 8u
+#define ATTRB_BD 0x01u
+#define ATTRB_UL 0x02u
+#define ATTRB_BL 0x04u
+#define ATTRB_IN 0x08u
+#define ATTRB_DM 0x10u
 
-#define ENC_CLR_16 0x10u
-#define ENC_FG_256 0x11u
-#define ENC_BG_256 0x12u
-#define ENC_FG_24  0x13u
-#define ENC_BG_24  0x14u
-
-#define ENC_NL  0x15u
-#define ENC_TAB 0x16u
+#define ENC_ATTRB  0x00u
+#define ENC_CLR_16 0x01u
+#define ENC_FG_256 0x02u
+#define ENC_BG_256 0x03u
+#define ENC_FG_24  0x04u
+#define ENC_BG_24  0x05u
+#define ENC_NL     0x06u
+#define ENC_TAB    0x07u
 
 #define DEFAULT_GLYPH 0x20u
 #define DEFAULT_COLOR 0x09u
@@ -52,7 +53,7 @@ struct gr { uint32 fg, bg; };
 /* Graphic Rendition
 
    fg : bit structure is
-        00 ATTR MD  RRRR RRRR  GGGG GGGG  BBBB BBBB
+        0 ATTRS MD  RRRR RRRR  GGGG GGGG  BBBB BBBB
 
         here MD is 2 bits to specify color mode
           0 - 16 color  (actually 0-7, 9 for default)
@@ -72,7 +73,7 @@ struct gr { uint32 fg, bg; };
 #define GR_MD_24      0x02000000u
 #define GR_MD_MASK    0x03000000u
 #define GR_MD_CLR_MASK (GR_MD_MASK|GR_CLR_MASK)
-#define GR_ATTRB_MASK 0x3c000000u
+#define GR_ATTRB_MASK 0x7c000000u
 #define GR_W_MASK     0xfc000000u
 #define GR_MD_BITS 24
 #define GR_ATTRB_BITS 26
@@ -86,9 +87,9 @@ struct gr { uint32 fg, bg; };
 #define gr_bg_full(g)      ( (g).bg & GR_MD_CLR_MASK )
 
 #define set_gr_attrb(g,at) ((g).fg = ((g).fg & GR_MD_CLR_MASK) \
-                                   | (((uint32)at) & 0x0fu) << GR_ATTRB_BITS) 
-#define add_gr_attrb(g,at) ((g).fg |=  ((((uint32)at) & 0x0fu)<<GR_ATTRB_BITS))
-#define del_gr_attrb(g,at) ((g).fg &= ~((((uint32)at) & 0x0fu)<<GR_ATTRB_BITS))
+                                   | (((uint32)at) & 0x1fu) << GR_ATTRB_BITS)
+#define add_gr_attrb(g,at) ((g).fg |=  ((((uint32)at) & 0x1fu)<<GR_ATTRB_BITS))
+#define del_gr_attrb(g,at) ((g).fg &= ~((((uint32)at) & 0x1fu)<<GR_ATTRB_BITS))
 
 #define default_gr_ilzr { DEFAULT_COLOR, DEFAULT_COLOR }
 #define default_gr_w1_ilzr { DEFAULT_COLOR, DEFAULT_COLOR \
@@ -193,9 +194,7 @@ static unsigned gr_decode(
   const uint32 c256 = GR_MD_256 | in[1];
   const uint32 c24  = GR_MD_24 | (uint32)in[1]<<16 | (uint32)in[2]<<8 | in[3];
   switch(in[0]) {
-  case 0: case 1: case  2: case  3: case  4: case  5: case  6: case  7:
-  case 8: case 9: case 10: case 11: case 12: case 13: case 14: case 15:
-    set_gr_attrb(*gr,in[0]); return 1;
+  case ENC_ATTRB:  set_gr_attrb(*gr,in[1]); return 2;
   case ENC_CLR_16:
     if( (in[1]&0x0fu) != SAME_COLOR    ) gr->fg = at | (in[1]&0x0fu)   ;
     if( (in[1]&0xf0u) != SAME_COLOR<<4 ) gr->bg =      (in[1]&0xf0u)>>4;

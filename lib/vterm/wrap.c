@@ -322,7 +322,8 @@ int wrap_scroll(
   if(p->dirty) wrap_update(p,scroll,t,wrap_mode,1);
   p->dirty=1;
   brk = p->brks.ptr;
-  sl=p->dtop, nsub=1+calc(brk,t,sl.line,mode);
+  sl=p->dtop, nsub=1;
+  if(wrap_mode) nsub+=calc(brk,t,sl.line,mode);
   if(!wrap_mode) sl.line+=n;
   else if(n<0) {
     unsigned m=-n;

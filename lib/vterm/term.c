@@ -67,7 +67,7 @@ static unsigned gr_encode_bg_count(struct gr old, struct gr new)
   if(bg==gr_eff_bg(old)) return 0;
   else if((bg & GR_MD_MASK) == 0) {
     return (bg>>GR_ATTRB_BITS) != (gr_attrb(old) & (ATTRB_IN|ATTRB_BL))
-           ? 3 : 2;
+           ? 4 : 2;
   } else if(bg & GR_MD_256) return 2;
   else                      return 4;
 }
@@ -78,7 +78,8 @@ static uchar *gr_encode_bg(uchar *restrict out, struct gr old, struct gr new)
   if(bg==gr_eff_bg(old)) return out;
   else if((bg & GR_MD_MASK) == 0) {
     uchar at = bg>>GR_ATTRB_BITS;
-    if( at != (gr_attrb(old) & (ATTRB_IN|ATTRB_BL)) ) *out++ = at;
+    if( at != (gr_attrb(old) & (ATTRB_IN|ATTRB_BL)) )
+      *out++ = ENC_ATTRB, *out++ = at;
     *out++ = ENC_CLR_16, *out++ = (bg & 0x0fu)<<4 | SAME_COLOR;
   } else if(bg & GR_MD_256)
     *out++ = ENC_BG_256, *out++ = bg & 0xffu;
@@ -95,7 +96,7 @@ static unsigned gr_encode_count(struct gr old, struct gr new)
 {
   unsigned at=0,c16=0,fg=0,bg=0;
   if( !gr_ne(old,new) ) return 0;
-  if( (new.fg & GR_ATTRB_MASK) != (old.fg & GR_ATTRB_MASK) ) at=1;
+  if( (new.fg & GR_ATTRB_MASK) != (old.fg & GR_ATTRB_MASK) ) at=2;
   if( gr_fg_full(new)!=gr_fg_full(old) ) {
     switch(gr_fg_mode(new)) {
     case 0: c16=2; break;
@@ -117,7 +118,7 @@ static uchar *gr_encode(uchar *restrict out, struct gr old, struct gr new)
 {
   uchar f16 = SAME_COLOR, b16 = SAME_COLOR; 
   if( (new.fg & GR_ATTRB_MASK) != (old.fg & GR_ATTRB_MASK) )
-    *out++ = gr_attrb(new);
+    *out++ = ENC_ATTRB, *out++ = gr_attrb(new);
   if( gr_fg_full(new)!=gr_fg_full(old) ) {
     switch(gr_fg_mode(new)) {
     case 0: f16=gr_fg(new); break;
@@ -1087,10 +1088,11 @@ static void cf_SGR(struct term *restrict const t,
     case -1:
     case 0 : t->cursor.gr=def;             break;
     case 1 : add_gr_attrb(t->cursor.gr, ATTRB_BD); break;
+    case 2 : add_gr_attrb(t->cursor.gr, ATTRB_DM); break;
     case 4 : add_gr_attrb(t->cursor.gr, ATTRB_UL); break;
     case 5 : add_gr_attrb(t->cursor.gr, ATTRB_BL); break;
     case 7 : add_gr_attrb(t->cursor.gr, ATTRB_IN); break;
-    case 22: del_gr_attrb(t->cursor.gr, ATTRB_BD); break;
+    case 22: del_gr_attrb(t->cursor.gr, ATTRB_BD|ATTRB_DM); break;
     case 24: del_gr_attrb(t->cursor.gr, ATTRB_UL); break;
     case 25: del_gr_attrb(t->cursor.gr, ATTRB_BL); break;
     case 27: del_gr_attrb(t->cursor.gr, ATTRB_IN); break;

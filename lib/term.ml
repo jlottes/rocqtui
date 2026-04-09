@@ -1,9 +1,9 @@
 (* Terminal setup, teardown, and size queries.
    Replaces ncurses' initscr/endwin/raw/noecho. *)
 
-(* C stub for TIOCGWINSZ *)
+(* C stubs *)
 external get_winsize : Unix.file_descr -> int * int = "caml_get_winsize"
-
+external install_crash_handler : unit -> unit = "caml_install_crash_handler"
 external setlocale : int -> string -> string = "caml_curses_setlocale"
 
 let original_termios : Unix.terminal_io option ref = ref None
@@ -39,6 +39,8 @@ let init () =
     (* SIGWINCH handler — set a flag, deliver as Resize event *)
     Sys.set_signal 28 (* SIGWINCH *)
       (Sys.Signal_handle (fun _ -> sigwinch_pending := true));
+    (* Install crash handler to reset terminal on SIGSEGV/SIGBUS/SIGABRT *)
+    install_crash_handler ();
   end
 
 let teardown () =

@@ -19,7 +19,7 @@ let create ?(cmd = "") ?(args = []) ?(env = []) ~w ~h () =
   else cmd in
   let env = ("TERM", "glterm") :: env in
   let vterm = Vterm_lib.Vterm_api.create ~backlog:(32 * 1024 * 1024)
-    ~fwdlog:(1024 * 1024) ~w ~h ~wrap_mode:0 in
+    ~fwdlog:(1024 * 1024) ~w ~h ~wrap_mode:1 in
   let pty = Vterm_lib.Pty.spawn ~cmd ~args ~env ~w ~h in
   let t = { vterm; pty; title = "Terminal"; closed = false;
             exit_code = None;
@@ -86,12 +86,13 @@ let poll t =
   end
 
 let resize t ~w ~h =
-  if not t.closed then begin
+  if not t.closed && w > 0 && h > 0 then begin
     Vterm_lib.Vterm_api.resize t.vterm ~w ~h;
     Vterm_lib.Pty.set_size t.pty ~w ~h
   end
 
 let render t (grid : Grid.t) ~row ~col ~width ~height =
+  if width <= 0 || height <= 0 then () else
   let nrows = Vterm_lib.Vterm_api.prepare_rows t.vterm in
   for y = 0 to min nrows height - 1 do
     let cells = Vterm_lib.Vterm_api.get_row t.vterm y in

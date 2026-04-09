@@ -244,7 +244,7 @@ static value gr_to_attr(struct gr g)
   Store_field(v_attr, 0, v_fg);
   Store_field(v_attr, 1, v_bg);
   Store_field(v_attr, 2, Val_bool(attrb & ATTRB_BD));
-  Store_field(v_attr, 3, Val_false); /* dim — not in struct gr */
+  Store_field(v_attr, 3, Val_bool(attrb & ATTRB_DM));
   Store_field(v_attr, 4, Val_bool(attrb & ATTRB_IN));
   Store_field(v_attr, 5, Val_bool(attrb & ATTRB_UL));
 
