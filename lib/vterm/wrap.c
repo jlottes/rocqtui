@@ -1,13 +1,13 @@
 #define _XOPEN_SOURCE
 #include <stddef.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/types.h>
 #include "c99.h"
-#include "fail.h"
 #include "mem.h"
 #include "utf-8.h"
-#include "sys.h"
+#include "sysbuf.h"
 #include "term.h"
 #include "char_width.h"
 
@@ -70,11 +70,6 @@ static struct wrap_state calc_enc(
               prev = st.last_br_sp; \
           } \
         } \
-        if(0) warn("breaking on '%c' at %u ( %s %s ) (%u,%u)", \
-           prev.ch,prev.b.off, \
-           (prev.b.off==st.last_br_wd.b.off ? "wd":""), \
-           (prev.b.off==st.last_br_sp.b.off ? "sp":""), \
-           st.last_br_wd.b.off,st.last_br_sp.b.off); \
         brk[st.brkn++] = prev.b; \
         if(st.brkn==max) return st; \
         st.cur.scol -= prev.scol; \
@@ -90,7 +85,7 @@ static struct wrap_state calc_enc(
     case 0: WRAP_BODY(0); break; \
     case 1: WRAP_BODY(1); break; \
     case 2: WRAP_BODY(2); break; \
-    default: fail(1,"wrap_calc: unexpected"); \
+    default: fprintf(stderr,"wrap_calc: unexpected\n"), abort(); \
     } \
   } while(0)
   WRAP_CASE();
@@ -331,7 +326,7 @@ int wrap_scroll(
             else m-=sl.sub+1,nsub=1+(sl.sub=calc(brk,t,--sl.line,mode));
   } else {
     unsigned m=n;
-    if(nsub==0) fail(1, "wrap_scroll: unexpected");
+    if(nsub==0) fprintf(stderr, "wrap_scroll: unexpected\n"), abort();
     for(;;) if(sl.sub+m<nsub) { sl.sub+=m; break; }
             else {
               m-=nsub-sl.sub,++sl.line,sl.sub=0;
@@ -341,7 +336,7 @@ int wrap_scroll(
   }
   if(sl.line + (int)t->buf.beg.lines.n >= 0) {
     scroll->line = sl.line + (int)t->buf.beg.lines.n;
-    if(sl.sub && nsub==0) fail(1, "wrap_scroll: unexpected (2)");
+    if(sl.sub && nsub==0) fprintf(stderr, "wrap_scroll: unexpected (2)\n"), abort();
     scroll->col = sl.sub==0 ? 0 : brk[sl.sub-1].col;
   } else
     scroll->line = 0, scroll->col = 0;

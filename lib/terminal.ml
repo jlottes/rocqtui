@@ -103,13 +103,27 @@ let render t (grid : Grid.t) ~row ~col ~width ~height =
       let x = ref 0 in
       Array.iter (fun (cell : Vterm_lib.Vterm_api.row_cell) ->
         let gc = col + !x in
-        if gc < col + width && gc < grid.cols then begin
+        if cell.width = 0 then begin
+          (* Combining character: append to previous cell *)
+          let prev = gc - 1 in
+          if prev >= col && prev < grid.cols then
+            grid.cells.(grid_row).(prev).text <-
+              grid.cells.(grid_row).(prev).text ^ cell.text
+        end else if gc < col + width && gc < grid.cols then begin
+          let attr = (Obj.magic cell.attr : Grid.attr) in
           let grid_cell = grid.cells.(grid_row).(gc) in
           grid_cell.text <- cell.text;
           grid_cell.width <- cell.width;
-          grid_cell.attr <- (Obj.magic cell.attr : Grid.attr)
-        end;
-        x := !x + cell.width
+          grid_cell.attr <- attr;
+          (* Wide char: mark continuation cell *)
+          if cell.width = 2 && gc + 1 < col + width && gc + 1 < grid.cols then begin
+            let next = grid.cells.(grid_row).(gc + 1) in
+            next.text <- "";
+            next.width <- 0;
+            next.attr <- attr
+          end;
+          x := !x + cell.width
+        end
       ) cells;
       (* Fill trailing blank from sentinel *)
       let end_x = !x in

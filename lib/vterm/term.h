@@ -1,8 +1,8 @@
 #ifndef TERM_H
 #define TERM_H
 
-#if !defined(MEM_H) || !defined(SYS_H)
-#warning "term.h" requires "mem.h" and "sys.h"
+#if !defined(MEM_H) || !defined(SYSBUF_H)
+#warning "term.h" requires "mem.h" and "sysbuf.h"
 #endif
 
 #define ATTRB_BD 0x01u

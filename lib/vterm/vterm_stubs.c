@@ -24,7 +24,7 @@
 #include "fail.h"
 #include "mem.h"
 #include "utf-8.h"
-#include "sys.h"
+#include "sysbuf.h"
 #include "term.h"
 #include "char_width.h"
 #include "wrap.h"
@@ -33,9 +33,6 @@
 #include "keyseq.h"
 #include "kitty_keyseq.h"
 #include "mouseseq.h"
-
-/* Provide exe_name expected by fail.c */
-const char *const exe_name = "rocqtui";
 
 /* ============================================================
    Vterm custom block
@@ -64,8 +61,6 @@ static struct custom_operations vterm_ops = {
   custom_fixed_length_default
 };
 
-static int sys_initialized = 0;
-
 /* vterm_create : backlog:int -> fwdlog:int -> w:int -> h:int
                   -> wrap_mode:int -> t */
 CAMLprim value caml_vterm_create(value v_backlog, value v_fwdlog,
@@ -73,11 +68,6 @@ CAMLprim value caml_vterm_create(value v_backlog, value v_fwdlog,
 {
   CAMLparam5(v_backlog, v_fwdlog, v_w, v_h, v_wrap_mode);
   CAMLlocal1(v_result);
-
-  if (!sys_initialized) {
-    sys_init();
-    sys_initialized = 1;
-  }
 
   struct vterm *vt = malloc(sizeof(struct vterm));
   if (!vt) caml_failwith("vterm_create: out of memory");
@@ -637,7 +627,7 @@ CAMLprim value caml_pty_open(value v_cmd, value v_args, value v_env,
 
   /* Open PTY */
   int fdm;
-  sys_repeat(fdm, open("/dev/ptmx", O_RDWR | O_NOCTTY));
+  do fdm = open("/dev/ptmx", O_RDWR | O_NOCTTY); while (fdm == -1 && errno == EINTR);
   if (fdm == -1) { free(argv); free(envp); caml_failwith("pty_open: open /dev/ptmx failed"); }
   if (grantpt(fdm)) { close(fdm); free(argv); free(envp); caml_failwith("pty_open: grantpt failed"); }
   if (unlockpt(fdm)) { close(fdm); free(argv); free(envp); caml_failwith("pty_open: unlockpt failed"); }

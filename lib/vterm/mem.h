@@ -6,11 +6,10 @@
      <stdlib.h> for malloc, calloc, realloc, free
      <string.h> for memcpy
      "c99.h"
-     "fail.h"
 */
 
-#if !defined(C99_H) || !defined(FAIL_H)
-#error "mem.h" requires "c99.h" and "fail.h"
+#if !defined(C99_H)
+#error "mem.h" requires "c99.h"
 #endif
 
 #ifndef PRINT_MALLOCS
@@ -29,8 +28,6 @@ static inline void *smalloc(size_t size, const char *file, unsigned line)
   #if PRINT_MALLOCS
   printf("MEM: %p = malloc(%ld) @ %s(%u)\n",res,(long)size,file,line);
   #endif
-  if(!res && size)
-    fail(1,"%s(%u): allocation of %ld bytes failed\n",file,line,(long)size);
   return res;
 }
 
@@ -41,9 +38,6 @@ static inline void *scalloc(
   #if PRINT_MALLOCS
   printf("MEM: %p = calloc(%ld) @ %s(%u)\n",res,(long)size*nmemb,file,line);
   #endif
-  if(!res && nmemb)
-    fail(1,"%s(%u): allocation of %ld bytes failed\n",file,line,
-           (long)size*nmemb);
   return res;
 }
 
@@ -60,8 +54,6 @@ static inline void *srealloc(
   } else
     printf("MEM: %p realloc'd to %lu @ %s(%u)\n",res,(long)size,file,line);
   #endif
-  if(!res && size)
-    fail(1,"%s(%u): allocation of %ld bytes failed\n",file,line,(long)size);
   return res;
 }
 

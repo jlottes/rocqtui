@@ -5,10 +5,9 @@
 #include <math.h>
 #include <sys/types.h>
 #include "c99.h"
-#include "fail.h"
 #include "mem.h"
 #include "utf-8.h"
-#include "sys.h"
+#include "sysbuf.h"
 #include "term.h"
 #include "char_width.h"
 #include "wrap.h"

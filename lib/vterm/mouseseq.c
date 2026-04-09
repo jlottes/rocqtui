@@ -4,9 +4,8 @@
 #include <stdio.h>
 #include <sys/types.h>
 #include "c99.h"
-#include "fail.h"
 #include "mem.h"
-#include "sys.h"
+#include "sysbuf.h"
 #include "term.h"
 #include "mouseseq.h"
 

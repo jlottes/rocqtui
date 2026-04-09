@@ -3,12 +3,12 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <errno.h>
 #include <sys/types.h>
 #include "c99.h"
-#include "fail.h"
 #include "mem.h"
 #include "utf-8.h"
-#include "sys.h"
+#include "sysbuf.h"
 #include "term.h"
 #include "char_width.h"
 #include "acs.h"
@@ -218,8 +218,8 @@ static inline void line_invariant(const struct line *restrict const line)
   #if TERM_DIAGNOSTICS>1
   unsigned c = cells_col(0,line->beg.ptr,line->beg.n,1);
   if(c!=line->col)
-    fail(1,"line invariant broken, cells_col = %u != %u = line->col\n",
-         c, line->col);
+    fprintf(stderr,"line invariant broken, cells_col = %u != %u = line->col\n",
+         c, line->col), abort();
   #endif
 }
 
@@ -448,7 +448,7 @@ static int half_buffer_grow(struct half_buffer *restrict const hb, unsigned m)
   }
   if(desired<hb->limit) {
     if(sysbuf_reserve(&hb->data,desired,1)==0) return 0;
-    else warnerr("short on memory"), half_buffer_clear(hb);
+    else fprintf(stderr,"short on memory: %s\n",strerror(errno)), half_buffer_clear(hb);
   } else if(m+3>=hb->limit/2)
     half_buffer_reinit(hb,hb->limit/2);
   return hb->data.max>=m+3 ? 0 : -1;
@@ -458,7 +458,7 @@ static int lines_grow(struct half_buffer *restrict const hb, unsigned m)
 {
   if(m==0) return 0;
   if(sysbuf_reserve(&hb->lines,hb->lines.n+m,sizeof(struct line_data))) {
-    warnerr("short on memory"), half_buffer_clear(hb);
+    fprintf(stderr,"short on memory: %s\n",strerror(errno)), half_buffer_clear(hb);
     return hb->lines.max>=m ? 0 : -1;
   }
   return 0;
@@ -582,7 +582,7 @@ static void transfer_lines(struct half_buffer *restrict const dst,
 {
   unsigned max;
   if(n==0) return;
-  if(n>src->lines.n) fail(1,"invalid call to transfer_lines");
+  if(n>src->lines.n) fprintf(stderr,"invalid call to transfer_lines\n"), abort();
   half_buffer_grow(dst,src->data.n-line_off(src,src->lines.n-n));
   if(lines_grow(dst,n)) {
     half_buffer_delete(src,(dst->lines.max-dst->lines.n)-n);
@@ -799,7 +799,7 @@ static void set_margins(struct term *restrict const t, int mt, int mb)
   #define TMARG(i) (line+1+2*(i))
   #define BMARG(i) (line+2+2*(i))
   if(mt+mb>t->h)
-    fail(1,"term.c: set_margins: invalid args");
+    fprintf(stderr,"term.c: set_margins: invalid args\n"), abort();
   if(mt<t->mt) {
     term_move_line_row(t,0);
     for(i=mt;i<t->mt;++i) push_line(&t->buf.beg,TMARG(i));
@@ -858,7 +858,7 @@ void term_resize(struct term *restrict const t,
     t->h=h;
     if(t->mt+t->mb > h) {
       unsigned gap = (unsigned)h - (unsigned)(t->mt+t->mb);
-      fail(1,"shrinking margins in term_resize");
+      fprintf(stderr,"shrinking margins in term_resize\n"), abort();
       if(gap<=t->mb) t->mb-=gap;
       else t->mt-=(gap-t->mb), t->mb=0;
       if(IN_MARGIN(t)) fix_cursor(t);
