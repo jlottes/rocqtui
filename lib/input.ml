@@ -431,7 +431,7 @@ let read_event ?(timeout=(-1.0)) fd =
     (* Control character *)
     match b with
     | 13 -> Some (Special (Enter, no_mod))
-    | 10 -> Some (Special (Enter, no_mod))  (* some terminals send LF *)
+    | 10 -> Some (Special (Enter, { no_mod with shift = true }))  (* LF = Shift+Enter *)
     | 9 -> Some (Special (Tab, no_mod))
     | 8 -> Some (Special (Backspace, no_mod))
     | 127 -> Some (Special (Backspace, no_mod))

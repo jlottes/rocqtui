@@ -23,6 +23,7 @@ let init () =
       c_echo = false;
       c_isig = false;   (* no SIGINT/SIGQUIT from ^C/^\ *)
       c_ixon = false;   (* no ^S/^Q flow control *)
+      c_icrnl = false;  (* don't convert CR to NL — needed to distinguish Enter from Shift+Enter *)
       c_vmin = 0;
       c_vtime = 0;
     } in

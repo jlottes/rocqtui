@@ -1,3 +1,5 @@
+let debug_input = try Sys.getenv "ROCQTUI_DEBUG_INPUT" <> "" with Not_found -> false
+
 type jump_point = Editor_context.jump_point
 
 type action =
@@ -351,8 +353,59 @@ let rec handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r
     | _ -> Continue)
   | None ->
   (* --- Global keys (work in any pane) --- *)
+  (* Is a terminal sub-tab currently focused? *)
+  let term_focused =
+    tab.focused_pane = `Messages &&
+    (Tab.active_msg_tab tab.msg).mt_terminal <> None
+  in
+  (* Debug: log non-mouse events to stderr. Enable with ROCQTUI_DEBUG_INPUT=1 *)
+  if debug_input then
+    (match ev with
+     | Input.Mouse _ -> ()
+     | _ ->
+       let fp = match tab.focused_pane with
+         | `Script -> "Script" | `Goals -> "Goals" | `Messages -> "Msgs" in
+       let tf = if term_focused then "T" else "-" in
+       let desc = match ev with
+         | Input.Key (cp, m) ->
+           Printf.sprintf "K(%d%s%s%s)" cp
+             (if m.shift then "S" else "") (if m.alt then "A" else "")
+             (if m.ctrl then "C" else "")
+         | Input.Special (k, m) ->
+           let kn = match k with
+             | Input.Enter -> "Ent" | Input.Backspace -> "BS"
+             | Input.Escape -> "Esc" | Input.Tab -> "Tab"
+             | Input.Up -> "Up" | Input.Down -> "Dn"
+             | Input.Left -> "Lt" | Input.Right -> "Rt"
+             | Input.F n -> Printf.sprintf "F%d" n
+             | _ -> "?" in
+           Printf.sprintf "S(%s%s%s%s)" kn
+             (if m.shift then "S" else "") (if m.alt then "A" else "")
+             (if m.ctrl then "C" else "")
+         | Input.Paste _ -> "Paste"
+         | _ -> "other" in
+       let kf = match (Tab.active_msg_tab tab.msg).mt_terminal with
+         | Some term -> Vterm_lib.Vterm_api.kitty_flags (Terminal.vterm term)
+         | None -> -1 in
+       Printf.eprintf "[%s %s kf=%d] %s\n%!" fp tf kf desc);
+  let is_mouse_event = match ev with Input.Mouse _ -> true | _ -> false in
   let handle_global () =
-    if match_binding ev Keys.quit then Some Quit
+    (* When a terminal is focused and this is a keyboard event, only
+       handle essential rocqtui keys. Mouse events always go through
+       the normal path so clicking, dragging, tab switching all work. *)
+    if term_focused && not is_mouse_event then begin
+      if match_binding ev Keys.quit then Some Quit
+      else if match_binding ev Keys.close_tab then Some Close_tab
+      else if match_binding ev Keys.cycle_pane then begin
+        tab.focused_pane <- `Script; Some Continue end
+      else if match_binding ev Keys.save then Some Save_prompt
+      else if match_binding ev Keys.build_menu then begin
+        Modal.toggle ctx.modal Modal.BuildMenu; Some Continue end
+      else if match_binding ev Keys.help then begin
+        Modal.push ctx.modal (Modal.Help { scroll = 0 }); Some Continue end
+      else None
+    end
+    else if match_binding ev Keys.quit then Some Quit
     else if match_binding ev Keys.close_tab then Some Close_tab
     else if match_binding ev Keys.save then Some Save_prompt
     else if match_binding ev Keys.jump_back then begin
@@ -1244,8 +1297,23 @@ let rec handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r
               in
               encode_utf8 buf cp;
               write_pty (Stdlib.Buffer.contents buf)
+            | Input.Key (cp, mods) when cp < 32 && mods.ctrl ->
+              (* Ctrl+letter: codepoint is 1-26 (ETX etc.), send raw byte *)
+              write_pty (String.make 1 (Char.chr cp))
+            | Input.Key (cp, mods) when mods.ctrl && cp >= 64 && cp <= 127 ->
+              (* Ctrl+letter via Kitty: cp is the letter (e.g. 99='c'),
+                 convert to control byte (cp land 0x1f) *)
+              let ctrl_byte = cp land 0x1f in
+              if mods.alt then
+                write_pty (Printf.sprintf "\x1b%c" (Char.chr ctrl_byte))
+              else
+                write_pty (String.make 1 (Char.chr ctrl_byte))
+            | Input.Key (cp, mods) when mods.alt && not mods.ctrl && cp < 128 ->
+              (* Alt+key: send ESC prefix + character *)
+              let s = Printf.sprintf "\x1b%c" (Char.chr cp) in
+              write_pty s
             | Input.Key (cp, mods) ->
-              (* Ctrl/Alt modified key *)
+              (* Other modified key — try keyseq lookup *)
               let mods_i = input_mod mods in
               send_key ~keysym:cp ~mods:mods_i ()
             | Input.Special (key, mods) ->
