@@ -21,7 +21,6 @@
 #include <caml/signals.h>
 
 #include "c99.h"
-#include "fail.h"
 #include "mem.h"
 #include "utf-8.h"
 #include "sysbuf.h"

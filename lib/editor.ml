@@ -267,6 +267,11 @@ let codepoint_of_event = function
 let rec handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r =
   let buf = tab.buf in
   let session = tab.session in
+  (* Is a terminal sub-tab currently focused? *)
+  let term_focused =
+    tab.focused_pane = `Messages &&
+    (Tab.active_msg_tab tab.msg).mt_terminal <> None
+  in
   (* Handle compose mode first *)
   let compose_handled = match ctx.compose with
     | Some cs when Compose.active cs ->
@@ -278,16 +283,47 @@ let rec handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r
             Render.set_status r (View.format_compose_status r cs);
             Render.present r
           | Compose.Composed text ->
-            ignore (Buffer.delete_selection buf);
-            insert_string tab text
+            if term_focused then begin
+              (* Send composed text to terminal *)
+              let active_mt = Tab.active_msg_tab tab.msg in
+              (match active_mt.mt_terminal with
+               | Some term -> Vterm_lib.Pty.write (Terminal.pty term) text
+               | None -> ())
+            end else begin
+              ignore (Buffer.delete_selection buf);
+              insert_string tab text
+            end
           | Compose.NoMatch ->
-            (* If the key that broke compose was Escape, restart compose *)
-            (match ev with
-             | Input.Special (Input.Escape, _) ->
-               Compose.start cs;
-               Render.set_status r (View.format_compose_status r cs);
-               Render.present r
-             | _ -> ()));
+            if term_focused then begin
+              (* Double-ESC: send ESC to terminal *)
+              match ev with
+              | Input.Special (Input.Escape, _) ->
+                let active_mt = Tab.active_msg_tab tab.msg in
+                (match active_mt.mt_terminal with
+                 | Some term ->
+                   let vt = Terminal.vterm term in
+                   let mode = Vterm_lib.Vterm_api.term_mode vt
+                     land (Vterm_lib.Vterm_api.mode_app_keypad
+                           lor Vterm_lib.Vterm_api.mode_app_cursor
+                           lor Vterm_lib.Vterm_api.mode_meta) in
+                   let seq = Vterm_lib.Vterm_api.kitty_keyseq ~keysym:0xff1b
+                     ~base_keysym:0xff1b ~modifiers:0 ~mode
+                     ~kitty_flags:(Vterm_lib.Vterm_api.kitty_flags vt)
+                     ~event_type:1 ~text:"" in
+                   (match seq with
+                    | Some s -> Vterm_lib.Pty.write (Terminal.pty term) s
+                    | None -> Vterm_lib.Pty.write (Terminal.pty term) "\x1b")
+                 | None -> ())
+              | _ -> ()
+            end else begin
+              (* If the key that broke compose was Escape, restart compose *)
+              (match ev with
+               | Input.Special (Input.Escape, _) ->
+                 Compose.start cs;
+                 Render.set_status r (View.format_compose_status r cs);
+                 Render.present r
+               | _ -> ())
+            end);
          true
        | None ->
          (* Non-character event in compose mode -- feed 0 to abort *)
@@ -353,11 +389,6 @@ let rec handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r
     | _ -> Continue)
   | None ->
   (* --- Global keys (work in any pane) --- *)
-  (* Is a terminal sub-tab currently focused? *)
-  let term_focused =
-    tab.focused_pane = `Messages &&
-    (Tab.active_msg_tab tab.msg).mt_terminal <> None
-  in
   (* Debug: log non-mouse events to stderr. Enable with ROCQTUI_DEBUG_INPUT=1 *)
   if debug_input then
     (match ev with
@@ -403,6 +434,15 @@ let rec handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r
         Modal.toggle ctx.modal Modal.BuildMenu; Some Continue end
       else if match_binding ev Keys.help then begin
         Modal.push ctx.modal (Modal.Help { scroll = 0 }); Some Continue end
+      else if (match ev with Input.Special (Input.Escape, _) -> true | _ -> false) then begin
+        (* ESC starts compose mode; double-ESC sends ESC to terminal *)
+        (match ctx.compose with
+         | Some cs -> Compose.start cs;
+           Render.set_status r (View.format_compose_status r cs);
+           Render.present r
+         | None -> ());
+        Some Continue
+      end
       else None
     end
     else if match_binding ev Keys.quit then Some Quit
