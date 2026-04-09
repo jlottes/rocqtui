@@ -34,3 +34,5 @@ val is_closed : t -> bool
 
 val vterm : t -> Vterm_lib.Vterm_api.t
 val pty : t -> Vterm_lib.Pty.t
+val reported_buttons : t -> int
+val set_reported_buttons : t -> int -> unit

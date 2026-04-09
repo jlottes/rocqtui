@@ -724,6 +724,42 @@ let rec handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r
       let is_scroll_down = mev.button = Input.ScrollDown in
       let has_shift = mev.mods.shift in
       let has_cmd = mev.mods.ctrl in  (* Ctrl acts as Cmd on most terminals *)
+      (* Terminal mouse: handle release and drag for reported buttons *)
+      let term_mouse_handled = ref false in
+      let active_mt = Tab.active_msg_tab tab.msg in
+      (match active_mt.mt_terminal with
+       | Some term when Terminal.reported_buttons term <> 0 ->
+         let vt = Terminal.vterm term in
+         let mm = Vterm_lib.Vterm_api.mouse_mode vt in
+         let mf = Vterm_lib.Vterm_api.mouse_flags vt in
+         let rect = Render.pane_rect r Render.PMessages in
+         let cx = x - rect.col + 1 in
+         let cy = y - rect.row + 1 in
+         let mods_i = (if has_shift then 1 else 0)
+           lor (if mev.mods.alt then 2 else 0)
+           lor (if has_cmd then 4 else 0) in
+         if is_release then begin
+           (* Send release for all reported buttons *)
+           for button = 1 to 5 do
+             if Terminal.reported_buttons term land (1 lsl button) <> 0 then begin
+               let seq = Vterm_lib.Vterm_api.mouseseq ~button ~modifiers:mods_i
+                 ~cx ~cy ~ev:Vterm_lib.Vterm_api.mouse_ev_release ~mode:mm ~flags:mf in
+               Vterm_lib.Pty.write (Terminal.pty term) seq
+             end
+           done;
+           Terminal.set_reported_buttons term 0;
+           term_mouse_handled := true
+         end else if not is_scroll_up && not is_scroll_down then begin
+           (* Drag/motion *)
+           if mm >= Vterm_lib.Vterm_api.mouse_mode_btn then begin
+             let seq = Vterm_lib.Vterm_api.mouseseq ~button:1 ~modifiers:mods_i
+               ~cx ~cy ~ev:Vterm_lib.Vterm_api.mouse_ev_motion ~mode:mm ~flags:mf in
+             Vterm_lib.Pty.write (Terminal.pty term) seq
+           end;
+           term_mouse_handled := true
+         end
+       | _ -> ());
+      if not !term_mouse_handled then
       if ctx.dragging <> Editor_context.NoDrag then begin
         (* Active border drag *)
         (match ctx.dragging with
@@ -790,7 +826,47 @@ let rec handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r
           | Render.PGoals ->
             tab.goals_scroll <- max 0 (tab.goals_scroll + delta)
           | Render.PMessages ->
-            (Tab.active_msg_tab tab.msg).mt_scroll <- max 0 ((Tab.active_msg_tab tab.msg).mt_scroll + delta)
+            let active_mt = Tab.active_msg_tab tab.msg in
+            (match active_mt.mt_terminal with
+             | Some term ->
+               let vt = Terminal.vterm term in
+               let pty = Terminal.pty term in
+               let mm = Vterm_lib.Vterm_api.mouse_mode vt in
+               let mf = Vterm_lib.Vterm_api.mouse_flags vt in
+               let alt = Vterm_lib.Vterm_api.alt_screen vt in
+               let mouse_active = mm <> 0 && not has_shift in
+               let handled = ref false in
+               if not mouse_active then begin
+                 if alt && (mf land Vterm_lib.Vterm_api.mouse_alt_scroll <> 0) then begin
+                   (* Alt screen + ALT_SCROLL: send cursor keys *)
+                   let mode = Vterm_lib.Vterm_api.term_mode vt in
+                   let seq = if mode land Vterm_lib.Vterm_api.mode_app_cursor <> 0
+                     then (if is_scroll_up then "\027OA" else "\027OB")
+                     else (if is_scroll_up then "\027[A" else "\027[B") in
+                   Vterm_lib.Pty.write pty seq;
+                   handled := true
+                 end else if mm = 0 || not alt then begin
+                   (* No mouse mode, or shift on normal screen: scroll history *)
+                   ignore (Vterm_lib.Vterm_api.scroll vt
+                     (if is_scroll_up then -3 else 3));
+                   handled := true
+                 end
+               end;
+               (* If not handled locally, forward to terminal if mouse reporting on *)
+               if not !handled && mm <> 0 then begin
+                 let rect = Render.pane_rect r Render.PMessages in
+                 let cx = x - rect.col + 1 in
+                 let cy = y - rect.row + 1 in
+                 let button = if is_scroll_up then 4 else 5 in
+                 let mods_i = (if has_shift then 1 else 0)
+                   lor (if mev.mods.alt then 2 else 0)
+                   lor (if has_cmd then 4 else 0) in
+                 let seq = Vterm_lib.Vterm_api.mouseseq ~button ~modifiers:mods_i
+                   ~cx ~cy ~ev:Vterm_lib.Vterm_api.mouse_ev_press ~mode:mm ~flags:mf in
+                 Vterm_lib.Pty.write pty seq
+               end
+             | None ->
+               active_mt.mt_scroll <- max 0 (active_mt.mt_scroll + delta))
           | _ -> ()
         end
         else if pane = Render.PTabBar && is_left then begin
@@ -818,24 +894,49 @@ let rec handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r
         else if (pane = Render.PGoals || pane = Render.PMessages)
                 && is_left then begin
           tab.focused_pane <- (if pane = Render.PGoals then `Goals else `Messages);
-          let (ps, lines_cache, _scroll_ref, pane_id) =
-            if pane = Render.PGoals then
-              (tab.goals_sel, tab.goals_lines_cache, tab.goals_scroll, `Goals)
-            else
-              ((Tab.active_msg_tab tab.msg).mt_sel, (Tab.active_msg_tab tab.msg).mt_lines_cache, (Tab.active_msg_tab tab.msg).mt_scroll, `Messages)
-          in
-          (* For now, treat all Left clicks as single click *)
-          match screen_to_pane_pos tab r ~x ~y pane_id with
-          | Some (row, byte_col) ->
-            View.clear_pane_selection ps;
-            ps.ps_anchor_line <- row;
-            ps.ps_anchor_col <- byte_col;
-            ps.ps_cursor_line <- row;
-            ps.ps_cursor_col <- byte_col;
-            ps.ps_active <- true;
-            tab.mouse_selecting <- true;
-            ignore lines_cache
-          | None -> ()
+          (* Check if we should forward to terminal *)
+          let forwarded = if pane = Render.PMessages then
+            let active_mt = Tab.active_msg_tab tab.msg in
+            match active_mt.mt_terminal with
+            | Some term ->
+              let vt = Terminal.vterm term in
+              let mm = Vterm_lib.Vterm_api.mouse_mode vt in
+              if mm <> 0 && not has_shift then begin
+                let mf = Vterm_lib.Vterm_api.mouse_flags vt in
+                let rect = Render.pane_rect r Render.PMessages in
+                let cx = x - rect.col + 1 in
+                let cy = y - rect.row + 1 in
+                let mods_i = (if has_shift then 1 else 0)
+                  lor (if mev.mods.alt then 2 else 0)
+                  lor (if has_cmd then 4 else 0) in
+                let seq = Vterm_lib.Vterm_api.mouseseq ~button:1 ~modifiers:mods_i
+                  ~cx ~cy ~ev:Vterm_lib.Vterm_api.mouse_ev_press ~mode:mm ~flags:mf in
+                Vterm_lib.Pty.write (Terminal.pty term) seq;
+                Terminal.set_reported_buttons term
+                  (Terminal.reported_buttons term lor (1 lsl 1));
+                true
+              end else false
+            | None -> false
+          else false in
+          if not forwarded then begin
+            let (ps, lines_cache, _scroll_ref, pane_id) =
+              if pane = Render.PGoals then
+                (tab.goals_sel, tab.goals_lines_cache, tab.goals_scroll, `Goals)
+              else
+                ((Tab.active_msg_tab tab.msg).mt_sel, (Tab.active_msg_tab tab.msg).mt_lines_cache, (Tab.active_msg_tab tab.msg).mt_scroll, `Messages)
+            in
+            match screen_to_pane_pos tab r ~x ~y pane_id with
+            | Some (row, byte_col) ->
+              View.clear_pane_selection ps;
+              ps.ps_anchor_line <- row;
+              ps.ps_anchor_col <- byte_col;
+              ps.ps_cursor_line <- row;
+              ps.ps_cursor_col <- byte_col;
+              ps.ps_active <- true;
+              tab.mouse_selecting <- true;
+              ignore lines_cache
+            | None -> ()
+          end
         end
         else if pane = Render.PMinimap && is_left then begin
           let mm_rect = Render.pane_rect r Render.PMinimap in

@@ -7,6 +7,7 @@ type t = {
   mutable title : string;
   mutable closed : bool;
   mutable exit_code : int option;
+  mutable reported_buttons : int;  (* bitmask of buttons sent as press *)
 }
 
 (* Global terminal list *)
@@ -21,7 +22,8 @@ let create ?(cmd = "") ?(args = []) ?(env = []) ~w ~h () =
     ~fwdlog:(1024 * 1024) ~w ~h ~wrap_mode:0 in
   let pty = Vterm_lib.Pty.spawn ~cmd ~args ~env ~w ~h in
   let t = { vterm; pty; title = "Terminal"; closed = false;
-            exit_code = None } in
+            exit_code = None;
+            reported_buttons = 0 } in
   terminals := !terminals @ [t];
   t
 
@@ -136,3 +138,5 @@ let title t =
 let is_closed t = t.closed
 let vterm t = t.vterm
 let pty t = t.pty
+let reported_buttons t = t.reported_buttons
+let set_reported_buttons t v = t.reported_buttons <- v

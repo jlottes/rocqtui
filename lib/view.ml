@@ -615,17 +615,22 @@ let render_all (ctx : Editor_context.t) r (tab : Tab.t) =
     && active_mt.mt_terminal <> None in
   let cursor_visible =
     if term_focused then begin
-      (* Position hardware cursor at vterm cursor location *)
+      (* Position hardware cursor at vterm cursor location, if visible *)
       match active_mt.mt_terminal with
       | Some term ->
-        (match Vterm_lib.Vterm_api.cursor_info (Terminal.vterm term) with
-         | Some ci ->
-           let rect = Render.pane_rect r Render.PMessages in
-           Render.place_cursor r
-             ~row:(rect.row + ci.y)
-             ~col:(rect.col + ci.x);
-           true
-         | None -> false)
+        let vt = Terminal.vterm term in
+        let mode = Vterm_lib.Vterm_api.term_mode vt in
+        let show_cursor = mode land 0x10 <> 0 in (* MODE_SHOW_CURSOR *)
+        if show_cursor then
+          match Vterm_lib.Vterm_api.cursor_info vt with
+          | Some ci ->
+            let rect = Render.pane_rect r Render.PMessages in
+            Render.place_cursor r
+              ~row:(rect.row + ci.y)
+              ~col:(rect.col + ci.x);
+            true
+          | None -> false
+        else false
       | None -> false
     end
     else if tab.focused_pane <> `Script then false
