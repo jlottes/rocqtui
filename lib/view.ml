@@ -291,6 +291,11 @@ let update_msg_tabs (tab : Tab.t) =
 let render_messages r (tab : Tab.t) =
   update_msg_tabs tab;
   Tab.sync_terminals tab.msg;
+  (* Resize all terminals to current messages pane dims. No-op if
+     unchanged, so safe to call every frame. *)
+  let mrect = Render.pane_rect r Render.PMessages in
+  List.iter (fun t -> Terminal.resize t ~w:mrect.width ~h:mrect.height)
+    (Terminal.all ());
   let mt = Tab.active_msg_tab tab.msg in
   match mt.mt_terminal with
   | Some term ->

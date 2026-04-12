@@ -260,14 +260,10 @@ let () =
       Render_need.request ();
       Mcp_server.poll_notifications mcp mgr
     end;
-    (* Check for terminal resize (SIGWINCH may have fired during select) *)
+    (* Check for terminal resize (SIGWINCH may have fired during select).
+       Embedded terminals get resized on next render. *)
     if Term.check_resize () then begin
       Render.resize r;
-      (* Resize all embedded terminals to match messages pane *)
-      let (h, w) = Render.pane_dims r Render.PMessages in
-      List.iter (fun term ->
-        Terminal.resize term ~w ~h
-      ) (Terminal.all ());
       Render_need.request_full ()
     end;
     (* Handle keyboard input *)

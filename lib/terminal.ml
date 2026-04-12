@@ -8,6 +8,8 @@ type t = {
   mutable closed : bool;
   mutable exit_code : int option;
   mutable reported_buttons : int;  (* bitmask of buttons sent as press *)
+  mutable cur_w : int;
+  mutable cur_h : int;
 }
 
 (* Global terminal list *)
@@ -23,7 +25,8 @@ let create ?(cmd = "") ?(args = []) ?(env = []) ~w ~h () =
   let pty = Vterm_lib.Pty.spawn ~cmd ~args ~env ~w ~h in
   let t = { vterm; pty; title = "Terminal"; closed = false;
             exit_code = None;
-            reported_buttons = 0 } in
+            reported_buttons = 0;
+            cur_w = w; cur_h = h } in
   terminals := !terminals @ [t];
   t
 
@@ -86,7 +89,10 @@ let poll t =
   end
 
 let resize t ~w ~h =
-  if not t.closed && w > 0 && h > 0 then begin
+  if not t.closed && w > 0 && h > 0
+     && (w <> t.cur_w || h <> t.cur_h) then begin
+    t.cur_w <- w;
+    t.cur_h <- h;
     Vterm_lib.Vterm_api.resize t.vterm ~w ~h;
     Vterm_lib.Pty.set_size t.pty ~w ~h
   end

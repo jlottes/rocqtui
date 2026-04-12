@@ -426,7 +426,23 @@ let rec handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r
        the normal path so clicking, dragging, tab switching all work. *)
     if term_focused && not is_mouse_event then begin
       if match_binding ev Keys.quit then Some Quit
-      else if match_binding ev Keys.close_tab then Some Close_tab
+      else if match_binding ev Keys.close_tab then begin
+        (* Ctrl+W on a focused terminal: destroy the terminal *)
+        let active_mt = Tab.active_msg_tab tab.msg in
+        (match active_mt.mt_terminal with
+         | Some term ->
+           Terminal.destroy term;
+           Tab.set_sticky_terminal None;
+           (* Clean up stale terminal sub-tab from msg_tabs and
+              reset active index to Rocq. *)
+           tab.msg.mt_active <- 0;
+           Tab.sync_terminals tab.msg;
+           Tab.activate_msg_tab tab.msg "Rocq";
+           (* Switch back to script pane so the user isn't stranded *)
+           tab.focused_pane <- `Script
+         | None -> ());
+        Some Continue
+      end
       else if match_binding ev Keys.cycle_pane then begin
         tab.focused_pane <- `Script; Some Continue end
       else if match_binding ev Keys.save then Some Save_prompt
@@ -801,16 +817,10 @@ let rec handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r
        | _ -> ());
       if not !term_mouse_handled then
       if ctx.dragging <> Editor_context.NoDrag then begin
-        (* Active border drag *)
+        (* Active border drag. Terminal resize happens on next render. *)
         (match ctx.dragging with
-         | Editor_context.DragV ->
-           Render.move_split_v r x;
-           let (h, w) = Render.pane_dims r Render.PMessages in
-           List.iter (fun t -> Terminal.resize t ~w ~h) (Terminal.all ())
-         | Editor_context.DragH ->
-           Render.move_split_h r y;
-           let (h, w) = Render.pane_dims r Render.PMessages in
-           List.iter (fun t -> Terminal.resize t ~w ~h) (Terminal.all ())
+         | Editor_context.DragV -> Render.move_split_v r x
+         | Editor_context.DragH -> Render.move_split_h r y
          | Editor_context.DragMinimap -> Render.move_minimap_border r x
          | Editor_context.DragMinimapScroll ->
            let mm_rect = Render.pane_rect r Render.PMinimap in
