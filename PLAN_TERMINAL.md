@@ -73,10 +73,26 @@ Claude Code connected to rocqtui's MCP server.
 - Resize all terminals on SIGWINCH and on split border drag
 - Child exit detection via waitpid(WNOHANG)
 
-**Phase 6: Terminal Management UI** — PARTIAL
+**Phase 6: Terminal Management UI** — COMPLETE
 - F5 build menu: [t] opens shell terminal, [l] opens Claude
 - TERM=glterm set in child environment
-- Missing: close terminal command, terminal-specific status bar info
+- Ctrl+W on focused terminal destroys it (SIGHUP + close PTY)
+- Auto-resize on render via cached (w,h) — covers all layout
+  change paths (SIGWINCH, split drag, tab bar toggle, minimap
+  toggle, tab close)
+
+**Phase 7: Selection & Clipboard** — COMPLETE
+- Mouse selection in terminal: left click/drag uses vterm's
+  sel_start/sel_extend, with display coords mapped via hit_test.
+  Shift+click extends existing selection.
+- Selection rendered with reverse video (from vterm cell.selected
+  flag, including sentinel for trailing blanks)
+- Copy on release: sel_text extracted and written to ctx.clipboard
+  and OSC 52 (system clipboard)
+- Middle-click paste: writes ctx.clipboard to PTY with bracketed
+  paste wrapping
+- OSC 52 from child: Terminal.poll invokes clipboard_hook which
+  updates ctx.clipboard and emits OSC 52 to outer terminal
 
 **Crash handling:**
 - SIGSEGV/SIGBUS/SIGABRT handler resets terminal state (mouse,
@@ -97,18 +113,6 @@ Claude Code connected to rocqtui's MCP server.
 - `blit_row` optimization: currently get_row returns OCaml tuples,
   mapped to Grid cells in OCaml. A C stub writing directly into
   Grid.t cells would avoid per-cell allocation. Profile first.
-
-**Phase 6 gaps:**
-- Keybinding to close a terminal sub-tab (with confirmation if
-  running)
-- Resize terminals when messages pane size changes via any mechanism
-  (currently only SIGWINCH and border drag are handled)
-
-**Phase 7: Selection & Clipboard** — NOT STARTED
-- Mouse selection in terminal using vterm's sel API
-- Copy selected text to clipboard (OSC 52)
-- Paste from clipboard to PTY (with bracketed paste)
-- OSC 52 clipboard data from child process
 
 **Phase 8: Claude Integration** — PARTIAL
 - Can launch `claude --chat` from F5 menu ([l])

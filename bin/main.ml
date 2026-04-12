@@ -77,6 +77,10 @@ let () =
     () in
   ctx.theme_name <- theme.Theme.name;
   Editor.init_compose ctx;
+  (* Wire terminal clipboard hook to editor context *)
+  Terminal.set_clipboard_hook (fun text ->
+    ctx.clipboard <- text;
+    Clipboard.copy_to_system text);
   (* Start MCP server *)
   let mcp = Mcp_server.create () in
   (* Create MCP socket symlinks in project directories *)

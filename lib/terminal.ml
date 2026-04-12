@@ -15,6 +15,10 @@ type t = {
 (* Global terminal list *)
 let terminals : t list ref = ref []
 
+(* Clipboard callback: set by editor init. Called when child sends OSC 52. *)
+let clipboard_hook : (string -> unit) ref = ref (fun _ -> ())
+let set_clipboard_hook f = clipboard_hook := f
+
 let create ?(cmd = "") ?(args = []) ?(env = []) ~w ~h () =
   let cmd = if cmd = "" then
     (try Sys.getenv "SHELL" with Not_found -> "/bin/bash")
@@ -71,7 +75,10 @@ let poll t =
       (match out.title with
        | Some name -> t.title <- name
        | None -> ());
-      (* TODO: clipboard, mouse_changed *)
+      (* Clipboard: OSC 52 from child *)
+      (match out.clipboard with
+       | Some text -> !clipboard_hook text
+       | None -> ())
     end;
     (* Check if child exited *)
     if not t.closed then begin
@@ -116,7 +123,11 @@ let render t (grid : Grid.t) ~row ~col ~width ~height =
             grid.cells.(grid_row).(prev).text <-
               grid.cells.(grid_row).(prev).text ^ cell.text
         end else if gc < col + width && gc < grid.cols then begin
-          let attr = (Obj.magic cell.attr : Grid.attr) in
+          let base = (Obj.magic cell.attr : Grid.attr) in
+          let attr =
+            if cell.selected then { base with reverse = not base.reverse }
+            else base
+          in
           let grid_cell = grid.cells.(grid_row).(gc) in
           grid_cell.text <- cell.text;
           grid_cell.width <- cell.width;
@@ -133,9 +144,13 @@ let render t (grid : Grid.t) ~row ~col ~width ~height =
       ) cells;
       (* Fill trailing blank from sentinel *)
       let end_x = !x in
-      let bg_attr = match sentinel with
-        | Some (attr, _) -> (Obj.magic attr : Grid.attr)
-        | None -> Grid.default_attr
+      let (bg_base, sentinel_selected) = match sentinel with
+        | Some (attr, _, sel) -> ((Obj.magic attr : Grid.attr), sel)
+        | None -> (Grid.default_attr, false)
+      in
+      let bg_attr =
+        if sentinel_selected then { bg_base with reverse = not bg_base.reverse }
+        else bg_base
       in
       for c = end_x to width - 1 do
         let gc = col + c in

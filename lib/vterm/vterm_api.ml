@@ -69,7 +69,7 @@ external get_row_raw : t -> int
   -> (string * int * attr * bool * bool) array
   = "caml_vterm_get_row"
 
-external get_row_sentinel : t -> int -> (attr * int) option
+external get_row_sentinel : t -> int -> (attr * int * bool) option
   = "caml_vterm_get_row_sentinel"
 
 let get_row t y =

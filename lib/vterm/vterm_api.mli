@@ -71,9 +71,9 @@ val get_row : t -> int -> row_cell array
     first. Each call overwrites the internal buffer, so consume
     data before calling again. *)
 
-val get_row_sentinel : t -> int -> (attr * int) option
+val get_row_sentinel : t -> int -> (attr * int * bool) option
 (** Get the sentinel (trailing blank info) for row [y].
-    Returns [Some (bg_attr, end_col)] or [None]. *)
+    Returns [Some (bg_attr, end_col, selected)] or [None]. *)
 
 (** {2 Scroll} *)
 

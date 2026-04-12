@@ -305,9 +305,10 @@ CAMLprim value caml_vterm_get_row_sentinel(value v, value v_y)
   for (unsigned i = 0; i < n; i++) {
     if (cells[i].code == '\n') {
       v_attr = gr_to_attr(cells[i].gr);
-      v_pair = caml_alloc(2, 0);
+      v_pair = caml_alloc(3, 0);
       Store_field(v_pair, 0, v_attr);
       Store_field(v_pair, 1, Val_int(cells[i].x));
+      Store_field(v_pair, 2, Val_bool(cells[i].selected));
       v_result = caml_alloc(1, 0); /* Some */
       Store_field(v_result, 0, v_pair);
       CAMLreturn(v_result);

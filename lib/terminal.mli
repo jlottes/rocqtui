@@ -36,3 +36,6 @@ val vterm : t -> Vterm_lib.Vterm_api.t
 val pty : t -> Vterm_lib.Pty.t
 val reported_buttons : t -> int
 val set_reported_buttons : t -> int -> unit
+
+val set_clipboard_hook : (string -> unit) -> unit
+(** Set callback invoked when a child sends OSC 52 clipboard data. *)

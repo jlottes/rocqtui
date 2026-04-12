@@ -776,6 +776,7 @@ let rec handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r
       let y = mev.y in
       let is_release = mev.button = Input.Release in
       let is_left = mev.button = Input.Left in
+      let is_middle = mev.button = Input.Middle in
       let is_scroll_up = mev.button = Input.ScrollUp in
       let is_scroll_down = mev.button = Input.ScrollDown in
       let has_shift = mev.mods.shift in
@@ -841,23 +842,46 @@ let rec handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r
       else if tab.mouse_selecting then begin
         (* Active text selection drag *)
         let pane = Render.pane_at r ~x ~y in
-        if pane = Render.PScript then begin
-          match screen_to_buffer_pos r buf ~x ~y with
-          | Some (line, byte_col) -> Buffer.move_to buf line byte_col
-          | None -> ()
-        end else if pane = Render.PGoals || pane = Render.PMessages then begin
-          let (ps, pane_id) =
-            if pane = Render.PGoals then (tab.goals_sel, `Goals)
-            else ((Tab.active_msg_tab tab.msg).mt_sel, `Messages)
-          in
-          (match screen_to_pane_pos tab r ~x ~y pane_id with
-           | Some (row, byte_col) ->
-             ps.ps_cursor_line <- row;
-             ps.ps_cursor_col <- byte_col
-           | None -> ())
-        end;
+        let term_in_msgs = if pane = Render.PMessages then
+          (Tab.active_msg_tab tab.msg).mt_terminal
+        else None in
+        (match term_in_msgs with
+         | Some term ->
+           let vt = Terminal.vterm term in
+           let rect = Render.pane_rect r Render.PMessages in
+           let vy = y - rect.row in
+           let vx = x - rect.col in
+           let (line, col) = Vterm_lib.Vterm_api.hit_test vt ~row:vy ~col:vx in
+           Vterm_lib.Vterm_api.sel_extend vt ~line ~col
+         | None ->
+           if pane = Render.PScript then begin
+             match screen_to_buffer_pos r buf ~x ~y with
+             | Some (line, byte_col) -> Buffer.move_to buf line byte_col
+             | None -> ()
+           end else if pane = Render.PGoals || pane = Render.PMessages then begin
+             let (ps, pane_id) =
+               if pane = Render.PGoals then (tab.goals_sel, `Goals)
+               else ((Tab.active_msg_tab tab.msg).mt_sel, `Messages)
+             in
+             (match screen_to_pane_pos tab r ~x ~y pane_id with
+              | Some (row, byte_col) ->
+                ps.ps_cursor_line <- row;
+                ps.ps_cursor_col <- byte_col
+              | None -> ())
+           end);
         if is_release then begin
           tab.mouse_selecting <- false;
+          (* Terminal selection: copy to clipboard on release *)
+          (match term_in_msgs with
+           | Some term ->
+             let vt = Terminal.vterm term in
+             if Vterm_lib.Vterm_api.has_selection vt then
+               (match Vterm_lib.Vterm_api.sel_text vt with
+                | Some text ->
+                  ctx.clipboard <- text;
+                  Clipboard.copy_to_system text
+                | None -> ())
+           | None -> ());
           (* If no actual drag occurred (anchor == cursor), clear selection *)
           if Buffer.selection buf = None then
             Buffer.clear_selection buf
@@ -969,24 +993,58 @@ let rec handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r
             | None -> false
           else false in
           if not forwarded then begin
-            let (ps, lines_cache, _scroll_ref, pane_id) =
-              if pane = Render.PGoals then
-                (tab.goals_sel, tab.goals_lines_cache, tab.goals_scroll, `Goals)
+            (* If terminal is active but not forwarding (mouse off or
+               shift held), use vterm's local selection. *)
+            let term_sel = if pane = Render.PMessages then
+              let active_mt = Tab.active_msg_tab tab.msg in
+              active_mt.mt_terminal
+            else None in
+            match term_sel with
+            | Some term ->
+              let vt = Terminal.vterm term in
+              let rect = Render.pane_rect r Render.PMessages in
+              let vy = y - rect.row in
+              let vx = x - rect.col in
+              let (line, col) = Vterm_lib.Vterm_api.hit_test vt ~row:vy ~col:vx in
+              if has_shift && Vterm_lib.Vterm_api.has_selection vt then
+                Vterm_lib.Vterm_api.sel_extend vt ~line ~col
               else
-                ((Tab.active_msg_tab tab.msg).mt_sel, (Tab.active_msg_tab tab.msg).mt_lines_cache, (Tab.active_msg_tab tab.msg).mt_scroll, `Messages)
-            in
-            match screen_to_pane_pos tab r ~x ~y pane_id with
-            | Some (row, byte_col) ->
-              View.clear_pane_selection ps;
-              ps.ps_anchor_line <- row;
-              ps.ps_anchor_col <- byte_col;
-              ps.ps_cursor_line <- row;
-              ps.ps_cursor_col <- byte_col;
-              ps.ps_active <- true;
-              tab.mouse_selecting <- true;
-              ignore lines_cache
-            | None -> ()
+                Vterm_lib.Vterm_api.sel_start vt ~line ~col;
+              tab.mouse_selecting <- true
+            | None ->
+              let (ps, lines_cache, _scroll_ref, pane_id) =
+                if pane = Render.PGoals then
+                  (tab.goals_sel, tab.goals_lines_cache, tab.goals_scroll, `Goals)
+                else
+                  ((Tab.active_msg_tab tab.msg).mt_sel, (Tab.active_msg_tab tab.msg).mt_lines_cache, (Tab.active_msg_tab tab.msg).mt_scroll, `Messages)
+              in
+              match screen_to_pane_pos tab r ~x ~y pane_id with
+              | Some (row, byte_col) ->
+                View.clear_pane_selection ps;
+                ps.ps_anchor_line <- row;
+                ps.ps_anchor_col <- byte_col;
+                ps.ps_cursor_line <- row;
+                ps.ps_cursor_col <- byte_col;
+                ps.ps_active <- true;
+                tab.mouse_selecting <- true;
+                ignore lines_cache
+              | None -> ()
           end
+        end
+        else if pane = Render.PMessages && is_middle then begin
+          (* Middle click: paste clipboard to terminal *)
+          let active_mt = Tab.active_msg_tab tab.msg in
+          (match active_mt.mt_terminal with
+           | Some term when ctx.clipboard <> "" ->
+             let vt = Terminal.vterm term in
+             let pty = Terminal.pty term in
+             if Vterm_lib.Vterm_api.bracketed_paste vt then begin
+               Vterm_lib.Pty.write pty "\x1b[200~";
+               Vterm_lib.Pty.write pty ctx.clipboard;
+               Vterm_lib.Pty.write pty "\x1b[201~"
+             end else
+               Vterm_lib.Pty.write pty ctx.clipboard
+           | _ -> ())
         end
         else if pane = Render.PMinimap && is_left then begin
           let mm_rect = Render.pane_rect r Render.PMinimap in
