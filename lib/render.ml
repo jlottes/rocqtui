@@ -10,7 +10,7 @@ type rect = {
 
 type pane_id =
   | PScript | PMinimap | PGoals | PMessages | PStatus | PTabBar
-  | PBorderV | PBorderH | PBorderMinimap | PNone
+  | PBorderV | PBorderH | PBorderBoth | PBorderMinimap | PNone
 
 type overlay = {
   rect : rect;
@@ -103,6 +103,7 @@ let pane_at t ~x ~y =
     if x < script_w then PScript
     else if t.minimap_width > 0 && x = script_w then PBorderMinimap
     else if x < t.split_col then PMinimap
+    else if x = t.split_col && y = t.split_row then PBorderBoth
     else if x = t.split_col then PBorderV
     else if y < t.split_row then PGoals
     else if y = t.split_row then PBorderH

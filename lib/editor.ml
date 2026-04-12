@@ -830,6 +830,8 @@ let rec handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r
         (match ctx.dragging with
          | Editor_context.DragV -> Render.move_split_v r x
          | Editor_context.DragH -> Render.move_split_h r y
+         | Editor_context.DragBoth ->
+           Render.move_split_v r x; Render.move_split_h r y
          | Editor_context.DragMinimap -> Render.move_minimap_border r x
          | Editor_context.DragMinimapScroll ->
            let mm_rect = Render.pane_rect r Render.PMinimap in
@@ -968,6 +970,8 @@ let rec handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r
           | None ->
             ctx.dragging <- Editor_context.DragH
         end
+        else if pane = Render.PBorderBoth && is_left then
+          ctx.dragging <- Editor_context.DragBoth
         else if (pane = Render.PBorderV || pane = Render.PBorderMinimap)
                 && is_left then
           ctx.dragging <- (match pane with

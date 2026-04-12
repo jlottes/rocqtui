@@ -10,7 +10,7 @@ type rect = {
 
 type pane_id =
   | PScript | PMinimap | PGoals | PMessages | PStatus | PTabBar
-  | PBorderV | PBorderH | PBorderMinimap | PNone
+  | PBorderV | PBorderH | PBorderBoth | PBorderMinimap | PNone
 
 type t
 

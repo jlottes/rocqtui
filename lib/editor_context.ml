@@ -1,7 +1,7 @@
 (* Editor context: dependencies injected from main.ml.
    Replaces callback refs and global setters. *)
 
-type drag_mode = NoDrag | DragV | DragH | DragMinimap | DragMinimapScroll
+type drag_mode = NoDrag | DragV | DragH | DragBoth | DragMinimap | DragMinimapScroll
 
 type jump_point = {
   jp_tab_id : int;
