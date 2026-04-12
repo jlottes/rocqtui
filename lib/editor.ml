@@ -484,6 +484,23 @@ let rec handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r
         Modal.toggle ctx.modal Modal.BuildMenu; Some Continue end
       else if match_binding ev Keys.help then begin
         Modal.push ctx.modal (Modal.Help { scroll = 0 }); Some Continue end
+      else if match_binding ev Keys.copy
+              && not (match ev with Input.Key (3, _) -> true
+                | Input.Key (99, m) when m.ctrl -> true | _ -> false) then begin
+        (* Copy terminal selection (^Y only; ^C goes to terminal) *)
+        let active_mt = Tab.active_msg_tab tab.msg in
+        (match active_mt.mt_terminal with
+         | Some term ->
+           let vt = Terminal.vterm term in
+           if Vterm_lib.Vterm_api.has_selection vt then
+             (match Vterm_lib.Vterm_api.sel_text vt with
+              | Some text ->
+                ctx.clipboard <- text;
+                Clipboard.copy_to_system text
+              | None -> ())
+         | None -> ());
+        Some Continue
+      end
       else if match_binding ev Keys.open_terminal then begin
         open_terminal_tab tab r; Some Continue end
       else if match_binding ev Keys.open_claude then begin
@@ -899,18 +916,6 @@ let rec handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r
            end);
         if is_release then begin
           tab.mouse_selecting <- false;
-          (* Terminal selection: copy to clipboard on release *)
-          (match term_in_msgs with
-           | Some term ->
-             let vt = Terminal.vterm term in
-             if Vterm_lib.Vterm_api.has_selection vt then
-               (match Vterm_lib.Vterm_api.sel_text vt with
-                | Some text ->
-                  ctx.clipboard <- text;
-                  Clipboard.copy_to_system text
-                | None -> ())
-           | None -> ());
-          (* If no actual drag occurred (anchor == cursor), clear selection *)
           if Buffer.selection buf = None then
             Buffer.clear_selection buf
         end

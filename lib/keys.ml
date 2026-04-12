@@ -108,8 +108,8 @@ let print_query = {
   context = Global; description = "Print" }
 
 let copy = {
-  name = "copy"; codes = [ctrl 'c']; kitty_codes = [(99, 5)]; display = "^C";
-  context = Global; description = "Copy" }
+  name = "copy"; codes = [ctrl 'c'; ctrl 'y']; kitty_codes = [(99, 5)];
+  display = "^C/^Y"; context = Global; description = "Copy" }
 
 let undo = {
   name = "undo"; codes = [ctrl 'z']; kitty_codes = []; display = "^Z";
