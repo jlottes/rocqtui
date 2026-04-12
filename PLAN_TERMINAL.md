@@ -13,7 +13,10 @@ Claude Code connected to rocqtui's MCP server.
 ### Done
 
 **Phase 1: C Binding Layer** — COMPLETE
-- Vendored 25 C/H files from glterm into `lib/vterm/` (unmodified)
+- Vendored glterm files into `lib/vterm/` (unmodified). After upstream
+  refactor: `vterm.c/h, term.c/h, wrap.c/h, sel.c/h, mem.h, sysbuf.c/h,
+  c99.h, types.h, utf-8.h, char_width.h, acs.c/h, keyseq.c/h,
+  kitty_keyseq.c/h, mouseseq.c/h`. Dropped: `sys.c/h, fail.c/h`.
 - Separate `vterm_lib` dune library with C stubs
 - `vterm_stubs.c`: lifecycle, display (get_row/sentinel), scroll,
   selection, key/mouse encoding, PTY open/resize, state queries
@@ -21,7 +24,6 @@ Claude Code connected to rocqtui's MCP server.
   matching Grid's layout (Obj.magic cast between them)
 - `pty.ml/mli`: PTY spawn (arbitrary commands), non-blocking buffered
   writes, read, close
-- `exe_name` symbol provided for fail.c linkage
 
 **Phase 2: Terminal as Message Sub-Tab** — COMPLETE
 - `terminal.ml/mli`: ties vterm + PTY, global terminal list, poll,
@@ -32,7 +34,7 @@ Claude Code connected to rocqtui's MCP server.
 - Auto-switch to Rocq/Build suppressed when terminal is active
 - Dynamic display names via `msg_tab_display_name`
 
-**Phase 3: Input Routing** — MOSTLY COMPLETE
+**Phase 3: Input Routing** — COMPLETE
 - Printable characters: UTF-8 encoded and written directly to PTY
 - Ctrl+letter: converted to control bytes (`cp land 0x1f`). Works
   with both legacy (cp < 32) and Kitty (cp = letter + ctrl flag) input.
@@ -45,17 +47,24 @@ Claude Code connected to rocqtui's MCP server.
   `keyseq_lookup` produces `\n` for Shift+Return.
 - Alt+key: ESC prefix + character
 - Bracketed paste: wrapped in `\e[200~` / `\e[201~` when enabled
-- Reserved rocqtui keys (only these are NOT forwarded to terminal):
+- **XCompose in terminal**: ESC enters compose mode, composed text
+  written to PTY, double-ESC sends literal ESC (via kitty_keyseq)
+- Reserved rocqtui keys (not forwarded to terminal):
   Ctrl+X (quit), Ctrl+W (close tab), Ctrl+P (cycle pane),
   Ctrl+S (save), F1 (help), F5 (build menu)
-- Mouse events always go through normal rocqtui handler
+- Mouse forwarding with shift-override following glterm's model:
+  click/drag/release forwarded when mouse reporting on, scroll wheel
+  forwarded unless locally handled (alt-screen cursor keys or history)
 
 **Phase 4: Rendering** — MOSTLY COMPLETE
 - Terminal cells rendered into Grid via `vterm_get_row` → OCaml mapping
 - Trailing blanks filled from row sentinel
+- Wide characters (width=2): continuation cell (width=0) marked
+- Combining characters (width=0): appended to previous cell's text
 - Hardware cursor positioned at vterm cursor (no fake cursor rendering)
 - Cursor hidden when terminal's MODE_SHOW_CURSOR is off
-- Color mapping: struct gr → Grid.attr done in C stubs (gr_to_attr)
+- Color mapping: struct gr → Grid.attr done in C stubs (gr_to_attr),
+  includes bold, dim (ATTRB_DM), reverse, underline
 
 **Phase 5: Main Loop Integration** — COMPLETE
 - Terminal PTY fds added to select's extra_fds
@@ -69,20 +78,18 @@ Claude Code connected to rocqtui's MCP server.
 - TERM=glterm set in child environment
 - Missing: close terminal command, terminal-specific status bar info
 
+**Crash handling:**
+- SIGSEGV/SIGBUS/SIGABRT handler resets terminal state (mouse,
+  alt screen, cursor, termios) before re-raising — keeps terminal
+  usable after a crash
+
 **Debug tooling:**
 - `tools/keyspy.ml`: raw byte display for testing key encoding
 - `ROCQTUI_DEBUG_INPUT=1` env var logs input events to stderr
+- Sanitizers (ASan + UBSan) enabled in debug builds
 
 
 ### Remaining Work
-
-**Phase 3 gaps:**
-- Mouse forwarding to terminal (when terminal has mouse reporting on)
-  via `mouseseq`. Currently mouse in the messages pane does nothing
-  when a terminal is active. Need: forward mouse to PTY when
-  `mouse_mode != OFF` and shift not held, otherwise local selection.
-- Scroll wheel in terminal (scroll history when not in alt screen,
-  send cursor keys when in alt screen with ALT_SCROLL)
 
 **Phase 4 gaps:**
 - Status bar: show terminal title, process status, scroll indicator
