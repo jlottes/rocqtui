@@ -93,6 +93,23 @@ let run_query session phrase =
   | Some s -> Session.query s phrase
   | None -> ()
 
+(* Normalize \r\n and \r to \n — terminals send \r in bracketed paste *)
+let normalize_newlines s =
+  let len = String.length s in
+  let buf = Stdlib.Buffer.create len in
+  let i = ref 0 in
+  while !i < len do
+    if s.[!i] = '\r' then begin
+      Stdlib.Buffer.add_char buf '\n';
+      if !i + 1 < len && s.[!i + 1] = '\n' then incr i;
+      incr i
+    end else begin
+      Stdlib.Buffer.add_char buf s.[!i];
+      incr i
+    end
+  done;
+  Stdlib.Buffer.contents buf
+
 let insert_string (tab : Tab.t) s =
   if not (edit_blocked tab) then
     let buf = tab.buf in
@@ -1110,7 +1127,7 @@ let rec handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r
     end
     (* Paste event *)
     else if (match ev with Input.Paste _ -> true | _ -> false) then begin
-      let text = match ev with Input.Paste t -> t | _ -> "" in
+      let text = match ev with Input.Paste t -> normalize_newlines t | _ -> "" in
       if text <> "" && not (edit_blocked tab) then begin
         (match session with Some s -> Session.clear_error s | None -> ());
         ignore (Buffer.delete_selection buf);
