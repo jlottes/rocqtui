@@ -1,3 +1,5 @@
+; To enable sanitizers, add to flags: -g -fsanitize=address,undefined
+; and uncomment c_library_flags below.
 (library
  (name vterm_lib)
  (libraries unix)
@@ -5,5 +7,6 @@
   (names vterm term wrap sel acs sysbuf
          keyseq kitty_keyseq mouseseq
          vterm_stubs)
-  (flags (:standard -std=c99 -D_XOPEN_SOURCE=600 -g -fsanitize=address,undefined)))
- (c_library_flags (-fsanitize=address,undefined)))
+  (flags (:standard -std=c99 -D_XOPEN_SOURCE=600)))
+ ; (c_library_flags (-fsanitize=address,undefined))
+)

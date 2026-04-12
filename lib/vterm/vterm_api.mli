@@ -103,6 +103,8 @@ val term_mode : t -> int
 val alt_screen : t -> bool
 val bracketed_paste : t -> bool
 val cursor_info : t -> cursor_info option
+val is_scrolled : t -> bool
+val scroll_info : t -> string option
 val width : t -> int
 val height : t -> int
 val set_wrap_mode : t -> int -> bool

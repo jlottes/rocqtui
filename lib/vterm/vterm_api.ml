@@ -116,6 +116,8 @@ let cursor_info t =
   | None -> None
   | Some (x, y, w) -> Some { x; y; w }
 
+external is_scrolled : t -> bool = "caml_vterm_is_scrolled"
+external scroll_info : t -> string option = "caml_vterm_scroll_info"
 external width : t -> int = "caml_vterm_width"
 external height : t -> int = "caml_vterm_height"
 

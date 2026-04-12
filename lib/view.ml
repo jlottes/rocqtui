@@ -555,9 +555,20 @@ let update_status (ctx : Editor_context.t) r (tab : Tab.t) =
           Keys.cycle_pane.display Keys.query_menu.display
           Keys.help.display reload_hint
       | `Messages ->
-        Printf.sprintf "  [Messages] %s:Pane %s:Query %s:Help%s"
-          Keys.cycle_pane.display Keys.query_menu.display
-          Keys.help.display reload_hint
+        let active_mt = Tab.active_msg_tab tab.msg in
+        (match active_mt.mt_terminal with
+         | Some term ->
+           let vt = Terminal.vterm term in
+           let scroll_info = match Vterm_lib.Vterm_api.scroll_info vt with
+             | Some s -> " [" ^ s ^ "]"
+             | None -> "" in
+           Printf.sprintf "  %s%s  %s:editor %s:close"
+             (Terminal.title term) scroll_info
+             Keys.cycle_pane.display Keys.close_tab.display
+         | None ->
+           Printf.sprintf "  [Messages] %s:Pane %s:Query %s:Help%s"
+             Keys.cycle_pane.display Keys.query_menu.display
+             Keys.help.display reload_hint)
     in
     (* Horizontal scroll indicator *)
     let hscroll_ind =

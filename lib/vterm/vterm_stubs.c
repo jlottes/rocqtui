@@ -479,6 +479,46 @@ CAMLprim value caml_vterm_cursor(value v)
   CAMLreturn(v_result);
 }
 
+CAMLprim value caml_vterm_is_scrolled(value v)
+{
+  struct vterm *vt = Vterm_val(v);
+  if (!vt) return Val_false;
+  return Val_bool(vt->scroll.line != (unsigned)-1);
+}
+
+/* vterm_scroll_info : t -> string option
+   Returns the glterm-style scroll status string, or None if not scrolled. */
+CAMLprim value caml_vterm_scroll_info(value v)
+{
+  CAMLparam1(v);
+  CAMLlocal2(v_result, v_str);
+
+  struct vterm *vt = Vterm_val(v);
+  if (!vt || vt->scroll.line == (unsigned)-1) CAMLreturn(Val_none);
+
+  /* Force layout so wb fields are valid */
+  vterm_prepare_rows(vt);
+
+  const int bn = vt->t.buf.beg.lines.n;
+  char buf[128];
+  char *out = buf;
+  unsigned len = sizeof(buf), n;
+  #define PRINT(fmt,x) snprintf(out,len,fmt,x), n=strlen(out), out+=n, len-=n
+  PRINT("lines %u", (unsigned)(bn + vt->wb.dtop.line));
+  if(vt->wb.dtop.sub) PRINT(".%u", vt->wb.dtop.sub);
+  PRINT("-%u", (unsigned)(bn + vt->wb.dbot.line - (vt->wb.dbot.sub?0:1)));
+  if(vt->wb.dbot.sub) PRINT(".%u", vt->wb.dbot.sub - 1);
+  PRINT("/%u", (unsigned)(bn + vt->wb.vbot.line));
+  PRINT(" %d%%", (int)((bn + vt->wb.dbot.line) * 100.0 /
+                       (bn + vt->wb.vbot.line)));
+  #undef PRINT
+
+  v_str = caml_copy_string(buf);
+  v_result = caml_alloc(1, 0);
+  Store_field(v_result, 0, v_str);
+  CAMLreturn(v_result);
+}
+
 CAMLprim value caml_vterm_width(value v)
 {
   struct vterm *vt = Vterm_val(v);
