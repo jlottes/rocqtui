@@ -592,11 +592,20 @@ CAMLprim value caml_mouseseq_nat(value v_button, value v_mod,
    ============================================================ */
 
 /* pty_open : cmd:string -> args:string array -> env:string array
-              -> w:int -> h:int -> (Unix.file_descr * int) */
-CAMLprim value caml_pty_open(value v_cmd, value v_args, value v_env,
-    value v_w, value v_h)
+              -> w:int -> h:int -> cwd:string -> (Unix.file_descr * int) */
+CAMLprim value caml_pty_open_nat(value v_cmd, value v_args, value v_env,
+    value v_w, value v_h, value v_cwd);
+
+CAMLprim value caml_pty_open_bc(value *argv, int argc)
+{
+  return caml_pty_open_nat(argv[0], argv[1], argv[2], argv[3], argv[4], argv[5]);
+}
+
+CAMLprim value caml_pty_open_nat(value v_cmd, value v_args, value v_env,
+    value v_w, value v_h, value v_cwd)
 {
   CAMLparam5(v_cmd, v_args, v_env, v_w, v_h);
+  CAMLxparam1(v_cwd);
   CAMLlocal1(v_result);
 
   int argc = Wosize_val(v_args);
@@ -638,6 +647,13 @@ CAMLprim value caml_pty_open(value v_cmd, value v_args, value v_env,
   /* Set initial size */
   unsigned short w = Int_val(v_w), h = Int_val(v_h);
 
+  /* Extract cwd before fork */
+  const char *cwd_str = String_val(v_cwd);
+  char *cwd = NULL;
+  if (cwd_str[0] != '\0') {
+    cwd = strdup(cwd_str);
+  }
+
   pid_t child = fork();
   if (child == -1) {
     close(fdm); free(argv); free(envp);
@@ -663,6 +679,11 @@ CAMLprim value caml_pty_open(value v_cmd, value v_args, value v_env,
     ws.ws_col = w;
     ioctl(0, TIOCSWINSZ, &ws);
 
+    /* Change working directory if specified */
+    if (cwd) {
+      if (chdir(cwd) != 0) _exit(1);
+    }
+
     execvpe(argv[0], argv, envp);
     _exit(1);
   }
@@ -670,6 +691,7 @@ CAMLprim value caml_pty_open(value v_cmd, value v_args, value v_env,
   /* Parent */
   free(argv);
   free(envp);
+  free(cwd);
 
   v_result = caml_alloc(2, 0);
   Store_field(v_result, 0, Val_int(fdm));

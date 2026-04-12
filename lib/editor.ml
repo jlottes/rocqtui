@@ -264,6 +264,22 @@ let codepoint_of_event = function
   | Input.Special (Input.Escape, _) -> Some 27
   | _ -> None
 
+(* Open a terminal sub-tab, optionally with a specific command. *)
+let open_terminal_tab ?cmd (tab : Tab.t) r =
+  let buf = tab.buf in
+  let (h, w) = Render.pane_dims r Render.PMessages in
+  let cwd = match Buffer.filename buf with
+    | Some f -> (match Project.find_project_file (Filename.dirname f) with
+      | Some (pd, _) -> pd | None -> Filename.dirname f)
+    | None -> Sys.getcwd () in
+  let _term = match cmd with
+    | Some c -> Terminal.create ~cmd:c ~cwd ~w ~h ()
+    | None -> Terminal.create ~cwd ~w ~h ()
+  in
+  Tab.sync_terminals tab.msg;
+  tab.msg.mt_active <- List.length tab.msg.mt_tabs - 1;
+  tab.focused_pane <- `Messages
+
 let rec handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r =
   let buf = tab.buf in
   let session = tab.session in
@@ -450,6 +466,10 @@ let rec handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r
         Modal.toggle ctx.modal Modal.BuildMenu; Some Continue end
       else if match_binding ev Keys.help then begin
         Modal.push ctx.modal (Modal.Help { scroll = 0 }); Some Continue end
+      else if match_binding ev Keys.open_terminal then begin
+        open_terminal_tab tab r; Some Continue end
+      else if match_binding ev Keys.open_claude then begin
+        open_terminal_tab ~cmd:"claude" tab r; Some Continue end
       else if (match ev with Input.Special (Input.Escape, _) -> true | _ -> false) then begin
         (* ESC starts compose mode; double-ESC sends ESC to terminal *)
         (match ctx.compose with
@@ -639,27 +659,15 @@ let rec handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r
               Render.set_status r "No project found.");
            Some Continue
          end
-         else if c = 't' then begin
-           let (h, w) = Render.pane_dims r Render.PMessages in
-           let _term = Terminal.create ~w ~h () in
-           Tab.sync_terminals tab.msg;
-           let n = List.length tab.msg.mt_tabs in
-           tab.msg.mt_active <- n - 1;
-           tab.focused_pane <- `Messages;
-           Some Continue
-         end
-         else if c = 'l' then begin
-           let (h, w) = Render.pane_dims r Render.PMessages in
-           let _term = Terminal.create ~cmd:"claude" ~args:["--chat"] ~w ~h () in
-           Tab.sync_terminals tab.msg;
-           let n = List.length tab.msg.mt_tabs in
-           tab.msg.mt_active <- n - 1;
-           tab.focused_pane <- `Messages;
-           Some Continue
-         end
          else
            (Some Continue)
        | None -> Some Continue)
+    end
+    else if match_binding ev Keys.open_terminal then begin
+      open_terminal_tab tab r; Some Continue
+    end
+    else if match_binding ev Keys.open_claude then begin
+      open_terminal_tab ~cmd:"claude" tab r; Some Continue
     end
     else if match_binding ev Keys.query_menu then begin
       Modal.toggle ctx.modal Modal.QueryMenu;

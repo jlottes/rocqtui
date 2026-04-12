@@ -64,7 +64,7 @@ let open_file = {
   context = Global; description = "Open file" }
 
 let interrupt = {
-  name = "interrupt"; codes = [ctrl 'c']; kitty_codes = []; display = "^C";
+  name = "interrupt"; codes = []; kitty_codes = [(46, 3)]; display = "Alt+.";
   context = Global; description = "Interrupt" }
 
 let step_forward = {
@@ -84,7 +84,7 @@ let toggle_hyps = {
   context = Global; description = "Toggle hypotheses" }
 
 let options_menu = {
-  name = "options_menu"; codes = [ctrl 't']; kitty_codes = []; display = "^T";
+  name = "options_menu"; codes = [266]; kitty_codes = []; display = "F2";
   context = Global; description = "Print options" }
 
 let query_menu = {
@@ -108,7 +108,7 @@ let print_query = {
   context = Global; description = "Print" }
 
 let copy = {
-  name = "copy"; codes = [ctrl 'y']; kitty_codes = []; display = "^Y";
+  name = "copy"; codes = [ctrl 'c']; kitty_codes = [(99, 5)]; display = "^C";
   context = Global; description = "Copy" }
 
 let undo = {
@@ -148,8 +148,8 @@ let help = {
   context = Global; description = "Help" }
 
 let minimap = {
-  name = "minimap"; codes = [266]; kitty_codes = [(Char.code 'm', 5)];
-  display = "F2"; context = Global; description = "Minimap" }
+  name = "minimap"; codes = []; kitty_codes = [(109, 5)];
+  display = "^M"; context = Global; description = "Minimap" }
 
 let theme_menu = {
   name = "theme_menu"; codes = [267]; kitty_codes = []; display = "F3";
@@ -223,20 +223,20 @@ let build_cancel = {
   name = "build_cancel"; codes = [Char.code 'c']; kitty_codes = [];
   display = "c"; context = BuildMenu; description = "Cancel" }
 
-let build_terminal = {
-  name = "build_terminal"; codes = [Char.code 't']; kitty_codes = [];
-  display = "t"; context = BuildMenu; description = "Terminal" }
+let open_terminal = {
+  name = "open_terminal"; codes = [ctrl 't']; kitty_codes = [(116, 5)];
+  display = "^T"; context = Global; description = "Terminal" }
 
-let build_claude = {
-  name = "build_claude"; codes = [Char.code 'l']; kitty_codes = [];
-  display = "l"; context = BuildMenu; description = "Claude" }
+let open_claude = {
+  name = "open_claude"; codes = [270]; kitty_codes = [];
+  display = "F6"; context = Global; description = "Claude" }
 
 (* --- Grouped for help/status generation --- *)
 
 let navigation_bindings = [step_forward; step_backward; go_to_cursor; cycle_pane]
 let editing_bindings = [open_file; save; close_tab; quit; cut; paste; copy; undo; redo]
 let query_bindings = [about; print_query; jump_to_def; jump_back; query_menu]
-let display_bindings = [toggle_hyps; options_menu; help; minimap; theme_menu; reload; build_menu; refresh_screen]
+let display_bindings = [toggle_hyps; options_menu; help; minimap; theme_menu; reload; build_menu; open_terminal; open_claude; refresh_screen]
 let tab_bindings = [new_tab; prev_tab; next_tab]
 
 (* Generate a hint string from a list of bindings: "^S:Save ^W:Close ..." *)
@@ -307,6 +307,15 @@ let generate_help () =
     theme_menu;
     { reload with description = "Reload from disk (prompts if dirty)" };
     { build_menu with description = "Build menu (make file/all/deps)" };
+  ];
+  section "Terminal" [
+    { open_terminal with description = "Open terminal (in project dir)" };
+    { open_claude with description = "Open Claude Code (in project dir)" };
+    { close_tab with display = "^W"; description = "Close terminal (when focused)" };
+    { cycle_pane with description = "Switch focus back to editor" };
+    { (let b = { name="dbl_esc"; codes=[]; kitty_codes=[]; display="ESC ESC";
+                 context=Global; description="Send ESC to terminal" } in b)
+      with name = "dbl_esc" };
   ];
   section "Tabs" [
     new_tab;

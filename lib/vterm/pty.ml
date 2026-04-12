@@ -8,18 +8,18 @@ type t = {
 }
 
 external pty_open_raw : string -> string array -> string array
-  -> int -> int -> int * int
-  = "caml_pty_open"
+  -> int -> int -> string -> int * int
+  = "caml_pty_open_bc" "caml_pty_open_nat"
 
 external pty_set_size_raw : int -> int -> int -> unit
   = "caml_pty_set_size"
 
-let spawn ~cmd ~args ~env ~w ~h =
+let spawn ~cmd ~args ~env ~w ~h ?(cwd = "") () =
   let env_strings = List.map (fun (k, v) -> k ^ "=" ^ v) env in
   let fd_int, pid = pty_open_raw cmd
     (Array.of_list args)
     (Array.of_list env_strings)
-    w h
+    w h cwd
   in
   let fd = (Obj.magic fd_int : Unix.file_descr) in
   { fd; pid; write_buf = Buffer.create 0; closed = false }

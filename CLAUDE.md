@@ -83,22 +83,28 @@ Standalone tools: `dune exec tools/grid_cat.exe -- -color file.v`,
 |-----|--------|
 | ^S | Save |
 | ^O | Open file picker |
-| ^W | Close tab (exit if last) |
+| ^W | Close tab / close terminal (when focused) |
 | ^X | Exit all |
+| ^C | Copy (also to system clipboard) |
 | ^N | New tab |
 | ^B | Jump back |
 | ^L | Jump to definition |
 | ^E | Go to cursor (set target) |
 | Alt+Down/Up | Step forward/backward |
+| Alt+. | Interrupt Rocq |
 | ^P | Cycle pane focus |
-| ^T | Print options |
+| ^T | Open terminal (in project dir) |
 | ^Q | Query menu |
+| ^M | Minimap (Kitty protocol only) |
 | F1 | Help (scrollable) |
-| F2 | Minimap |
+| F2 | Print options |
 | F3 | Theme picker |
 | F4 | Reload from disk |
 | F5 | Build menu |
+| F6 | Open Claude (in project dir) |
 | F12 | Force redraw |
+| ESC | Compose (XCompose input) |
+| ESC ESC | Send ESC to terminal (when focused) |
 
 ## MCP Server
 

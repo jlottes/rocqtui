@@ -3,8 +3,9 @@
 type t
 
 val create : ?cmd:string -> ?args:string list -> ?env:(string * string) list
-  -> w:int -> h:int -> unit -> t
+  -> ?cwd:string -> w:int -> h:int -> unit -> t
 (** Spawn a terminal. Defaults to [$SHELL], [TERM=glterm].
+    [cwd] sets the child's working directory (default: inherit).
     Adds to the global terminal list. *)
 
 val destroy : t -> unit

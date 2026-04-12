@@ -3,10 +3,11 @@
 type t
 
 val spawn : cmd:string -> args:string list -> env:(string * string) list
-  -> w:int -> h:int -> t
+  -> w:int -> h:int -> ?cwd:string -> unit -> t
 (** Spawn a child process attached to a new PTY. The PTY master fd
     is set to non-blocking. [env] entries are appended to the
-    inherited environment (as overrides). *)
+    inherited environment (as overrides). [cwd] sets the child's
+    working directory (empty string = inherit parent's). *)
 
 val fd : t -> Unix.file_descr
 (** The PTY master file descriptor for use with [Unix.select]. *)

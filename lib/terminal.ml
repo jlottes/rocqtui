@@ -19,14 +19,14 @@ let terminals : t list ref = ref []
 let clipboard_hook : (string -> unit) ref = ref (fun _ -> ())
 let set_clipboard_hook f = clipboard_hook := f
 
-let create ?(cmd = "") ?(args = []) ?(env = []) ~w ~h () =
+let create ?(cmd = "") ?(args = []) ?(env = []) ?(cwd = "") ~w ~h () =
   let cmd = if cmd = "" then
     (try Sys.getenv "SHELL" with Not_found -> "/bin/bash")
   else cmd in
   let env = ("TERM", "glterm") :: env in
   let vterm = Vterm_lib.Vterm_api.create ~backlog:(32 * 1024 * 1024)
     ~fwdlog:(1024 * 1024) ~w ~h ~wrap_mode:1 in
-  let pty = Vterm_lib.Pty.spawn ~cmd ~args ~env ~w ~h in
+  let pty = Vterm_lib.Pty.spawn ~cmd ~args ~env ~w ~h ~cwd () in
   let t = { vterm; pty; title = "Terminal"; closed = false;
             exit_code = None;
             reported_buttons = 0;

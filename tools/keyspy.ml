@@ -14,9 +14,16 @@ let () =
     c_vtime = 0;
   } in
   Unix.tcsetattr Unix.stdin Unix.TCSANOW raw;
-  let restore () = Unix.tcsetattr Unix.stdin Unix.TCSANOW tio in
+  let write s = ignore (Unix.write_substring Unix.stdout s 0 (String.length s)) in
+  (* Enable Kitty keyboard protocol level 1 *)
+  write "\x1b[>1u";
+  let restore () =
+    write "\x1b[<u";  (* disable Kitty *)
+    Unix.tcsetattr Unix.stdin Unix.TCSANOW tio
+  in
   at_exit restore;
   Printf.printf "keyspy: press keys to see raw bytes. Ctrl+\\ to quit.\n%!";
+  Printf.printf "  (Kitty keyboard protocol level 1 enabled)\n%!";
   let buf = Bytes.create 64 in
   try while true do
     let n = Unix.read Unix.stdin buf 0 64 in

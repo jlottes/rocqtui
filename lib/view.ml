@@ -486,10 +486,9 @@ let render_build_bar r =
       | Some d -> d | None -> "building" in
     Printf.sprintf "  Building: %s  [c]Cancel" desc
   else
-    Printf.sprintf "[%s]File [%s]Deps [%s]All [%s]Cursor [%s]Clean [%s]Term [%s]Claude  %s:close"
+    Printf.sprintf "[%s]File [%s]Deps [%s]All [%s]Cursor [%s]Clean  %s:close"
       Keys.build_file.display Keys.build_deps.display Keys.build_all.display
       Keys.build_cursor.display Keys.build_clean.display
-      Keys.build_terminal.display Keys.build_claude.display
       Keys.build_menu.display
   in
   Render.set_status r text
