@@ -19,11 +19,30 @@ let terminals : t list ref = ref []
 let clipboard_hook : (string -> unit) ref = ref (fun _ -> ())
 let set_clipboard_hook f = clipboard_hook := f
 
+(* Find bundled terminfo directory relative to the executable.
+   Looks for data/terminfo/ next to or above the executable's directory. *)
+let terminfo_dir =
+  lazy begin
+    let exe = Sys.executable_name in
+    let dir = Filename.dirname exe in
+    (* Try ../data/terminfo (dune exec: _build/default/bin/../data/terminfo)
+       and ./data/terminfo (installed next to binary) *)
+    let candidates = [
+      Filename.concat (Filename.dirname dir) "data/terminfo";
+      Filename.concat dir "data/terminfo";
+    ] in
+    List.find_opt Sys.file_exists candidates
+  end
+
 let create ?(cmd = "") ?(args = []) ?(env = []) ?(cwd = "") ~w ~h () =
   let cmd = if cmd = "" then
     (try Sys.getenv "SHELL" with Not_found -> "/bin/bash")
   else cmd in
   let env = ("TERM", "glterm") :: env in
+  let env = match Lazy.force terminfo_dir with
+    | Some path -> ("TERMINFO_DIRS", path) :: env
+    | None -> env
+  in
   let vterm = Vterm_lib.Vterm_api.create ~backlog:(32 * 1024 * 1024)
     ~fwdlog:(1024 * 1024) ~w ~h ~wrap_mode:1 in
   let pty = Vterm_lib.Pty.spawn ~cmd ~args ~env ~w ~h ~cwd () in
