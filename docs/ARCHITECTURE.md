@@ -1,0 +1,108 @@
+# Architecture
+
+Rocqtui is ~12000 lines of OCaml with some vendored C for the terminal
+emulator. **No ncurses** — all terminal I/O is direct ANSI escape sequences.
+
+## Module map
+
+### Terminal stack (`lib/`)
+
+- `term.ml` — terminal init/teardown, raw mode, Kitty keyboard protocol, SIGWINCH
+- `input.ml` — raw byte parser: CSI sequences, CSI u (Kitty), SGR mouse, paste, SS3
+- `grid.ml` — cell grid with Unicode (wide/combining chars), attrs, ANSI diff renderer
+- `render.ml` — pane layout on grid, chrome, overlays, tab/status bar, `present()`
+- `render_need.ml` — tracks No/Yes/Full render requests per frame
+
+### Editor (`lib/`)
+
+- `editor.ml` — input event handling (`handle_event`)
+- `view.ml` — rendering (`render_all`, `render_script`, etc.)
+- `editor_context.ml` — shared mutable state (clipboard, compose, dragging, jump stack)
+- `modal.ml` — modal dialog stack (Help, QueryMenu, OptionsMenu, ThemeMenu,
+  BuildMenu, FilePicker, Prompt)
+- `keys.ml` — centralized key bindings
+
+### Rocq integration (`lib/`)
+
+- `session.ml` — Rocq process, sentence tracking, async stepping, goals
+- `rocq_protocol.ml` — XML protocol via `Spawn.Async(Main_loop)`
+- `main_loop.ml` — select-based event loop for `Spawn.Async` watch callbacks
+- `sentence.ml` — sentence boundary detection
+- `highlight.ml` — syntax highlighting via `CLexer.LexerDiff`
+- `locate.ml` / `glob.ml` — jump-to-definition via Locate + `.glob` files
+
+### Buffer & tabs (`lib/`)
+
+- `buffer.ml` — text buffer with undo/redo, UTF-8 cursor, selection
+- `tab.ml` — tab manager, display name disambiguation, message sub-tabs
+
+### Features (`lib/`)
+
+- `file_picker.ml` — tree view file browser (^O)
+- `minimap.ml` — braille minimap (F2)
+- `build.ml` — async `make` subprocess (F5)
+- `file_manager.ml` / `file_watch.ml` — inotify file watching, auto-reload
+- `mcp_server.ml` — MCP server for Claude Code integration
+- `theme.ml` — color themes, `Grid.attr` with TrueColor support
+- `compose.ml` — XCompose input method
+- `clipboard.ml` — OSC 52 system clipboard
+- `project.ml` — `_RocqProject` / `_CoqProject` discovery and parsing
+
+### Embedded terminal (`lib/vterm/`, `lib/terminal.ml`)
+
+Vendored from [glterm](https://glterm-project-url) — a virtual terminal
+emulator with variable-length lines (tabs and newlines preserved literally,
+no padding). Spawns shell with `TERM=glterm` and `TERMINFO_DIRS` pointing at
+the bundled compiled terminfo under `data/terminfo/`.
+
+- `lib/vterm/` — vendored C vterm code plus OCaml bindings
+  (`vterm_api.ml`, `pty.ml`, `keys.ml`)
+- `lib/terminal.ml` — glue: owns global terminal list, drives I/O, renders
+  onto the grid
+
+### Entry point
+
+- `bin/main.ml` — main loop, tab management, render scheduling
+
+### MCP bridge
+
+- `bridge/rocqtui_mcp.ml` — stdio↔Unix socket bridge with high-level
+  proving tools (synchronous wrappers for the async MCP server)
+
+## Key design decisions
+
+- **`Main_loop.select_with_watches`** stays: `Spawn.Async` (coqidetop I/O)
+  depends on it. The main loop calls `select_with_watches`, which dispatches
+  both coqidetop watch callbacks and our extra fds (stdin, MCP, build, inotify).
+- **`Input.read_event`** is called only when stdin is ready from select, with
+  timeout 0.
+- **`Render.present`** diffs current grid vs previous frame; `~force:true`
+  emits all cells.
+- **`Editor_context.t`** holds all editor mutable state — `editor.ml` has no
+  global refs.
+- **`Modal.t`** is a stack of modal dialogs. Prompts are non-blocking modals.
+- **`File_picker.t`** state lives inside `Modal.FilePicker`, not a global ref.
+- **Theme colors** are `Grid.color` values, supporting TrueColor directly in
+  theme definitions.
+- **inotify watches** need re-adding after atomic rename
+  (`DELETE_SELF` → re-watch).
+- **`ESC[K`** is emitted after rows to clear trailing content (needed when
+  rocqtui runs inside glterm as the outer terminal, which has variable-width
+  lines).
+- **Kitty keyboard protocol** level 1 is enabled in `Term.init`. The input
+  parser handles both Kitty CSI u and traditional encodings (SS3, CSI ~,
+  CSI A-D).
+- **Embedded terminal `TERMINFO_DIRS`**: `lib/terminal.ml` resolves
+  `data/terminfo/` relative to the executable and injects `TERMINFO_DIRS` into
+  the child environment so the bundled glterm entry is found without
+  system-wide installation.
+
+## MCP server
+
+Rocqtui exposes an MCP server over a Unix socket so Claude Code can drive
+the editor programmatically. See [`CLAUDE_MCP.md`](../CLAUDE_MCP.md) for the
+user-facing API.
+
+- `lib/mcp_server.ml` — JSON-RPC 2.0 low-level server, resources + tools
+- `bridge/rocqtui_mcp.ml` — OCaml bridge (stdio↔socket), high-level proving tools
+- `.rocqtui-mcp.sock` symlink created in project dirs for discovery

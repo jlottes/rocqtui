@@ -80,14 +80,14 @@ with C stubs.
 Include glterm terminfo source. Either install via `make install` or locate at
 runtime via `TERMINFO_DIRS`.
 
-## 5. Rename / reorganize CLAUDE.md
+## 5. Rename / reorganize CLAUDE.md [DONE]
 
-`CLAUDE.md` serves as both Claude Code project instructions and architecture docs.
-For GitHub:
+Split into:
+- `CLAUDE.md` — lean, AI-specific: build/test, conventions, gotchas
+- `docs/ARCHITECTURE.md` — module map, design decisions, MCP architecture
 
-- Rename to `ARCHITECTURE.md` or `HACKING.md` for the public-facing version
-- Keep a smaller `CLAUDE.md` with essential project instructions (or keep as-is —
-  many open-source projects have `CLAUDE.md` now)
+Also removed: `lib/display.{ml,mli}` dead stubs, `scripts/rocqtui-mcp-bridge`
+(old Python bridge superseded by `bridge/rocqtui_mcp.ml`).
 
 ## 6. Move planning docs to docs/
 
