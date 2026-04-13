@@ -111,14 +111,18 @@ val set_wrap_mode : t -> int -> bool
 
 (** {2 Key encoding} *)
 
-val keyseq : keysym:int -> modifiers:int -> mode:int
+val keyseq : key:int -> modifiers:int -> mode:int
   -> event_type:int -> string option
-(** Encode a key event as an xterm-style escape sequence. *)
+(** Encode a key event as an xterm-style escape sequence.
+    [key] is a [Keys.KEY_*] identity code (or a Unicode codepoint). *)
 
-val kitty_keyseq : keysym:int -> base_keysym:int -> modifiers:int
+val kitty_keyseq : key:int -> shifted_key:int -> modifiers:int
   -> mode:int -> kitty_flags:int -> event_type:int
   -> text:string -> string option
-(** Encode a key event using the Kitty keyboard protocol. *)
+(** Encode a key event using the Kitty keyboard protocol.
+    [key] is the base/physical key identity (e.g. ['a'] for Shift+a).
+    [shifted_key] is the codepoint the key produces under current
+    modifiers (e.g. ['A'] for Shift+a), or 0 if not applicable. *)
 
 (** {2 Mouse encoding} *)
 

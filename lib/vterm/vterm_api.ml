@@ -125,11 +125,11 @@ external set_wrap_mode : t -> int -> bool = "caml_vterm_set_wrap_mode"
 
 (* === Key encoding === *)
 
-external keyseq : keysym:int -> modifiers:int -> mode:int
+external keyseq : key:int -> modifiers:int -> mode:int
   -> event_type:int -> string option
   = "caml_keyseq_lookup"
 
-external kitty_keyseq : keysym:int -> base_keysym:int -> modifiers:int
+external kitty_keyseq : key:int -> shifted_key:int -> modifiers:int
   -> mode:int -> kitty_flags:int -> event_type:int
   -> text:string -> string option
   = "caml_kitty_keyseq_lookup_bc" "caml_kitty_keyseq_lookup_nat"

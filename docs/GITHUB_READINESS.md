@@ -17,10 +17,7 @@ Options:
 ### X11 header dependency
 
 `lib/vterm/keyseq.c` and `kitty_keyseq.c` include `<X11/keysym.h>` and `<X11/Xlib.h>`.
-Requires `libx11-dev` / `libX11-devel` at build time. Either:
-
-- Document the build dependency
-- Vendor the small set of keysym constants actually used, dropping the X11 dep entirely
+**Decision**: remove X11 dependency upstream in glterm, vendor keysym constants.
 
 ### Platform scope
 

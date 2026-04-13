@@ -340,8 +340,9 @@ let rec handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r
                      land (Vterm_lib.Vterm_api.mode_app_keypad
                            lor Vterm_lib.Vterm_api.mode_app_cursor
                            lor Vterm_lib.Vterm_api.mode_meta) in
-                   let seq = Vterm_lib.Vterm_api.kitty_keyseq ~keysym:0xff1b
-                     ~base_keysym:0xff1b ~modifiers:0 ~mode
+                   let seq = Vterm_lib.Vterm_api.kitty_keyseq
+                     ~key:Vterm_lib.Keys.escape
+                     ~shifted_key:0 ~modifiers:0 ~mode
                      ~kitty_flags:(Vterm_lib.Vterm_api.kitty_flags vt)
                      ~event_type:1 ~text:"" in
                    (match seq with
@@ -1484,30 +1485,29 @@ let rec handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r
                    lor Vterm_lib.Vterm_api.mode_meta) in
            let kitty_fl = Vterm_lib.Vterm_api.kitty_flags vt in
            let write_pty s = Vterm_lib.Pty.write pty s in
-           let send_key ~keysym ?(base_keysym=keysym) ~mods ?(text="") () =
+           let send_key ~key ?(shifted_key=0) ~mods ?(text="") () =
              let seq =
                if kitty_fl > 0 then
-                 Vterm_lib.Vterm_api.kitty_keyseq ~keysym ~base_keysym
+                 Vterm_lib.Vterm_api.kitty_keyseq ~key ~shifted_key
                    ~modifiers:mods ~mode ~kitty_flags:kitty_fl
                    ~event_type:1 ~text
                else
-                 Vterm_lib.Vterm_api.keyseq ~keysym ~modifiers:mods
+                 Vterm_lib.Vterm_api.keyseq ~key ~modifiers:mods
                    ~mode ~event_type:0
              in
              match seq with
              | Some s -> write_pty s
              | None ->
                (* Fallback: basic keys that keyseq doesn't handle *)
-               let fallback = match keysym with
-                 | 0xff0d -> Some "\r"        (* Return *)
-                 | 0xff08 -> Some "\x7f"      (* Backspace *)
-                 | 0xff09 -> Some "\t"        (* Tab *)
-                 | 0xff1b -> Some "\x1b"      (* Escape *)
-                 | ks when ks < 0x100 && mods = 0 ->
-                   (* ASCII-range keysym, no modifiers *)
-                   let s = String.make 1 (Char.chr ks) in
-                   Some s
-                 | _ -> None
+               let fallback =
+                 if key = Vterm_lib.Keys.enter then Some "\r"
+                 else if key = Vterm_lib.Keys.backspace then Some "\x7f"
+                 else if key = Vterm_lib.Keys.tab then Some "\t"
+                 else if key = Vterm_lib.Keys.escape then Some "\x1b"
+                 else if key < 0x100 && mods = 0 then
+                   (* ASCII-range text key, no modifiers *)
+                   Some (String.make 1 (Char.chr key))
+                 else None
                in
                (match fallback with
                 | Some s -> write_pty s
@@ -1559,22 +1559,30 @@ let rec handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r
             | Input.Key (cp, mods) ->
               (* Other modified key — try keyseq lookup *)
               let mods_i = input_mod mods in
-              send_key ~keysym:cp ~mods:mods_i ()
+              send_key ~key:cp ~mods:mods_i ()
             | Input.Special (key, mods) ->
               let mods_i = input_mod mods in
-              (* Map Input.special_key to X11 keysyms *)
-              let keysym = match key with
-                | Input.Up -> 0xff52 | Input.Down -> 0xff54
-                | Input.Left -> 0xff51 | Input.Right -> 0xff53
-                | Input.Home -> 0xff50 | Input.End -> 0xff57
-                | Input.PageUp -> 0xff55 | Input.PageDown -> 0xff56
-                | Input.Insert -> 0xff63 | Input.Delete -> 0xffff
-                | Input.Backspace -> 0xff08
-                | Input.Tab -> 0xff09 | Input.Enter -> 0xff0d
-                | Input.Escape -> 0xff1b
-                | Input.F n -> 0xffbd + n  (* F1=0xffbe, F2=0xffbf, etc. *)
+              (* Map Input.special_key to KEY_* identity codes *)
+              let k = match key with
+                | Input.Up -> Vterm_lib.Keys.up
+                | Input.Down -> Vterm_lib.Keys.down
+                | Input.Left -> Vterm_lib.Keys.left
+                | Input.Right -> Vterm_lib.Keys.right
+                | Input.Home -> Vterm_lib.Keys.home
+                | Input.End -> Vterm_lib.Keys.end_
+                | Input.PageUp -> Vterm_lib.Keys.page_up
+                | Input.PageDown -> Vterm_lib.Keys.page_down
+                | Input.Insert -> Vterm_lib.Keys.insert
+                | Input.Delete -> Vterm_lib.Keys.delete
+                | Input.Backspace -> Vterm_lib.Keys.backspace
+                | Input.Tab -> Vterm_lib.Keys.tab
+                | Input.Enter -> Vterm_lib.Keys.enter
+                | Input.Escape -> Vterm_lib.Keys.escape
+                | Input.F n ->
+                  (* F1..F12 are contiguous in Keys *)
+                  Vterm_lib.Keys.f1 + (n - 1)
               in
-              send_key ~keysym ~mods:mods_i ()
+              send_key ~key:k ~mods:mods_i ()
             | Input.Paste text ->
               if Vterm_lib.Vterm_api.bracketed_paste vt then begin
                 write_pty "\027[200~";

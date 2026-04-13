@@ -1,41 +1,33 @@
-#include <X11/keysym.h>
 #include <stdio.h>
 #include <string.h>
 #include "c99.h"
 #include "utf-8.h"
+#include "keys.h"
 #include "keyseq.h"
-
-/* XGL_SHIFT=1, XGL_ALT=2, XGL_CTRL=4 match kitty shift=1, alt=2, ctrl=4.
-   XGL_NUM_LOCK=8 is stripped; kitty super/hyper/meta/caps/num not yet supported. */
-#define xgl_to_kitty_mod(m) ((m) & 7u)
+#include "kitty_keyseq.h"
 
 static char buf[64];
 
-/* Convert keysym to Unicode codepoint.
-   Returns 0 if the keysym is not a text-producing key. */
-static uint32 keysym_to_codepoint(unsigned long ks)
+/* Is this key identity a functional key (not a text codepoint)?
+   Used to decide whether to encode as CSI u with the codepoint. */
+static int key_is_functional(unsigned key)
 {
-  if(ks >= 0x20 && ks <= 0x7e) return ks;
-  if(ks >= 0xa0 && ks <= 0xff) return ks;
-  if((ks & 0xff000000u) == 0x01000000u) return ks & 0x00ffffffu;
-  return 0;
+  /* C0 controls and DEL are non-text (Enter/Tab/Backspace/Escape),
+     handled explicitly elsewhere. PUA range 57344+ is functional. */
+  return key < 0x20u || key == 0x7fu || key >= 57344u;
 }
 
-/* Format: CSI code[:shifted] ; modifier[:event_type] [; text] u
-   shifted: included when non-zero and differs from code (flag bit 2).
-   modifier: 1+bits, omitted (along with semicolon) if 1 and no evt/text.
-   event_type: 1=press (omitted), 2=repeat, 3=release.
-   text: UTF-8 decoded to colon-separated decimal codepoints (flag bit 4). */
-static const uchar *fmt_csi_u(uint32 code, uint32 shifted,
+/* Format: CSI code[:shifted] ; modifier[:event_type] [; text] u */
+static const uchar *fmt_csi_u(unsigned code, unsigned shifted,
                                unsigned mod, int evt,
                                const uchar *text, unsigned text_len)
 {
   unsigned m = 1 + mod;
   int has_text = text && text_len;
   char *p = buf;
-  p += sprintf(p, "\033[%u", (unsigned)code);
+  p += sprintf(p, "\033[%u", code);
   if(shifted && shifted != code)
-    p += sprintf(p, ":%u", (unsigned)shifted);
+    p += sprintf(p, ":%u", shifted);
   if(evt > 1)
     p += sprintf(p, ";%u:%d", m, evt);
   else if(m > 1)
@@ -43,85 +35,75 @@ static const uchar *fmt_csi_u(uint32 code, uint32 shifted,
   else if(has_text)
     *p++ = ';';
   if(has_text) {
-    struct read_utf8_fast r;
-    unsigned i = 0;
+    /* Use bounds-aware read_utf8 since caller's buffer may not have
+       the 4-byte trailing slack that read_utf8_fast requires. */
+    struct read_utf8_state st = { 0, utf8_state_ilzr, text };
+    const uchar *end = text + text_len;
+    int first = 1;
     *p++ = ';';
-    while(i < text_len) {
-      if(i) *p++ = ':';
-      r = read_utf8_fast(text, i);
-      p += sprintf(p, "%u", (unsigned)r.c);
-      i = r.i;
+    while(st.pos != end) {
+      st = read_utf8(st, end);
+      if(st.s.n == 0) {
+        if(!first) *p++ = ':';
+        first = 0;
+        p += sprintf(p, "%u", (unsigned)st.c);
+      }
     }
   }
   *p++ = 'u'; *p = 0;
   return (const uchar *)buf;
 }
 
-/*
-   Kitty keyboard protocol key sequence lookup.
-   Returns escape sequence string, or falls through to keyseq_lookup.
-*/
 const uchar *kitty_keyseq_lookup(
-    unsigned long keysym, unsigned long base_keysym,
-    uchar xgl_mod, uchar mode,
-    uchar kitty_flags, int event_type,
+    unsigned key, unsigned shifted_key,
+    unsigned mod, unsigned mode,
+    unsigned kitty_flags, int event_type,
     const uchar *text, unsigned text_len)
 {
-  unsigned mod;
-  uint32 cp;
-  int evt; /* event_type to encode: 0 means omit */
-  int all; /* flag bit 3: report all keys as escape codes */
+  /* kitty protocol strips num_lock/caps_lock from reported mod for
+     non-lock-key events — they're not "active modifiers" in the
+     traditional sense. Keep only shift/alt/ctrl/super/hyper/meta. */
+  unsigned kmod = mod & (MOD_SHIFT|MOD_ALT|MOD_CTRL
+                        |MOD_SUPER|MOD_HYPER|MOD_META);
+  int evt;
+  int all;
 
   if(!kitty_flags)
-    return keyseq_lookup(keysym, xgl_mod, mode, 0);
+    return keyseq_lookup(key, mod, mode, 0);
 
-  mod = xgl_to_kitty_mod(xgl_mod);
   evt = (kitty_flags & 2) ? event_type : 0;
   all = kitty_flags & 8;
 
-  /* Modifier-only keys: report only when flag bit 3 is set.
-     X11 reports ev->state BEFORE the key event takes effect, so
-     on press the modifier isn't in state yet, on release it still is.
-     Compensate: press adds the modifier, release removes it. */
-  if(all) { unsigned mbit=0; uint32 mcode=0;
-    switch(keysym) {
-    case XK_Shift_L:   mcode=57441, mbit=1; break;
-    case XK_Shift_R:   mcode=57447, mbit=1; break;
-    case XK_Control_L: mcode=57442, mbit=4; break;
-    case XK_Control_R: mcode=57448, mbit=4; break;
-    case XK_Alt_L:     mcode=57443, mbit=2; break;
-    case XK_Alt_R:     mcode=57449, mbit=2; break;
-    case XK_Super_L:   mcode=57444; break;
-    case XK_Super_R:   mcode=57450; break;
-    case XK_Caps_Lock: mcode=57358; break;
-    case XK_Num_Lock:  mcode=57360; break;
-    }
-    if(mcode) {
-      if(mbit) {
-        if(event_type==3) mod &= ~mbit; /* release: remove */
-        else              mod |=  mbit; /* press: add */
-      }
-      return fmt_csi_u(mcode,0,mod,evt,0,0);
-    }
+  /* Modifier-only keys: reported only when flag bit 3 (report all) set */
+  if(all) switch(key) {
+    case KEY_SHIFT_L:    return fmt_csi_u(57441, 0, kmod, evt, 0, 0);
+    case KEY_SHIFT_R:    return fmt_csi_u(57447, 0, kmod, evt, 0, 0);
+    case KEY_CONTROL_L:  return fmt_csi_u(57442, 0, kmod, evt, 0, 0);
+    case KEY_CONTROL_R:  return fmt_csi_u(57448, 0, kmod, evt, 0, 0);
+    case KEY_ALT_L:      return fmt_csi_u(57443, 0, kmod, evt, 0, 0);
+    case KEY_ALT_R:      return fmt_csi_u(57449, 0, kmod, evt, 0, 0);
+    case KEY_SUPER_L:    return fmt_csi_u(57444, 0, kmod, evt, 0, 0);
+    case KEY_SUPER_R:    return fmt_csi_u(57450, 0, kmod, evt, 0, 0);
+    case KEY_CAPS_LOCK:  return fmt_csi_u(57358, 0, kmod, evt, 0, 0);
+    case KEY_NUM_LOCK:   return fmt_csi_u(57360, 0, kmod, evt, 0, 0);
   }
 
   /* Escape: always disambiguate */
-  if(base_keysym==XK_Escape) return fmt_csi_u(27,0,mod,evt,0,0);
+  if(key == KEY_ESCAPE) return fmt_csi_u(27, 0, kmod, evt, 0, 0);
 
-  /* Enter, Tab, Backspace: CSI u when modified, or when flag bit 3.
-     Use base_keysym so Shift+Tab (XK_ISO_Left_Tab) matches XK_Tab. */
-  switch(base_keysym) {
-  case XK_Return:         if(mod||all) return fmt_csi_u(13,0,mod,evt,0,0);    break;
-  case XK_Tab:            if(mod||all) return fmt_csi_u(9,0,mod,evt,0,0);     break;
-  case XK_BackSpace:      if(mod||all) return fmt_csi_u(127,0,mod,evt,0,0);   break;
-  case XK_KP_Enter:       if(mod||all) return fmt_csi_u(57414,0,mod,evt,0,0); break;
+  /* Enter, Tab, Backspace, KP_Enter: CSI u when modified or report-all */
+  switch(key) {
+  case KEY_ENTER:    if(kmod||all) return fmt_csi_u(13,  0, kmod, evt, 0, 0); break;
+  case KEY_TAB:      if(kmod||all) return fmt_csi_u(9,   0, kmod, evt, 0, 0); break;
+  case KEY_BACKSPACE:if(kmod||all) return fmt_csi_u(127, 0, kmod, evt, 0, 0); break;
+  case KEY_KP_ENTER: if(kmod||all) return fmt_csi_u(57414, 0, kmod, evt, 0, 0); break;
   }
 
   /* F1-F4: kitty uses CSI encoding, not SS3 */
-  if(evt<=1) switch(keysym) {
-    case XK_F1: case XK_F2: case XK_F3: case XK_F4: {
-      unsigned m = 1 + mod;
-      char c = 'P' + (keysym - XK_F1);
+  if(evt<=1) switch(key) {
+    case KEY_F1: case KEY_F2: case KEY_F3: case KEY_F4: {
+      unsigned m = 1 + kmod;
+      char c = 'P' + (key - KEY_F1);
       if(m > 1) sprintf(buf, "\033[1;%u%c", m, c);
       else      sprintf(buf, "\033[%c", c);
       return (const uchar *)buf;
@@ -129,18 +111,16 @@ const uchar *kitty_keyseq_lookup(
   }
 
   /* Text keys: CSI u when modified with ctrl/alt, non-press event,
-     or flag bit 3 (report all keys).
-     Flag bit 4: include associated text (press/repeat only). */
-  cp = keysym_to_codepoint(base_keysym);
-  if(cp && ((mod & (4|2)) || evt > 1 || all)) {
-    uint32 shifted = (kitty_flags & 4) ? keysym_to_codepoint(keysym) : 0;
+     or report-all. Flag bit 4: include associated text (press/repeat). */
+  if(!key_is_functional(key) && ((kmod & (MOD_CTRL|MOD_ALT)) || evt > 1 || all)) {
+    unsigned shifted = (kitty_flags & 4) ? shifted_key : 0;
     const uchar *txt = 0; unsigned tlen = 0;
     if((kitty_flags & 16) && event_type != 3
-       && text_len && text[0] >= 0x20 && !(mod & (4|2)))
+       && text_len && text[0] >= 0x20 && !(kmod & (MOD_CTRL|MOD_ALT)))
       txt = text, tlen = text_len;
-    return fmt_csi_u(cp, shifted, mod, evt, txt, tlen);
+    return fmt_csi_u(key, shifted, kmod, evt, txt, tlen);
   }
 
   /* Functional keys and unmodified text: legacy path */
-  return keyseq_lookup(keysym, xgl_mod, mode, evt);
+  return keyseq_lookup(key, mod, mode, evt);
 }

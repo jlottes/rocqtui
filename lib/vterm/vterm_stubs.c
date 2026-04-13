@@ -537,16 +537,16 @@ CAMLprim value caml_vterm_height(value v)
    Key encoding
    ============================================================ */
 
-/* keyseq : keysym:int -> modifiers:int -> mode:int
+/* keyseq : key:int -> modifiers:int -> mode:int
             -> event_type:int -> string option */
-CAMLprim value caml_keyseq_lookup(value v_keysym, value v_mod,
+CAMLprim value caml_keyseq_lookup(value v_key, value v_mod,
     value v_mode, value v_event_type)
 {
-  CAMLparam4(v_keysym, v_mod, v_mode, v_event_type);
+  CAMLparam4(v_key, v_mod, v_mode, v_event_type);
   CAMLlocal2(v_result, v_str);
 
   const uchar *seq = keyseq_lookup(
-    Int_val(v_keysym), Int_val(v_mod),
+    Int_val(v_key), Int_val(v_mod),
     Int_val(v_mode), Int_val(v_event_type));
 
   if (!seq) CAMLreturn(Val_none);
@@ -557,11 +557,11 @@ CAMLprim value caml_keyseq_lookup(value v_keysym, value v_mod,
   CAMLreturn(v_result);
 }
 
-/* kitty_keyseq : keysym:int -> base_keysym:int -> modifiers:int
+/* kitty_keyseq : key:int -> shifted_key:int -> modifiers:int
                   -> mode:int -> kitty_flags:int -> event_type:int
                   -> text:string -> string option */
-CAMLprim value caml_kitty_keyseq_lookup_nat(value v_keysym,
-    value v_base_keysym, value v_mod, value v_mode,
+CAMLprim value caml_kitty_keyseq_lookup_nat(value v_key,
+    value v_shifted_key, value v_mod, value v_mode,
     value v_kitty_flags, value v_event_type, value v_text);
 
 CAMLprim value caml_kitty_keyseq_lookup_bc(value *argv, int argc)
@@ -571,16 +571,16 @@ CAMLprim value caml_kitty_keyseq_lookup_bc(value *argv, int argc)
     argv[4], argv[5], argv[6]);
 }
 
-CAMLprim value caml_kitty_keyseq_lookup_nat(value v_keysym,
-    value v_base_keysym, value v_mod, value v_mode,
+CAMLprim value caml_kitty_keyseq_lookup_nat(value v_key,
+    value v_shifted_key, value v_mod, value v_mode,
     value v_kitty_flags, value v_event_type, value v_text)
 {
-  CAMLparam5(v_keysym, v_base_keysym, v_mod, v_mode, v_kitty_flags);
+  CAMLparam5(v_key, v_shifted_key, v_mod, v_mode, v_kitty_flags);
   CAMLxparam2(v_event_type, v_text);
   CAMLlocal2(v_result, v_str);
 
   const uchar *seq = kitty_keyseq_lookup(
-    Int_val(v_keysym), Int_val(v_base_keysym),
+    Int_val(v_key), Int_val(v_shifted_key),
     Int_val(v_mod), Int_val(v_mode),
     Int_val(v_kitty_flags), Int_val(v_event_type),
     (const uchar *)String_val(v_text),
