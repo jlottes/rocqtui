@@ -37,6 +37,71 @@ let terminfo_dir =
     List.find_opt Sys.file_exists candidates
   end
 
+(* Sniff the parent environment to decide what color-capability env
+   vars we should leak into the child. Only sets a var if the parent
+   doesn't already have one.
+
+   COLORTERM is truecolor-only by convention, so we only set it when
+   the parent is a known-truecolor terminal. FORCE_COLOR is the
+   Node/chalk convention (0=off, 1=16, 2=256, 3=truecolor) and is the
+   most reliable way to reach tools that ignore terminfo — notably
+   Claude Code, which is a Node app. *)
+let color_env_additions () =
+  let get k = try Some (Sys.getenv k) with Not_found -> None in
+  let has k = get k <> None in
+  let contains_substring hay needle =
+    let lh = String.length hay and ln = String.length needle in
+    let rec loop i =
+      if i + ln > lh then false
+      else if String.sub hay i ln = needle then true
+      else loop (i + 1)
+    in
+    ln = 0 || loop 0
+  in
+  let term = match get "TERM" with Some s -> s | None -> "" in
+  let term_256 = contains_substring term "256color" in
+  let ends_with s suf =
+    let ls = String.length s and lsuf = String.length suf in
+    ls >= lsuf && String.sub s (ls - lsuf) lsuf = suf
+  in
+  (* TERM values that themselves imply truecolor. The *-direct
+     convention is a terminfo standard for 24-bit color entries. *)
+  let term_truecolor =
+    ends_with term "-direct" ||
+    (match term with
+     | "xterm-kitty" | "wezterm" | "alacritty" | "xterm-ghostty"
+     | "foot" | "contour" | "rio" -> true
+     | _ -> false)
+  in
+  (* These env vars get stripped by SSH unless explicitly allowed, so
+     they only help for local sessions. LC_TERMINAL rides the LC_*
+     allowlist and does survive SSH. *)
+  let truecolor_parent =
+    term_truecolor ||
+    has "KITTY_WINDOW_ID" ||
+    has "ALACRITTY_WINDOW_ID" ||
+    has "WEZTERM_EXECUTABLE" ||
+    (match get "TERM_PROGRAM" with
+     | Some ("iTerm.app" | "WezTerm" | "vscode" | "ghostty" | "Hyper") -> true
+     | _ -> false) ||
+    (match get "LC_TERMINAL" with
+     | Some ("iTerm2" | "WezTerm") -> true
+     | _ -> false)
+  in
+  let acc = [] in
+  let acc =
+    if has "COLORTERM" then acc
+    else if truecolor_parent then ("COLORTERM", "truecolor") :: acc
+    else acc
+  in
+  let acc =
+    if has "FORCE_COLOR" then acc
+    else if truecolor_parent then ("FORCE_COLOR", "3") :: acc
+    else if term_256 then ("FORCE_COLOR", "2") :: acc
+    else acc
+  in
+  acc
+
 let create ?(cmd = "") ?(args = []) ?(env = []) ?(cwd = "") ~w ~h () =
   let cmd = if cmd = "" then
     (try Sys.getenv "SHELL" with Not_found -> "/bin/bash")
@@ -46,6 +111,7 @@ let create ?(cmd = "") ?(args = []) ?(env = []) ?(cwd = "") ~w ~h () =
     | Some path -> ("TERMINFO_DIRS", path) :: env
     | None -> env
   in
+  let env = color_env_additions () @ env in
   let vterm = Vterm_lib.Vterm_api.create ~backlog:(32 * 1024 * 1024)
     ~fwdlog:(1024 * 1024) ~w ~h ~wrap_mode:1 in
   let pty = Vterm_lib.Pty.spawn ~cmd ~args ~env ~w ~h ~cwd () in
