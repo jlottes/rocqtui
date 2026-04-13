@@ -66,19 +66,23 @@ Cover:
 
 ## 4. Packaging / Release
 
-### opam file
+### opam file [DONE]
 
-Create `rocqtui.opam` with proper dependencies so `opam install .` works.
+`dune-project` now has `(generate_opam_files true)` + `(package ...)` metadata,
+which regenerates `rocqtui.opam` on build. Binaries install as `rocqtui` and
+`rocqtui-mcp`. License: MIT (`LICENSE` in repo root).
 
-### Makefile (thin wrapper)
+### Terminfo bundling [DONE]
 
-`build`, `install`, `clean` targets wrapping dune. Conventional for OCaml projects
-with C stubs.
+Terminfo compiled at build time via `tic`, installed to
+`<prefix>/share/rocqtui/terminfo/g/glterm`. `lib/terminal.ml` resolves the
+bundled path relative to the executable (dune exec, opam install, and
+ad hoc layouts all covered).
 
-### Terminfo bundling
+### Makefile
 
-Include glterm terminfo source. Either install via `make install` or locate at
-runtime via `TERMINFO_DIRS`.
+Optional — `opam install .` now works. Skip unless we want a one-liner for
+non-opam users.
 
 ## 5. Rename / reorganize CLAUDE.md [DONE]
 

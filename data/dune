@@ -2,3 +2,8 @@
  (targets (dir terminfo))
  (deps glterm.terminfo)
  (action (run tic -x -o terminfo glterm.terminfo)))
+
+(install
+ (section share)
+ (package rocqtui)
+ (files (terminfo/g/glterm as terminfo/g/glterm)))

@@ -3,6 +3,8 @@
 ;   ASAN_OPTIONS=detect_leaks=0 dune exec bin/main.exe -- ...
 (executable
  (name main)
+ (public_name rocqtui)
+ (package rocqtui)
  (libraries rocqtui_lib unix)
  ; (link_flags (-cclib -fsanitize=address,undefined))
 )

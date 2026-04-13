@@ -20,16 +20,19 @@ let clipboard_hook : (string -> unit) ref = ref (fun _ -> ())
 let set_clipboard_hook f = clipboard_hook := f
 
 (* Find bundled terminfo directory relative to the executable.
-   Looks for data/terminfo/ next to or above the executable's directory. *)
+   Covers three layouts:
+   - dune exec:     _build/default/bin/main.exe     -> ../data/terminfo
+   - opam install:  <switch>/bin/rocqtui            -> ../share/rocqtui/terminfo
+   - ad hoc:        ./rocqtui with ./data alongside -> ./data/terminfo *)
 let terminfo_dir =
   lazy begin
     let exe = Sys.executable_name in
-    let dir = Filename.dirname exe in
-    (* Try ../data/terminfo (dune exec: _build/default/bin/../data/terminfo)
-       and ./data/terminfo (installed next to binary) *)
+    let bin_dir = Filename.dirname exe in
+    let prefix = Filename.dirname bin_dir in
     let candidates = [
-      Filename.concat (Filename.dirname dir) "data/terminfo";
-      Filename.concat dir "data/terminfo";
+      Filename.concat prefix "share/rocqtui/terminfo";
+      Filename.concat prefix "data/terminfo";
+      Filename.concat bin_dir "data/terminfo";
     ] in
     List.find_opt Sys.file_exists candidates
   end

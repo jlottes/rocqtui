@@ -1,3 +1,5 @@
 (executable
  (name rocqtui_mcp)
+ (public_name rocqtui-mcp)
+ (package rocqtui)
  (libraries rocqtui_lib unix yojson))
