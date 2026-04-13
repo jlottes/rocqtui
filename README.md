@@ -26,8 +26,9 @@ cd rocqtui
 opam install .
 ```
 
-This installs two binaries (`rocqtui` and `rocqtui-mcp`) and a bundled
-terminfo entry into your opam switch.
+This installs two binaries (`rocqtui` and `rocqtui-mcp`), a bundled
+`glterm` terminfo entry, and the [MCP API reference](CLAUDE_MCP.md)
+as package documentation (see [MCP integration](#mcp-integration) below).
 
 To build without installing:
 
