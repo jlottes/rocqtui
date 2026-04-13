@@ -29,8 +29,6 @@ dune exec tools/braille_cat.exe -- file.v
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — module map, design decisions
 - [`CLAUDE_MCP.md`](CLAUDE_MCP.md) — MCP API reference (imported by projects
   using rocqtui via `@~/rocq/rocqtui/CLAUDE_MCP.md`)
-- [`docs/GITHUB_READINESS.md`](docs/GITHUB_READINESS.md) — in-progress plan
-  for going public
 - `docs/` — historical planning docs (PLAN.md, REFACTOR.md, etc.)
 
 ## Conventions
