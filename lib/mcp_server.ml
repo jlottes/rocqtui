@@ -593,6 +593,14 @@ let edit_context buf pos len =
   let snippet = String.sub text s (e - s) in
   Printf.sprintf "OK. Context:\n...%s..." snippet
 
+(* Called before any buffer-mutating tool. Clears the session error
+   (stored as a byte range that becomes stale after any edit) —
+   mirrors what the interactive editor does on every keystroke. *)
+let edit_prologue (tab : Tab.t) =
+  match tab.session with
+  | Some s -> Session.clear_error s
+  | None -> ()
+
 (* --- Tool handlers --- *)
 
 let resolve_tab args mgr =
@@ -641,6 +649,7 @@ let handle_tool t client name args mgr =
   | "insert_text" ->
     let offset = args |> Yojson.Safe.Util.member "offset" |> to_int_lenient in
     let text = args |> Yojson.Safe.Util.member "text" |> Yojson.Safe.Util.to_string in
+    edit_prologue tab;
     Buffer.move_to_byte_offset tab.buf offset;
     String.iter (fun c ->
       if c = '\n' then Buffer.insert_newline tab.buf
@@ -654,6 +663,7 @@ let handle_tool t client name args mgr =
     let s = args |> Yojson.Safe.Util.member "start" |> to_int_lenient in
     let e = args |> Yojson.Safe.Util.member "end" |> to_int_lenient in
     let text = args |> Yojson.Safe.Util.member "text" |> Yojson.Safe.Util.to_string in
+    edit_prologue tab;
     Buffer.move_to_byte_offset tab.buf s;
     Buffer.set_anchor tab.buf;
     Buffer.move_to_byte_offset tab.buf e;
@@ -772,6 +782,7 @@ let handle_tool t client name args mgr =
   | "delete_range" ->
     let s = args |> Yojson.Safe.Util.member "start" |> to_int_lenient in
     let e = args |> Yojson.Safe.Util.member "end" |> to_int_lenient in
+    edit_prologue tab;
     Buffer.move_to_byte_offset tab.buf s;
     Buffer.set_anchor tab.buf;
     Buffer.move_to_byte_offset tab.buf e;
@@ -872,6 +883,7 @@ let handle_tool t client name args mgr =
     ) edits in
     (* Sort by start offset descending so earlier offsets stay valid *)
     let sorted = List.sort (fun (a, _, _) (b, _, _) -> compare b a) parsed in
+    edit_prologue tab;
     (* Apply each edit *)
     List.iter (fun (s, e, text) ->
       Buffer.move_to_byte_offset tab.buf s;
@@ -932,6 +944,7 @@ let handle_tool t client name args mgr =
         else begin
           (* Apply replacements in reverse order so offsets stay valid *)
           let sorted = List.sort (fun a b -> compare b a) to_replace in
+          edit_prologue tab;
           List.iter (fun pos ->
             Buffer.move_to_byte_offset tab.buf pos;
             Buffer.set_anchor tab.buf;
