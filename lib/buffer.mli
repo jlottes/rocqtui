@@ -90,6 +90,20 @@ val redo : t -> unit
 (** Editing. *)
 val insert_char : t -> char -> unit
 val insert_newline : t -> unit
+
+(** Like [insert_newline], but prefixes the new line with the leading
+    whitespace of the current line (capped at the cursor column). *)
+val insert_newline_auto_indent : t -> unit
+
+(** Prepend [width] spaces to every line covered by the current selection
+    (or the cursor line if no selection). Adjusts cursor and anchor
+    columns to keep them on the same characters. *)
+val indent_lines : t -> int -> unit
+
+(** Remove up to [width] leading spaces from every line covered by the
+    current selection (or the cursor line if no selection). *)
+val unindent_lines : t -> int -> unit
+
 val delete_char_before : t -> unit
 val delete_char_at : t -> unit
 

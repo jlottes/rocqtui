@@ -360,6 +360,104 @@ let insert_newline buf =
   buf.cur_col <- 0;
   buf.modified <- true
 
+(* Like insert_newline, but prefix the new line with the leading whitespace
+   of the line the cursor was on (capped at cursor column, so splitting
+   mid-indent doesn't over-indent). *)
+let insert_newline_auto_indent buf =
+  push_undo buf Newline;
+  let line = buf.lines.(buf.cur_line) in
+  let len = String.length line in
+  let col = min buf.cur_col len in
+  let before = String.sub line 0 col in
+  let after = String.sub line col (len - col) in
+  let ws_end = ref 0 in
+  while !ws_end < len &&
+        (line.[!ws_end] = ' ' || line.[!ws_end] = '\t') do
+    incr ws_end
+  done;
+  let indent_len = min !ws_end col in
+  let indent = String.sub line 0 indent_len in
+  ensure_capacity buf (buf.num_lines + 1);
+  for i = buf.num_lines downto buf.cur_line + 2 do
+    buf.lines.(i) <- buf.lines.(i - 1)
+  done;
+  buf.lines.(buf.cur_line) <- before;
+  buf.lines.(buf.cur_line + 1) <- indent ^ after;
+  buf.num_lines <- buf.num_lines + 1;
+  buf.cur_line <- buf.cur_line + 1;
+  buf.cur_col <- indent_len;
+  buf.modified <- true;
+  update_desired_vcol buf
+
+(* Range of fully-or-partially selected lines for line-wise operations.
+   If the selection ends exactly at column 0 of a line, that line is
+   excluded (conventional editor behavior). *)
+let selection_line_range buf =
+  match buf.anchor with
+  | None -> (buf.cur_line, buf.cur_line)
+  | Some (al, ac) ->
+    let a_off = pos_to_offset buf al ac in
+    let c_off = pos_to_offset buf buf.cur_line buf.cur_col in
+    let ((sl, _), (el, ec)) =
+      if a_off <= c_off then ((al, ac), (buf.cur_line, buf.cur_col))
+      else ((buf.cur_line, buf.cur_col), (al, ac))
+    in
+    let last = if ec = 0 && el > sl then el - 1 else el in
+    (sl, last)
+
+let indent_lines buf width =
+  let (first, last) = selection_line_range buf in
+  push_undo buf Other;
+  let pad = String.make width ' ' in
+  for i = first to last do
+    buf.lines.(i) <- pad ^ buf.lines.(i)
+  done;
+  let adj (l, c) =
+    if l >= first && l <= last && c > 0 then (l, c + width) else (l, c)
+  in
+  (match buf.anchor with
+   | Some (al, ac) ->
+     let (al', ac') = adj (al, ac) in
+     buf.anchor <- Some (al', ac')
+   | None -> ());
+  let (cl', cc') = adj (buf.cur_line, buf.cur_col) in
+  buf.cur_line <- cl';
+  buf.cur_col <- cc';
+  update_desired_vcol buf;
+  buf.modified <- true
+
+let unindent_lines buf width =
+  let (first, last) = selection_line_range buf in
+  push_undo buf Other;
+  let removed = Array.make (last - first + 1) 0 in
+  let any = ref false in
+  for i = first to last do
+    let line = buf.lines.(i) in
+    let len = String.length line in
+    let n = ref 0 in
+    while !n < width && !n < len && line.[!n] = ' ' do incr n done;
+    removed.(i - first) <- !n;
+    if !n > 0 then begin
+      buf.lines.(i) <- String.sub line !n (len - !n);
+      any := true
+    end
+  done;
+  let adj (l, c) =
+    if l >= first && l <= last then
+      (l, max 0 (c - removed.(l - first)))
+    else (l, c)
+  in
+  (match buf.anchor with
+   | Some (al, ac) ->
+     let (al', ac') = adj (al, ac) in
+     buf.anchor <- Some (al', ac')
+   | None -> ());
+  let (cl', cc') = adj (buf.cur_line, buf.cur_col) in
+  buf.cur_line <- cl';
+  buf.cur_col <- cc';
+  update_desired_vcol buf;
+  if !any then buf.modified <- true
+
 let delete_char_before buf =
   push_undo buf Delete;
   if buf.cur_col > 0 then begin

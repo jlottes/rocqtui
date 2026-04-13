@@ -40,8 +40,8 @@
 - [ ] Search (^F) — find text in the editor, highlight matches
 - [ ] Search and replace
 - [ ] Line numbers gutter in the script pane
-- [ ] Tab/indent support (Tab key inserts spaces or tab character)
-- [ ] Auto-indent on newline (match previous line's indentation)
+- [x] Tab/indent support (Tab key inserts spaces or tab character)
+- [x] Auto-indent on newline (match previous line's indentation)
 - [ ] Matching bracket/paren highlighting
 - [ ] Go to line number (^G is taken — need another binding)
 

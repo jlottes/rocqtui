@@ -1429,7 +1429,33 @@ let rec handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r
       if not (edit_blocked tab) then begin
         (match session with Some s -> Session.clear_error s | None -> ());
         ignore (Buffer.delete_selection buf);
-        Buffer.insert_newline buf
+        Buffer.insert_newline_auto_indent buf
+      end;
+      Some Continue
+    (* Tab / Shift+Tab: indent or unindent. With a multi-line selection,
+       always indents/unindents the covered lines. With no selection or a
+       single-line selection, Tab inserts spaces at the cursor and
+       Shift+Tab unindents the current line. *)
+    | Input.Special (Input.Tab, m) ->
+      if not (edit_blocked tab) then begin
+        (match session with Some s -> Session.clear_error s | None -> ());
+        let width = !Config.indent_width in
+        let multiline_sel =
+          match Buffer.selection buf with
+          | None -> false
+          | Some _ ->
+            match Buffer.selected_text buf with
+            | Some s -> String.contains s '\n'
+            | None -> false
+        in
+        if m.shift then
+          Buffer.unindent_lines buf width
+        else if multiline_sel then
+          Buffer.indent_lines buf width
+        else begin
+          ignore (Buffer.delete_selection buf);
+          for _ = 1 to width do Buffer.insert_char buf ' ' done
+        end
       end;
       Some Continue
     (* Printable character *)

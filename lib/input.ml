@@ -160,6 +160,7 @@ let parse_csi fd =
                Special (F 3, m)
       | 'S' -> let m = match plist with _ :: p :: _ -> mods_from p | _ -> no_mod in
                Special (F 4, m)
+      | 'Z' -> Special (Tab, { no_mod with shift = true })  (* xterm BackTab *)
       | '~' ->
         let key_num = match plist with n :: _ -> n | [] -> 0 in
         let m = match plist with _ :: p :: _ -> mods_from p | _ -> no_mod in
@@ -353,6 +354,7 @@ let parse_csi fd =
     | 'Q' -> Special (F 2, no_mod)
     | 'R' -> Special (F 3, no_mod)
     | 'S' -> Special (F 4, no_mod)
+    | 'Z' -> Special (Tab, { no_mod with shift = true })
     | 'M' ->
       (* X10 mouse with no params *)
       let cb = read_byte fd 0.05 in
