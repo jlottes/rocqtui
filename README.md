@@ -114,6 +114,32 @@ MCP clients) can drive the editor programmatically — step the proof, insert
 tactics, query goals, run `Search`, etc. See [`CLAUDE_MCP.md`](CLAUDE_MCP.md)
 for the API.
 
+### Using from a Claude Code project
+
+Add rocqtui's MCP bridge to your project's `.mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "rocqtui": {
+      "command": "rocqtui-mcp"
+    }
+  }
+}
+```
+
+(`rocqtui-mcp` is installed by `opam install` alongside the `rocqtui` binary.)
+
+Then pull the MCP API reference into the project's `CLAUDE.md` so Claude
+knows how to use the tools:
+
+```markdown
+@~/.opam/<your-switch>/doc/rocqtui/CLAUDE_MCP.md
+```
+
+Replace `<your-switch>` with your active opam switch name (e.g. `rocq`).
+You can find the exact path with `opam var rocqtui:doc`.
+
 ## Platform notes
 
 rocqtui is **Linux-only** right now:

@@ -1,0 +1,4 @@
+(install
+ (section doc)
+ (package rocqtui)
+ (files CLAUDE_MCP.md))
