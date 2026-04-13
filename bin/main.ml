@@ -5,6 +5,7 @@ let () =
   let filenames = ref [] in
   let extra_args = ref [] in
   let theme_name = ref None in
+  let xcompose = ref false in
   let after_dashdash = ref false in
   let skip_next = ref false in
   Array.iteri (fun i arg ->
@@ -21,6 +22,8 @@ let () =
         skip_next := true
       end
     end
+    else if arg = "-xcompose" || arg = "--xcompose" then
+      xcompose := true
     else
       filenames := arg :: !filenames
   ) Sys.argv;
@@ -76,7 +79,7 @@ let () =
       List.filter_map (fun (t : Tab.t) -> Buffer.filename t.buf) mgr.tabs)
     () in
   ctx.theme_name <- theme.Theme.name;
-  Editor.init_compose ctx;
+  if !xcompose then Editor.init_compose ctx;
   (* Wire terminal clipboard hook to editor context *)
   Terminal.set_clipboard_hook (fun text ->
     ctx.clipboard <- text;

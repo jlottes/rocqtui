@@ -298,6 +298,25 @@ let open_terminal_tab ?cmd (tab : Tab.t) r =
   tab.msg.mt_active <- List.length tab.msg.mt_tabs - 1;
   tab.focused_pane <- `Messages
 
+let send_escape_to_terminal (tab : Tab.t) =
+  let active_mt = Tab.active_msg_tab tab.msg in
+  match active_mt.mt_terminal with
+  | None -> ()
+  | Some term ->
+    let vt = Terminal.vterm term in
+    let mode = Vterm_lib.Vterm_api.term_mode vt
+      land (Vterm_lib.Vterm_api.mode_app_keypad
+            lor Vterm_lib.Vterm_api.mode_app_cursor
+            lor Vterm_lib.Vterm_api.mode_meta) in
+    let seq = Vterm_lib.Vterm_api.kitty_keyseq
+      ~key:Vterm_lib.Keys.escape
+      ~shifted_key:0 ~modifiers:0 ~mode
+      ~kitty_flags:(Vterm_lib.Vterm_api.kitty_flags vt)
+      ~event_type:1 ~text:"" in
+    match seq with
+    | Some s -> Vterm_lib.Pty.write (Terminal.pty term) s
+    | None -> Vterm_lib.Pty.write (Terminal.pty term) "\x1b"
+
 let rec handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r =
   let buf = tab.buf in
   let session = tab.session in
@@ -332,23 +351,7 @@ let rec handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r
               (* Double-ESC: send ESC to terminal *)
               match ev with
               | Input.Special (Input.Escape, _) ->
-                let active_mt = Tab.active_msg_tab tab.msg in
-                (match active_mt.mt_terminal with
-                 | Some term ->
-                   let vt = Terminal.vterm term in
-                   let mode = Vterm_lib.Vterm_api.term_mode vt
-                     land (Vterm_lib.Vterm_api.mode_app_keypad
-                           lor Vterm_lib.Vterm_api.mode_app_cursor
-                           lor Vterm_lib.Vterm_api.mode_meta) in
-                   let seq = Vterm_lib.Vterm_api.kitty_keyseq
-                     ~key:Vterm_lib.Keys.escape
-                     ~shifted_key:0 ~modifiers:0 ~mode
-                     ~kitty_flags:(Vterm_lib.Vterm_api.kitty_flags vt)
-                     ~event_type:1 ~text:"" in
-                   (match seq with
-                    | Some s -> Vterm_lib.Pty.write (Terminal.pty term) s
-                    | None -> Vterm_lib.Pty.write (Terminal.pty term) "\x1b")
-                 | None -> ())
+                send_escape_to_terminal tab
               | _ -> ()
             end else begin
               (* If the key that broke compose was Escape, restart compose *)
@@ -574,13 +577,15 @@ let rec handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r
         Modal.pop ctx.modal;
         (match session with Some s -> Session.sync_options_and_refresh s | None -> ())
       end else begin
-        (* Plain Escape -- start compose *)
         match ctx.compose with
         | Some cs ->
+          (* Plain Escape -- start compose *)
           Compose.start cs;
           Render.set_status r (View.format_compose_status r cs);
           Render.present r
-        | None -> ()
+        | None ->
+          (* Compose disabled: forward Escape to terminal if focused *)
+          if term_focused then send_escape_to_terminal tab
       end;
       Some Continue
     end

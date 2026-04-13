@@ -97,5 +97,5 @@ See `lib/keys.ml` for the source of truth. Summary:
 | F5 | Build menu |
 | F6 | Open Claude (in project dir) |
 | F12 | Force redraw |
-| ESC | Compose (XCompose input) |
-| ESC ESC | Send ESC to terminal (when focused) |
+| ESC | Start XCompose (only if launched with `--xcompose`); otherwise sent to terminal when focused |
+| ESC ESC | Send ESC to terminal (when compose is active and focused) |
