@@ -93,9 +93,10 @@ let () =
   assert (String.length output2 = 0);
   Printf.printf "OK: diff with no changes (0 bytes)\n";
 
-  (* Test rendering the UTF-8 demo file *)
-  let demo_path = "/home/jlottes/glterm-1/test/UTF-8-demo.txt" in
-  if Sys.file_exists demo_path then begin
+  (* Test rendering the UTF-8 demo file, if available.
+     Set ROCQTUI_TEST_UTF8 to point at a UTF-8 sample file to enable. *)
+  let demo_path = try Sys.getenv "ROCQTUI_TEST_UTF8" with Not_found -> "" in
+  if demo_path <> "" && Sys.file_exists demo_path then begin
     let ic = open_in demo_path in
     let big = Grid.create 200 80 in
     let row = ref 0 in

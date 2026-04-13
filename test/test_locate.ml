@@ -25,11 +25,11 @@ let () =
 
   (* Test parse_locate_library *)
   let lib_msg = "Corelib.Init.Nat has been loaded from file\n\
-                 /home/jlottes/.opam/rocq/lib/coq/theories/Init/Nat.vo" in
+                 /opt/rocq/lib/coq/theories/Init/Nat.vo" in
   (match Locate.parse_locate_library lib_msg with
    | Some vo ->
      assert_eq "locate lib path" vo
-       "/home/jlottes/.opam/rocq/lib/coq/theories/Init/Nat.vo"
+       "/opt/rocq/lib/coq/theories/Init/Nat.vo"
    | None -> Printf.printf "FAIL: parse_locate_library returned None\n"; exit 1);
 
   (* Test vo_to_v, vo_to_glob *)
@@ -65,28 +65,30 @@ let () =
       | None -> Printf.printf "FAIL: module_at_col Bar\n"; exit 1)
    | _ -> Printf.printf "FAIL: parse for col test\n"; exit 1);
 
-  (* Test glob parser *)
-  let glob_path = "/home/jlottes/rocq/affine/theory/groups.glob" in
-  if Sys.file_exists glob_path then begin
+  (* Test glob parser against a real .glob file if available.
+     Set ROCQTUI_TEST_GLOB to a .glob path (with .v alongside) and
+     ROCQTUI_TEST_GLOB_DEF to the name of a definition in that file. *)
+  let glob_path = try Sys.getenv "ROCQTUI_TEST_GLOB" with Not_found -> "" in
+  let glob_def = try Sys.getenv "ROCQTUI_TEST_GLOB_DEF" with Not_found -> "" in
+  if glob_path <> "" && glob_def <> "" && Sys.file_exists glob_path then begin
     let entries = Glob.parse glob_path in
     Printf.printf "Parsed %d glob entries\n" (List.length entries);
-    (match Glob.find_definition entries "alt_Build_Group" with
+    (match Glob.find_definition entries glob_def with
      | Some e ->
-       Printf.printf "OK: found alt_Build_Group at %d:%d (kind=%s)\n"
-         e.bp e.ep e.kind
-     | None -> Printf.printf "FAIL: alt_Build_Group not found in glob\n"; exit 1);
-    (* Test byte_offset_to_line *)
-    let v_path = "/home/jlottes/rocq/affine/theory/groups.v" in
+       Printf.printf "OK: found %s at %d:%d (kind=%s)\n"
+         glob_def e.bp e.ep e.kind
+     | None -> Printf.printf "FAIL: %s not found in glob\n" glob_def; exit 1);
+    let v_path = Filename.chop_suffix glob_path ".glob" ^ ".v" in
     if Sys.file_exists v_path then begin
-      match Glob.find_definition entries "alt_Build_Group" with
+      match Glob.find_definition entries glob_def with
       | Some e ->
         (match Glob.byte_offset_to_line v_path e.bp with
          | Some line ->
-           Printf.printf "OK: alt_Build_Group is on line %d\n" (line + 1)
+           Printf.printf "OK: %s is on line %d\n" glob_def (line + 1)
          | None -> Printf.printf "FAIL: byte_offset_to_line\n"; exit 1)
       | None -> ()
     end
   end else
-    Printf.printf "SKIP: glob file not found\n";
+    Printf.printf "SKIP: glob file not configured\n";
 
   Printf.printf "All tests passed.\n"

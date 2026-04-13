@@ -15,7 +15,7 @@ Configure in `.mcp.json`:
 {
   "mcpServers": {
     "rocqtui": {
-      "command": "/home/jlottes/rocq/rocqtui/_build/default/bridge/rocqtui_mcp.exe"
+      "command": "<path-to-rocqtui>/_build/default/bridge/rocqtui_mcp.exe"
     }
   }
 }

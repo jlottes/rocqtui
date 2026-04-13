@@ -24,24 +24,24 @@ let assert_eq msg a b =
 
 let () =
   (* Test split_path *)
-  let s = split_path "/home/jlottes/rocq/affine/interfaces/notation.v" in
+  let s = split_path "/test/project/interfaces/notation.v" in
   assert_eq "split components"
     (String.concat "|" s)
-    "/|home|jlottes|rocq|affine|interfaces|notation.v";
+    "/|test|project|interfaces|notation.v";
 
   (* Test name_of_parts *)
   assert_eq "name depth 1" (name_of_parts s 1) "notation.v";
   assert_eq "name depth 2" (name_of_parts s 2) "interfaces/notation.v";
-  assert_eq "name depth 3" (name_of_parts s 3) "affine/interfaces/notation.v";
+  assert_eq "name depth 3" (name_of_parts s 3) "project/interfaces/notation.v";
 
-  let s2 = split_path "/home/jlottes/rocq/affine/interfaces/subset/notation.v" in
+  let s2 = split_path "/test/project/interfaces/subset/notation.v" in
   assert_eq "name2 depth 1" (name_of_parts s2 1) "notation.v";
   assert_eq "name2 depth 2" (name_of_parts s2 2) "subset/notation.v";
 
   (* Test display_names via Tab API *)
-  let p1 = "/home/jlottes/rocq/affine/interfaces/notation.v" in
-  let p2 = "/home/jlottes/rocq/affine/interfaces/subset/notation.v" in
-  let p3 = "/home/jlottes/rocq/affine/theory/groups.v" in
+  let p1 = "/test/project/interfaces/notation.v" in
+  let p2 = "/test/project/interfaces/subset/notation.v" in
+  let p3 = "/test/project/theory/groups.v" in
 
   (* Create buffers with filenames set *)
   let make_tab_with_name path =

@@ -30,19 +30,18 @@ The codebase is Linux-specific but mostly POSIX:
 
 ## 2. Clean Up
 
-### Hardcoded paths in tests
+### Hardcoded paths in tests [DONE]
 
-These files reference `/home/jlottes/...` and need relative or synthetic paths:
+- `test/test_tab_names.ml` — synthetic `/test/project/...` paths
+- `test/test_grid.ml` — UTF-8 demo guarded by `ROCQTUI_TEST_UTF8` env var
+- `test/test_project.ml` — takes path from `argv`
+- `test/test_locate.ml` — generic paths in strings; glob test guarded
+  by `ROCQTUI_TEST_GLOB` / `ROCQTUI_TEST_GLOB_DEF` env vars
 
-- `test/test_tab_names.ml`
-- `test/test_grid.ml`
-- `test/test_project.ml`
-- `test/test_locate.ml`
+### Hardcoded paths in docs [DONE]
 
-### Hardcoded paths in docs
-
-`CLAUDE.md` and `CLAUDE_MCP.md` reference `/home/jlottes/...` in examples.
-Replace with generic `$HOME/...` or `<path-to-rocqtui>`.
+- `CLAUDE.md` and `CLAUDE_MCP.md` — `<path-to-rocqtui>` placeholder
+- `docs/MCP_PLAN.md`, `docs/PLAN.md` — left as-is (historical planning)
 
 ### .gitignore additions
 

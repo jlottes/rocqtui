@@ -132,7 +132,7 @@ to drive the editor programmatically. Full API docs: `CLAUDE_MCP.md`
 Configure in project `.mcp.json`:
 ```json
 { "mcpServers": { "rocqtui": {
-    "command": "/home/jlottes/rocq/rocqtui/_build/default/bridge/rocqtui_mcp.exe"
+    "command": "<path-to-rocqtui>/_build/default/bridge/rocqtui_mcp.exe"
 } } }
 ```
 
