@@ -2,3 +2,9 @@ _build/
 *.cmi
 *.cmx
 *.o
+
+# Claude Code local settings
+.claude/
+
+# MCP socket (created at runtime in project dirs using rocqtui)
+.rocqtui-mcp.sock
