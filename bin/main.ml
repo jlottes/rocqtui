@@ -97,16 +97,22 @@ let () =
   ) mgr.tabs;
   (* Render helper *)
   let render ?(force=false) () =
-    (* Set MCP status indicator *)
+    (* Set MCP status indicator. While a client is connected we always
+       reserve the same width ("<glyph> Claude") so the status bar
+       doesn't flicker as activity toggles — the glyph animates when
+       active and is a static dot when idle. *)
     let active = Tab.active_tab mgr in
-    (if Mcp_server.has_clients mcp && Mcp_server.is_tab_active mcp active.id then
-       ctx.status_extra <- Mcp_server.spinner_char mcp ^ " Claude"
+    (if Mcp_server.has_clients mcp then
+       let glyph =
+         if Mcp_server.is_tab_active mcp active.id then
+           Mcp_server.spinner_char mcp
+         else "\xc2\xb7"  (* U+00B7 middle dot *)
+       in
+       ctx.status_extra <- glyph ^ " Claude"
      else
        ctx.status_extra <- "");
     let tab = Tab.active_tab mgr in
     if Tab.count mgr > 1 then begin
-      let spinner = if Mcp_server.has_clients mcp then
-        Some (Mcp_server.spinner_char mcp) else None in
       let dnames = Tab.display_names mgr in
       let tabs = List.map (fun (t : Tab.t) ->
         let name = match List.assoc_opt t.id dnames with
@@ -115,11 +121,7 @@ let () =
         let prefix =
           (if Buffer.modified t.buf then "*" else "") ^
           (if Buffer.disk_changed t.buf then "\xe2\x9f\xb3" (* U+27F3 *) else "") in
-        let suffix = match spinner with
-          | Some s when Mcp_server.is_tab_active mcp t.id -> " " ^ s
-          | _ -> ""
-        in
-        (prefix ^ name ^ suffix, false)
+        (prefix ^ name, false)
       ) mgr.tabs in
       Render.draw_tab_bar r tabs mgr.active
     end;
