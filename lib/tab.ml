@@ -131,7 +131,7 @@ type t = {
   mutable goals_scroll : int;
   mutable show_all_hyps : bool;
   mutable mouse_selecting : bool;
-  mutable suppress_ensure_visible : bool;
+  mutable last_ensured_cur : (int * int) option;
   goals_sel : pane_selection;
   mutable goals_lines_cache : string list;
   msg : msg_tabs;
@@ -155,7 +155,7 @@ let make_tab ?(args=[]) buf session =
     goals_scroll = 0;
     show_all_hyps = false;
     mouse_selecting = false;
-    suppress_ensure_visible = false;
+    last_ensured_cur = None;
     goals_sel = fresh_pane_sel ();
     goals_lines_cache = [];
     msg = fresh_msg_tabs ();

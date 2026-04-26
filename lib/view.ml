@@ -343,10 +343,11 @@ let render_script (ctx : Editor_context.t) r (tab : Tab.t) =
     render_help_screen ctx r
   else begin
   let (rows, cols) = Render.pane_dims r Render.PScript in
-  if tab.suppress_ensure_visible || ctx.dragging = Editor_context.DragMinimapScroll then
-    tab.suppress_ensure_visible <- false
-  else
+  let cur = Buffer.cursor buf in
+  if tab.last_ensured_cur <> Some cur then begin
     Buffer.ensure_visible_h buf rows cols;
+    tab.last_ensured_cur <- Some cur
+  end;
   let scroll = Buffer.scroll_top buf in
   let hscroll = Buffer.hscroll buf in
   Render.clear_pane r Render.PScript;

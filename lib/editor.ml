@@ -884,8 +884,7 @@ let rec handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r
              let (srows, _) = Render.pane_dims r Render.PScript in
              let target_scroll = max 0 (target_line - srows / 2) in
              let max_scroll = max 0 (num_lines - srows) in
-             Buffer.set_scroll_top buf (min target_scroll max_scroll);
-             tab.suppress_ensure_visible <- true
+             Buffer.set_scroll_top buf (min target_scroll max_scroll)
            end
          | Editor_context.NoDrag -> ());
         if is_release then ctx.dragging <- Editor_context.NoDrag
@@ -934,8 +933,7 @@ let rec handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r
           | Render.PScript ->
             let (rows, _) = Render.pane_dims r Render.PScript in
             let max_scroll = max 0 (Buffer.line_count buf - rows) in
-            Buffer.set_scroll_top buf (max 0 (min max_scroll (Buffer.scroll_top buf + delta)));
-            tab.suppress_ensure_visible <- true
+            Buffer.set_scroll_top buf (max 0 (min max_scroll (Buffer.scroll_top buf + delta)))
           | Render.PGoals ->
             tab.goals_scroll <- max 0 (tab.goals_scroll + delta)
           | Render.PMessages ->
@@ -1097,8 +1095,7 @@ let rec handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r
             let (srows, _) = Render.pane_dims r Render.PScript in
             let target_scroll = max 0 (target_line - srows / 2) in
             let max_scroll = max 0 (num_lines - srows) in
-            Buffer.set_scroll_top buf (min target_scroll max_scroll);
-            tab.suppress_ensure_visible <- true
+            Buffer.set_scroll_top buf (min target_scroll max_scroll)
           end;
           ctx.dragging <- Editor_context.DragMinimapScroll
         end
