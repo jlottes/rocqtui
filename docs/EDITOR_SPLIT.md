@@ -100,15 +100,31 @@ bin/main.exe -- <file.v>`) between steps.
   per-pane dispatch (Goals/Messages branches), not by Script
 - editor.ml: 955 → 769 lines
 
-### Step 5: modals
-- [ ] Extract `lib/editor/modals.ml`:
-  - [ ] `handle_prompt`, `handle_picker`, `handle_build`, `handle_theme`, `handle_options`, `handle_query`, `handle_help`
-  - [ ] One `handle_active : Editor_context.t -> Input.event -> Tab.t -> Render.t -> action option` entry point that dispatches based on `Modal.top`
-- [ ] Move `query_subject`, `run_query` here
+### Step 5: modals ✅
+- [x] Extract `lib/editor/modals.ml` (224 lines):
+  - [x] `query_subject`, `run_query`
+  - [x] `handle_prompt`: returns `None` on Dismissed (caller falls
+        through naturally — no more recursion into `handle_event`)
+  - [x] `handle_picker`: takes a `File_picker.t`, always consumes
+  - [x] `handle_options`, `handle_theme`, `handle_build`,
+        `handle_query`, `handle_help`: each replaces the inline body
+        of the corresponding `View.is_X` arm in handle_global
+- [x] `let rec handle_event` → `let handle_event` (recursion was only
+      for prompt-dismiss re-process, no longer needed)
+- Did not introduce a single `handle_active` dispatcher — the modal
+  toggle keybindings (F1/F2/F3/F5, ^Q, etc.) need to take precedence
+  over the modal-open dispatchers, and they live in handle_global.
+  Centralizing the dispatch would have required threading the toggle
+  precedence in too. The flat per-modal `handle_X` functions called
+  from handle_global preserve ordering exactly.
+- editor.ml: 769 → 521 lines
 
 ### Step 6: tidy
-- [ ] editor.ml reduced to: action type, init/take_jump_target,
-      compose pre-handling, top-level dispatch (modals → global → per-pane)
+- [ ] editor.ml further reduction (currently 521 — target was 300):
+      remaining bulk is `handle_event`'s compose preprocessing (~60
+      lines) and the handle_global keybinding dispatch chain (~350
+      lines). Consider extracting compose preprocessing and a
+      `Globals` module if further reduction is wanted.
 - [ ] Verify all `.mli` files have minimal API surface
 - [ ] Update `docs/ARCHITECTURE.md` module map
 

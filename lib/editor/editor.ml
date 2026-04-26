@@ -20,25 +20,9 @@ let take_jump_target (ctx : Editor_context.t) =
   ctx.jump_target <- None;
   v
 
-(* Get the subject for a query from whichever pane is focused *)
-let query_subject (tab : Tab.t) =
-  let buf = tab.buf in
-  match tab.focused_pane with
-  | `Goals -> View.pane_selection_text tab.goals_sel tab.goals_lines_cache
-  | `Messages -> View.pane_selection_text (Tab.active_msg_tab tab.msg).mt_sel (Tab.active_msg_tab tab.msg).mt_lines_cache
-  | `Script ->
-    match Buffer.selected_text buf with
-    | Some text -> Some text
-    | None -> Buffer.word_at_cursor buf
-
-let run_query session phrase =
-  match session with
-  | Some s -> Session.query s phrase
-  | None -> ()
-
 (* --- Input event handling --- *)
 
-let rec handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r =
+let handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r =
   let buf = tab.buf in
   let session = tab.session in
   (* Is a terminal sub-tab currently focused? *)
@@ -90,62 +74,17 @@ let rec handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r
          false)
     | _ -> false
   in
-  if compose_handled then
-    Continue
-  else begin match Modal.top ctx.modal with
-  | Some (Modal.Prompt p) ->
-    let result = p.handler ev in
-    (match result with
-     | Modal.Handled -> Modal.pop ctx.modal; Continue
-     | Modal.Dismissed -> Modal.pop ctx.modal;
-       (* Re-process the event now that prompt is dismissed *)
-       handle_event ctx ev tab r
-     | Modal.Ignored -> Continue)
-  | _ ->
+  if compose_handled then Continue
+  else
+  let prompt_action = match Modal.top ctx.modal with
+    | Some (Modal.Prompt p) -> Modals.handle_prompt ctx p.handler ev
+    | _ -> None
+  in
+  match prompt_action with
+  | Some a -> a
+  | None ->
   match View.get_picker ctx with
-  | Some fp ->
-    let (_box_top, box_left, box_w, _box_h, visible_rows) =
-      File_picker.box_geometry () in
-    let handle_picker_action = function
-      | File_picker.PickerOpen path ->
-        Modal.pop ctx.modal; Open_file path
-      | File_picker.PickerClose ->
-        Modal.pop ctx.modal; Continue
-      | File_picker.PickerContinue -> Continue
-    in
-    (match ev with
-    | Input.Mouse mev ->
-      let b1_click = mev.button = Input.Left in
-      let scroll_up = mev.button = Input.ScrollUp in
-      let scroll_down = mev.button = Input.ScrollDown in
-      if b1_click then begin
-        let (box_top, _, _, _, _) = File_picker.box_geometry () in
-        handle_picker_action
-          (File_picker.handle_click fp ~y:mev.y ~x:mev.x ~box_top ~box_left
-             ~box_width:box_w ~visible_rows)
-      end
-      else if scroll_up then
-        (File_picker.handle_scroll fp (-1) visible_rows; Continue)
-      else if scroll_down then
-        (File_picker.handle_scroll fp 1 visible_rows; Continue)
-      else Continue
-    | Input.Special (Input.Escape, _) ->
-      Modal.pop ctx.modal; Continue
-    | Input.Key (cp, mods) ->
-      let ch = if mods.ctrl && cp >= 97 && cp <= 122 then cp - 96 else cp in
-      handle_picker_action (File_picker.handle_key fp ch visible_rows)
-    | Input.Special (key, _mods) ->
-      let ch = match key with
-        | Input.Up -> 259 | Input.Down -> 258
-        | Input.PageUp -> 339 | Input.PageDown -> 338
-        | Input.Enter -> 13 | Input.Tab -> 9
-        | Input.Backspace -> 127
-        | _ -> 0
-      in
-      if ch <> 0 then
-        handle_picker_action (File_picker.handle_key fp ch visible_rows)
-      else Continue
-    | _ -> Continue)
+  | Some fp -> Modals.handle_picker ctx fp ev
   | None ->
   (* --- Global keys (work in any pane) --- *)
   (* Debug: log non-mouse events to stderr. Enable with ROCQTUI_DEBUG_INPUT=1 *)
@@ -319,25 +258,7 @@ let rec handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r
       end else Modal.push ctx.modal Modal.OptionsMenu;
       Some Continue
     end
-    else if View.is_options ctx then begin
-      let ch_opt = Keymatch.codepoint_of_event ev in
-      match ch_opt with
-      | Some ch ->
-        let c = Char.lowercase_ascii (Char.chr (ch land 0xFF)) in
-        (match List.find_opt (fun (e : Printopts.entry) -> e.key = c) Printopts.entries with
-         | Some entry ->
-           Printopts.toggle entry;
-           (match session with Some s -> Session.sync_options_and_refresh s | None -> ());
-           Some Continue
-         | None ->
-           Modal.pop ctx.modal;
-           (match session with Some s -> Session.sync_options_and_refresh s | None -> ());
-           None)
-      | None ->
-        Modal.pop ctx.modal;
-        (match session with Some s -> Session.sync_options_and_refresh s | None -> ());
-        None
-    end
+    else if View.is_options ctx then Modals.handle_options ctx ev tab
     else if Keymatch.match_binding ev Keys.reload then begin
       Some Reload
     end
@@ -345,86 +266,12 @@ let rec handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r
       Modal.toggle ctx.modal Modal.ThemeMenu;
       Some Continue
     end
-    else if View.is_theme ctx then begin
-      Modal.pop ctx.modal;
-      (match Keymatch.codepoint_of_event ev with
-       | Some ch ->
-         let idx = ch - Char.code '1' in
-         let themes = Theme.available in
-         if idx >= 0 && idx < List.length themes then begin
-           let name = List.nth themes idx in
-           let theme = Theme.find name in
-           Theme.apply theme;
-           ctx.theme_name <- name
-         end
-       | None -> ());
-      Some Continue
-    end
+    else if View.is_theme ctx then Modals.handle_theme ctx ev
     else if Keymatch.match_binding ev Keys.build_menu then begin
       Modal.toggle ctx.modal Modal.BuildMenu;
       Some Continue
     end
-    else if View.is_build ctx then begin
-      Modal.pop ctx.modal;
-      (match Keymatch.codepoint_of_event ev with
-       | Some ch ->
-         let c = Char.lowercase_ascii (Char.chr (ch land 0xFF)) in
-         let project_info () =
-           let filename = Buffer.filename buf in
-           let dir = match filename with
-             | Some f -> Filename.dirname f | None -> Sys.getcwd () in
-           match Project.find_project_file dir with
-           | Some (pd, _) -> Some pd
-           | None -> None
-         in
-         if c = 'c' && Build.is_running () then begin
-           Build.cancel ();
-           Some Continue
-         end
-         else if c = 'f' then begin
-           (match Buffer.filename buf, project_info () with
-            | Some f, Some pd ->
-              if Build.build_file ~project_dir:pd f then ()
-              else Render.set_status r "Build already running."
-            | _, None ->
-              Render.set_status r "No project found."
-            | None, _ ->
-              Render.set_status r "No filename.");
-           Some Continue
-         end
-         else if c = 'd' then begin
-           (match Buffer.filename buf, project_info () with
-            | Some f, Some pd ->
-              if Build.build_deps ~project_dir:pd f then ()
-              else Render.set_status r "Build already running."
-            | _, None ->
-              Render.set_status r "No project found."
-            | None, _ ->
-              Render.set_status r "No filename.");
-           Some Continue
-         end
-         else if c = 'a' then begin
-           (match project_info () with
-            | Some pd ->
-              if Build.build_all ~project_dir:pd then ()
-              else Render.set_status r "Build already running."
-            | None ->
-              Render.set_status r "No project found.");
-           Some Continue
-         end
-         else if c = 'x' then begin
-           (match project_info () with
-            | Some pd ->
-              if Build.build_clean ~project_dir:pd then ()
-              else Render.set_status r "Build already running."
-            | None ->
-              Render.set_status r "No project found.");
-           Some Continue
-         end
-         else
-           (Some Continue)
-       | None -> Some Continue)
-    end
+    else if View.is_build ctx then Modals.handle_build ctx ev tab r
     else if Keymatch.match_binding ev Keys.open_terminal then begin
       Pty.open_tab tab r; Some Continue
     end
@@ -435,74 +282,7 @@ let rec handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r
       Modal.toggle ctx.modal Modal.QueryMenu;
       Some Continue
     end
-    else if View.is_query ctx then begin
-      Modal.pop ctx.modal;
-      match Keymatch.codepoint_of_event ev with
-      | Some ch ->
-        let c = Char.lowercase_ascii (Char.chr (ch land 0xFF)) in
-        let handled =
-          if c = 'a' then begin
-            let subject = query_subject tab in
-            (match subject with
-             | Some word -> run_query session ("About " ^ word ^ ".")
-             | None -> ()); true
-          end else if c = 'c' then begin
-            let subject = query_subject tab in
-            (match subject with
-             | Some word -> run_query session ("Check " ^ word ^ ".")
-             | None -> ()); true
-          end else if c = 'd' then begin
-            let subject = query_subject tab in
-            (match subject with
-             | Some word -> run_query session ("Print " ^ word ^ ".")
-             | None -> ()); true
-          end else if c = 'l' then begin
-            let subject = query_subject tab in
-            (match subject with
-             | Some word -> run_query session ("Locate " ^ word ^ ".")
-             | None -> ()); true
-          end else if c = 'g' then begin
-            let subject = query_subject tab in
-            (match subject, session with
-             | Some word, Some s ->
-               Session.query s "Print Graph.";
-               let all_msgs = Session.messages s in
-               let line_has s line =
-                 let slen = String.length s in
-                 let llen = String.length line in
-                 let rec check i =
-                   if i + slen > llen then false
-                   else if String.sub line i slen = s then true
-                   else check (i + 1)
-                 in check 0
-               in
-               let matches_word line =
-                 line_has (" " ^ word ^ " >->") line
-                 || line_has (">-> " ^ word) line
-                 || line_has ("." ^ word ^ " >->") line
-               in
-               let filtered = List.concat_map (fun msg ->
-                 let lines = String.split_on_char '\n' msg in
-                 List.filter (fun line ->
-                   String.length line > 0 && matches_word line
-                 ) lines
-               ) all_msgs in
-               if filtered = [] then
-                 Session.set_messages s ["No coercions found for " ^ word ^ "."]
-               else
-                 Session.set_messages s filtered
-             | _, None -> ()
-             | None, _ -> ()); true
-          end else if c = 'p' then begin
-            run_query session "Show Proof."; true
-          end else if c = 'e' then begin
-            run_query session "Show Existentials."; true
-          end else false
-        in
-        if handled then Some Continue
-        else None  (* fall through to normal handling *)
-      | None -> None
-    end
+    else if View.is_query ctx then Modals.handle_query ctx ev tab
     else if Keymatch.match_binding ev Keys.cycle_pane then begin
       tab.focused_pane <- (match tab.focused_pane with
         | `Script -> `Goals | `Goals -> `Messages | `Messages -> `Script);
@@ -512,34 +292,7 @@ let rec handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r
       Render.resize r;
       Some Continue
     end
-    else if View.is_help ctx then begin
-      let (rows, _) = Render.pane_dims r Render.PScript in
-      let n = List.length View.help_lines in
-      let max_scroll = max 0 (n - rows) in
-      let scroll_by delta =
-        View.set_help_scroll ctx (max 0 (min max_scroll (View.get_help_scroll ctx + delta))) in
-      (match ev with
-       | Input.Special (Input.Up, _) ->
-         scroll_by (-1); Some Continue
-       | Input.Special (Input.Down, _) ->
-         scroll_by 1; Some Continue
-       | Input.Special (Input.PageUp, _) ->
-         scroll_by (-rows); Some Continue
-       | Input.Special (Input.PageDown, _) ->
-         scroll_by rows; Some Continue
-       | Input.Special (Input.Home, _) ->
-         View.set_help_scroll ctx 0; Some Continue
-       | Input.Special (Input.End, _) ->
-         View.set_help_scroll ctx max_scroll; Some Continue
-       | Input.Mouse mev ->
-         if mev.button = Input.ScrollUp then scroll_by (-3)
-         else if mev.button = Input.ScrollDown then scroll_by 3;
-         Some Continue
-       | _ ->
-         Modal.pop ctx.modal;
-         View.set_help_scroll ctx 0;
-         Some Continue)
-    end
+    else if View.is_help ctx then Modals.handle_help ctx ev r
     else if (match ev with Input.Mouse _ -> true | _ -> false) then begin
       let mev = match ev with Input.Mouse m -> m | _ -> assert false in
       Mouse.handle ctx mev tab r;
@@ -766,4 +519,3 @@ let rec handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r
          | Some a -> a | None -> Continue)
   in
   action
-  end
