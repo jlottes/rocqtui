@@ -314,6 +314,13 @@ let delete_selection buf =
     (* Rebuild lines from the text with the selection removed *)
     let new_text = String.sub t 0 s ^ String.sub t e (String.length t - e) in
     let new_lines = String.split_on_char '\n' new_text in
+    (* [text buf] always ends in "\n", so the split has a trailing ""
+       element representing the terminator. Strip it so we don't record
+       a phantom blank line each time delete_selection is called. *)
+    let new_lines = match List.rev new_lines with
+      | "" :: rest when rest <> [] -> List.rev rest
+      | _ -> new_lines
+    in
     let n = List.length new_lines in
     let n = if n = 0 then 1 else n in
     ensure_capacity buf n;
