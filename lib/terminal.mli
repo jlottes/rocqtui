@@ -38,5 +38,12 @@ val pty : t -> Vterm_lib.Pty.t
 val reported_buttons : t -> int
 val set_reported_buttons : t -> int -> unit
 
+val send : t -> string -> unit
+(** Write a user-originated byte string to the PTY. If the display is
+    currently scrolled back, snap it to the bottom first — matches
+    glterm's behavior where any keypress/paste forwards to the child
+    and returns the view to the live region. Use [pty] + [Pty.write]
+    directly if you explicitly need a non-snapping write. *)
+
 val set_clipboard_hook : (string -> unit) -> unit
 (** Set callback invoked when a child sends OSC 52 clipboard data. *)

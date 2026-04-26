@@ -264,3 +264,10 @@ let vterm t = t.vterm
 let pty t = t.pty
 let reported_buttons t = t.reported_buttons
 let set_reported_buttons t v = t.reported_buttons <- v
+
+let send t s =
+  if String.length s > 0 then begin
+    if Vterm_lib.Vterm_api.is_scrolled t.vterm then
+      ignore (Vterm_lib.Vterm_api.scroll_to_end t.vterm false);
+    Vterm_lib.Pty.write t.pty s
+  end

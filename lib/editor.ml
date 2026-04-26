@@ -314,8 +314,8 @@ let send_escape_to_terminal (tab : Tab.t) =
       ~kitty_flags:(Vterm_lib.Vterm_api.kitty_flags vt)
       ~event_type:1 ~text:"" in
     match seq with
-    | Some s -> Vterm_lib.Pty.write (Terminal.pty term) s
-    | None -> Vterm_lib.Pty.write (Terminal.pty term) "\x1b"
+    | Some s -> Terminal.send term s
+    | None -> Terminal.send term "\x1b"
 
 let rec handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r =
   let buf = tab.buf in
@@ -340,7 +340,7 @@ let rec handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r
               (* Send composed text to terminal *)
               let active_mt = Tab.active_msg_tab tab.msg in
               (match active_mt.mt_terminal with
-               | Some term -> Vterm_lib.Pty.write (Terminal.pty term) text
+               | Some term -> Terminal.send term text
                | None -> ())
             end else begin
               ignore (Buffer.delete_selection buf);
@@ -850,7 +850,7 @@ let rec handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r
              if Terminal.reported_buttons term land (1 lsl button) <> 0 then begin
                let seq = Vterm_lib.Vterm_api.mouseseq ~button ~modifiers:mods_i
                  ~cx ~cy ~ev:Vterm_lib.Vterm_api.mouse_ev_release ~mode:mm ~flags:mf in
-               Vterm_lib.Pty.write (Terminal.pty term) seq
+               Terminal.send term seq
              end
            done;
            Terminal.set_reported_buttons term 0;
@@ -860,7 +860,7 @@ let rec handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r
            if mm >= Vterm_lib.Vterm_api.mouse_mode_btn then begin
              let seq = Vterm_lib.Vterm_api.mouseseq ~button:1 ~modifiers:mods_i
                ~cx ~cy ~ev:Vterm_lib.Vterm_api.mouse_ev_motion ~mode:mm ~flags:mf in
-             Vterm_lib.Pty.write (Terminal.pty term) seq
+             Terminal.send term seq
            end;
            term_mouse_handled := true
          end
@@ -941,7 +941,6 @@ let rec handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r
             (match active_mt.mt_terminal with
              | Some term ->
                let vt = Terminal.vterm term in
-               let pty = Terminal.pty term in
                let mm = Vterm_lib.Vterm_api.mouse_mode vt in
                let mf = Vterm_lib.Vterm_api.mouse_flags vt in
                let alt = Vterm_lib.Vterm_api.alt_screen vt in
@@ -954,7 +953,7 @@ let rec handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r
                    let seq = if mode land Vterm_lib.Vterm_api.mode_app_cursor <> 0
                      then (if is_scroll_up then "\027OA" else "\027OB")
                      else (if is_scroll_up then "\027[A" else "\027[B") in
-                   Vterm_lib.Pty.write pty seq;
+                   Terminal.send term seq;
                    handled := true
                  end else if mm = 0 || not alt then begin
                    (* No mouse mode, or shift on normal screen: scroll history *)
@@ -974,7 +973,7 @@ let rec handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r
                    lor (if has_cmd then 4 else 0) in
                  let seq = Vterm_lib.Vterm_api.mouseseq ~button ~modifiers:mods_i
                    ~cx ~cy ~ev:Vterm_lib.Vterm_api.mouse_ev_press ~mode:mm ~flags:mf in
-                 Vterm_lib.Pty.write pty seq
+                 Terminal.send term seq
                end
              | None ->
                active_mt.mt_scroll <- max 0 (active_mt.mt_scroll + delta))
@@ -1024,7 +1023,7 @@ let rec handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r
                   lor (if has_cmd then 4 else 0) in
                 let seq = Vterm_lib.Vterm_api.mouseseq ~button:1 ~modifiers:mods_i
                   ~cx ~cy ~ev:Vterm_lib.Vterm_api.mouse_ev_press ~mode:mm ~flags:mf in
-                Vterm_lib.Pty.write (Terminal.pty term) seq;
+                Terminal.send term seq;
                 Terminal.set_reported_buttons term
                   (Terminal.reported_buttons term lor (1 lsl 1));
                 true
@@ -1076,13 +1075,11 @@ let rec handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r
           (match active_mt.mt_terminal with
            | Some term when ctx.clipboard <> "" ->
              let vt = Terminal.vterm term in
-             let pty = Terminal.pty term in
-             if Vterm_lib.Vterm_api.bracketed_paste vt then begin
-               Vterm_lib.Pty.write pty "\x1b[200~";
-               Vterm_lib.Pty.write pty ctx.clipboard;
-               Vterm_lib.Pty.write pty "\x1b[201~"
-             end else
-               Vterm_lib.Pty.write pty ctx.clipboard
+             if Vterm_lib.Vterm_api.bracketed_paste vt then
+               Terminal.send term
+                 ("\x1b[200~" ^ ctx.clipboard ^ "\x1b[201~")
+             else
+               Terminal.send term ctx.clipboard
            | _ -> ())
         end
         else if pane = Render.PMinimap && is_left then begin
@@ -1506,13 +1503,12 @@ let rec handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r
          | Some term ->
            (* Terminal sub-tab is focused: route input to PTY *)
            let vt = Terminal.vterm term in
-           let pty = Terminal.pty term in
            let mode = Vterm_lib.Vterm_api.term_mode vt
              land (Vterm_lib.Vterm_api.mode_app_keypad
                    lor Vterm_lib.Vterm_api.mode_app_cursor
                    lor Vterm_lib.Vterm_api.mode_meta) in
            let kitty_fl = Vterm_lib.Vterm_api.kitty_flags vt in
-           let write_pty s = Vterm_lib.Pty.write pty s in
+           let write_pty s = Terminal.send term s in
            let send_key ~key ?(shifted_key=0) ~mods ?(text="") () =
              let seq =
                if kitty_fl > 0 then
