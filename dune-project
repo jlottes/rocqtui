@@ -1,4 +1,4 @@
-(lang dune 3.0)
+(lang dune 3.7)
 (using directory-targets 0.1)
 (generate_opam_files true)
 
@@ -21,7 +21,7 @@ display, an embedded terminal emulator, XCompose math symbol input,
 and an MCP server for Claude Code integration.")
  (depends
   (ocaml (>= 4.14))
-  (dune (>= 3.0))
+  (dune (>= 3.7))
   yojson
   (rocq-runtime (>= 9.0))
   (coqide-server (>= 9.0)))

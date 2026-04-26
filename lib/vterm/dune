@@ -1,5 +1,7 @@
 ; To enable sanitizers, add to flags: -g -fsanitize=address,undefined
 ; and uncomment c_library_flags below.
+(include_subdirs no)
+
 (library
  (name vterm_lib)
  (libraries unix)

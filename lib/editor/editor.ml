@@ -166,32 +166,6 @@ let screen_to_pane_pos (tab : Tab.t) r ~x ~y pane_id =
     end
   end
 
-(* Select word at position in a pane's cached lines *)
-let [@warning "-32"] pane_select_word (ps : Tab.pane_selection) lines_cache line_idx byte_col =
-  let lines = lines_cache in
-  if line_idx >= List.length lines then ()
-  else begin
-    let line = List.nth lines line_idx in
-    let len = String.length line in
-    let col = min byte_col len in
-    let is_id c = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
-                  || (c >= '0' && c <= '9') || c = '_' || c = '\'' || c = '.' in
-    if col < len && is_id line.[col] then begin
-      let l = ref col in
-      while !l > 0 && is_id line.[!l - 1] do decr l done;
-      let r = ref col in
-      while !r < len && is_id line.[!r] do incr r done;
-      if !r > !l && line.[!r - 1] = '.' then decr r;
-      if !r > !l then begin
-        ps.ps_anchor_line <- line_idx;
-        ps.ps_anchor_col <- !l;
-        ps.ps_cursor_line <- line_idx;
-        ps.ps_cursor_col <- !r;
-        ps.ps_active <- true
-      end
-    end
-  end
-
 (* --- Input event handling --- *)
 
 (* Helper: match an Input.event against a Keys.binding *)

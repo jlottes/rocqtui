@@ -1,3 +1,5 @@
+(env (_ (flags (:standard -w -69))))
+
 (install
  (section doc)
  (package rocqtui)

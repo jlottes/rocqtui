@@ -1,3 +1,5 @@
+(include_subdirs qualified)
+
 (library
  (name rocqtui_lib)
  (libraries unix yojson rocq-runtime.parsing rocq-runtime.clib rocq-runtime.gramlib

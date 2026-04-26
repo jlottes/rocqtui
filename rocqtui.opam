@@ -14,7 +14,7 @@ homepage: "https://github.com/jlottes/rocqtui"
 bug-reports: "https://github.com/jlottes/rocqtui/issues"
 depends: [
   "ocaml" {>= "4.14"}
-  "dune" {>= "3.0" & >= "3.0"}
+  "dune" {>= "3.7" & >= "3.7"}
   "yojson"
   "rocq-runtime" {>= "9.0"}
   "coqide-server" {>= "9.0"}
