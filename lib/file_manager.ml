@@ -21,11 +21,13 @@ let add_watch t path =
 let close t =
   File_watch.close t.watcher
 
-(* Reload a tab's buffer from disk: rewind session, reload, re-watch. *)
-let reload_tab t (tab : Tab.t) path =
+(* Reload a tab's buffer from disk: rewind session, reload, re-watch.
+   If [keep_verified] is true, skip the session rewind — the caller has
+   determined the external edit is entirely past the verified region. *)
+let reload_tab ?(keep_verified = false) t (tab : Tab.t) path =
   (match tab.session with
-   | Some s -> Session.go_to_offset s 0
-   | None -> ());
+   | Some s when not keep_verified -> Session.go_to_offset s 0
+   | _ -> ());
   Buffer.reload tab.buf;
   Buffer.set_disk_changed tab.buf false;
   File_watch.add_watch t.watcher path
@@ -70,7 +72,7 @@ let poll t (tabs : Tab.t list) =
                 if !diff_at < vend then
                   events := VerifiedAffected path :: !events
                 else begin
-                  reload_tab t tab path;
+                  reload_tab ~keep_verified:true t tab path;
                   events := Reloaded path :: !events
                 end
               end else begin

@@ -12,8 +12,9 @@ val watch_fd : t -> Unix.file_descr
 val add_watch : t -> string -> unit
 val close : t -> unit
 
-(** Reload a tab's buffer from disk (rewinds session, re-watches). *)
-val reload_tab : t -> Tab.t -> string -> unit
+(** Reload a tab's buffer from disk (rewinds session, re-watches).
+    If [keep_verified] is true, skip the session rewind. *)
+val reload_tab : ?keep_verified:bool -> t -> Tab.t -> string -> unit
 
 (** Poll for file changes. Returns events for each affected tab. *)
 val poll : t -> Tab.t list -> file_event list
