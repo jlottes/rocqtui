@@ -1,8 +1,8 @@
 (** Editor: input handling. *)
 
-type jump_point = Editor_context.jump_point
+type jump_point = Action.jump_point
 
-type action =
+type action = Action.action =
   | Continue
   | Quit
   | Close_tab

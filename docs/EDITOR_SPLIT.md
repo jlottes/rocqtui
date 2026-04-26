@@ -89,11 +89,16 @@ bin/main.exe -- <file.v>`) between steps.
 - [x] editor.ml's mouse arm collapses to four lines
 - editor.ml: 1262 → 955 lines
 
-### Step 4: script-pane keys
-- [ ] Extract `lib/editor/script.ml`:
-  - [ ] Move `insert_string`, `normalize_newlines`
-  - [ ] `handle : Editor_context.t -> Input.event -> Tab.t -> Render.t -> action option`
-  - [ ] Move `handle_pane_scroll` (used by Goals/Messages too — keep public)
+### Step 4: script-pane keys ✅
+- [x] Extract `lib/editor/script.ml` (186 lines):
+  - [x] Move `insert_string`, `normalize_newlines` (public)
+  - [x] `handle : Editor_context.t -> Input.event -> Tab.t -> Render.t -> Action.action option`
+  - [x] UTF-8 codepoint encoding factored out as private `encode_codepoint`
+- [x] Extract `lib/editor/action.ml` to break the circular dep (`Script.handle`
+      returns `Action.action option`; `Editor.action = Action.action = ...`)
+- `handle_pane_scroll` stayed in editor.ml — only used by editor.ml's
+  per-pane dispatch (Goals/Messages branches), not by Script
+- editor.ml: 955 → 769 lines
 
 ### Step 5: modals
 - [ ] Extract `lib/editor/modals.ml`:
