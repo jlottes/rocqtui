@@ -74,12 +74,14 @@ bin/main.exe -- <file.v>`) between steps.
 - [x] Extract `lib/editor/block.ml` — `edit_blocked`, `rewind_if_needed`; `cursor_byte_offset`/`cursor_in_target` kept private (32 lines)
 - editor.ml: 1603 → 1410 lines
 
-### Step 2: PTY routing
-- [ ] Extract `lib/editor/pty.ml`:
-  - [ ] `open_tab : ?cmd:string -> Tab.t -> Render.t -> unit` (was `open_terminal_tab`)
-  - [ ] `send_escape : Tab.t -> unit` (was `send_escape_to_terminal`)
-  - [ ] `forward_event : Tab.t -> Input.event -> unit` (the ~120-line Messages-arm block)
-- [ ] editor.ml's terminal-focused dispatch calls `Pty.forward_event` directly
+### Step 2: PTY routing ✅
+- [x] Extract `lib/editor/pty.ml` (139 lines):
+  - [x] `open_tab : ?cmd:string -> Tab.t -> Render.t -> unit` (was `open_terminal_tab`)
+  - [x] `send_escape : Tab.t -> unit` (was `send_escape_to_terminal`)
+  - [x] `forward_event : Terminal.t -> Input.event -> unit` (Messages-arm block)
+  - Module-private: `encode_utf8`, `input_mod`
+- [x] editor.ml's terminal-focused Messages-arm collapses to two lines
+- editor.ml: 1410 → 1262 lines
 
 ### Step 3: mouse
 - [ ] Extract `lib/editor/mouse.ml`:
