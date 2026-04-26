@@ -67,13 +67,12 @@ bin/main.exe -- <file.v>`) between steps.
 - [x] Delete dead `pane_select_word`
 - editor.ml: 1629 → 1603 lines
 
-### Step 1: pure utilities (lowest risk)
-- [ ] Extract `lib/editor/geom.ml` — `screen_to_buffer_pos`, `screen_to_pane_pos`
-- [ ] Extract `lib/editor/keymatch.ml` — `match_binding`, `codepoint_of_event`
-- [ ] Extract `lib/editor/jump.ml` — `push`, `pop` (rename from `push_jump`/`pop_jump`)
-- [ ] Extract `lib/editor/block.ml` — `edit_blocked`, `rewind_if_needed` (keep cursor_in_target private)
-
-After step 1: editor.ml ~1400 lines, 4 new modules each ≤100 lines with 1–3 fn API.
+### Step 1: pure utilities (lowest risk) ✅
+- [x] Extract `lib/editor/geom.ml` — `screen_to_buffer_pos`, `screen_to_pane_pos` (45 lines)
+- [x] Extract `lib/editor/keymatch.ml` — `match_binding`, `codepoint_of_event` (85 lines)
+- [x] Extract `lib/editor/jump.ml` — `push`, `pop` (renamed from `push_jump`/`pop_jump`) (13 lines)
+- [x] Extract `lib/editor/block.ml` — `edit_blocked`, `rewind_if_needed`; `cursor_byte_offset`/`cursor_in_target` kept private (32 lines)
+- editor.ml: 1603 → 1410 lines
 
 ### Step 2: PTY routing
 - [ ] Extract `lib/editor/pty.ml`:

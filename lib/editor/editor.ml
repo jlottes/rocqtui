@@ -20,63 +20,6 @@ let take_jump_target (ctx : Editor_context.t) =
   ctx.jump_target <- None;
   v
 
-
-
-let push_jump (ctx : Editor_context.t) (tab : Tab.t) =
-  let (line, col) = Buffer.cursor tab.buf in
-  let file = match Buffer.filename tab.buf with
-    | Some f -> f | None -> "" in
-  ctx.jump_stack <- { Editor_context.jp_tab_id = tab.id; jp_file = file;
-                      jp_line = line; jp_col = col } :: ctx.jump_stack
-
-let pop_jump (ctx : Editor_context.t) =
-  match ctx.jump_stack with
-  | [] -> None
-  | jp :: rest ->
-    ctx.jump_stack <- rest;
-    Some jp
-
-(* Check if cursor is in the verified region. *)
-let cursor_byte_offset buf =
-  let (cl, cc) = Buffer.cursor buf in
-  let off = ref 0 in
-  for i = 0 to cl - 1 do
-    off := !off + String.length (Buffer.get_line buf i) + 1
-  done;
-  !off + cc
-
-let cursor_in_target ?(for_backspace=false) (tab : Tab.t) =
-  let buf = tab.buf in
-  let session = tab.session in
-  match session with
-  | None -> false
-  | Some sess ->
-    let tend = Session.pending_end sess in
-    if tend = 0 then false
-    else
-      let off = cursor_byte_offset buf in
-      if for_backspace then off <= tend
-      else off < tend
-
-(* Check if editing is blocked (cursor in target region, or buffer locked by MCP). *)
-let edit_blocked ?(for_backspace=false) (tab : Tab.t) =
-  tab.locked || cursor_in_target ~for_backspace tab
-
-(* After undo/redo, retract target if the edit is inside the target region *)
-let rewind_if_needed (tab : Tab.t) =
-  let buf = tab.buf in
-  let session = tab.session in
-  match session with
-  | None -> ()
-  | Some sess ->
-    let tend = Session.pending_end sess in
-    if tend = 0 then ()
-    else begin
-      let cursor_off = cursor_byte_offset buf in
-      if cursor_off < tend then
-        Session.go_to_cursor sess
-    end
-
 (* Get the subject for a query from whichever pane is focused *)
 let query_subject (tab : Tab.t) =
   let buf = tab.buf in
@@ -111,150 +54,14 @@ let normalize_newlines s =
   Stdlib.Buffer.contents buf
 
 let insert_string (tab : Tab.t) s =
-  if not (edit_blocked tab) then
+  if not (Block.edit_blocked tab) then
     let buf = tab.buf in
     String.iter (fun c ->
       if c = '\n' then Buffer.insert_newline buf
       else Buffer.insert_char buf c
     ) s
 
-(* Convert screen coordinates to buffer (line, byte_col) position.
-   Returns None if the coordinates are outside the script pane content. *)
-let screen_to_buffer_pos r buf ~x ~y =
-  let (rows, cols) = Render.pane_dims r Render.PScript in
-  let scroll = Buffer.scroll_top buf in
-  let hscroll = Buffer.hscroll buf in
-  let script_rect = Render.pane_rect r Render.PScript in
-  let row = y - script_rect.row in
-  let col = x - script_rect.col in
-  if row < 0 || row >= rows || col < 0 || col >= cols then None
-  else begin
-    let line_idx = scroll + row in
-    if line_idx >= Buffer.line_count buf then None
-    else begin
-      let line = Buffer.get_line buf line_idx in
-      let vcol = hscroll + col in
-      let byte_col = Utf8.col_to_byte line vcol in
-      Some (line_idx, byte_col)
-    end
-  end
-
-(* Convert screen coords to a right-pane (line, byte_col) relative to the pane *)
-let screen_to_pane_pos (tab : Tab.t) r ~x ~y pane_id =
-  let pane = match pane_id with
-    | `Goals -> Render.PGoals
-    | `Messages -> Render.PMessages
-  in
-  let rect = Render.pane_rect r pane in
-  let (rows, cols) = Render.pane_dims r pane in
-  let row = y - rect.row in
-  let col = x - rect.col - 1 in (* -1 for margin *)
-  if row < 0 || row >= rows || col < 0 || col >= cols then None
-  else begin
-    let scroll, lines_cache = match pane_id with
-      | `Goals -> (tab.goals_scroll, tab.goals_lines_cache)
-      | `Messages -> ((Tab.active_msg_tab tab.msg).mt_scroll, (Tab.active_msg_tab tab.msg).mt_lines_cache)
-    in
-    let line_idx = scroll + row in
-    let lines = lines_cache in
-    let n = List.length lines in
-    if line_idx >= n then None
-    else begin
-      let line = List.nth lines line_idx in
-      let byte_col = Utf8.col_to_byte line (max 0 col) in
-      Some (line_idx, byte_col)
-    end
-  end
-
 (* --- Input event handling --- *)
-
-(* Helper: match an Input.event against a Keys.binding *)
-let match_binding (ev : Input.event) (b : Keys.binding) =
-  match ev with
-  | Input.Key (cp, mods) ->
-    (* Ctrl+letter: cp is the letter, mods.ctrl is true *)
-    let kitty_match () =
-      let modifier = 1
-        + (if mods.shift then 1 else 0)
-        + (if mods.alt then 2 else 0)
-        + (if mods.ctrl then 4 else 0) in
-      List.exists (fun (kc, m) -> kc = cp && m = modifier) b.kitty_codes
-    in
-    if mods.ctrl && not mods.alt && not mods.shift then begin
-      let ctrl_code = if cp >= 97 && cp <= 122 then cp - 96
-                      else if cp >= 65 && cp <= 90 then cp - 64
-                      else -1 in
-      if ctrl_code > 0 then List.mem ctrl_code b.codes || kitty_match ()
-      else List.mem cp b.codes || kitty_match ()
-    end
-    else if not mods.ctrl && not mods.alt && not mods.shift then
-      List.mem cp b.codes
-    else kitty_match ()
-  | Input.Special (key, mods) ->
-    (* Map special keys to legacy codes for binding matching *)
-    let modifier = 1
-      + (if mods.shift then 1 else 0)
-      + (if mods.alt then 2 else 0)
-      + (if mods.ctrl then 4 else 0) in
-    let base_code = match key with
-      | Input.Up -> Some 259 | Input.Down -> Some 258
-      | Input.Right -> Some 261 | Input.Left -> Some 260
-      | Input.Home -> Some 262 | Input.End -> Some 360
-      | Input.PageUp -> Some 339 | Input.PageDown -> Some 338
-      | Input.Insert -> Some 331 | Input.Delete -> Some 330
-      | Input.F n -> Some (264 + n)  (* F1=265, F2=266 etc. *)
-      | Input.Backspace -> Some 127
-      | Input.Tab -> Some 9
-      | Input.Enter -> Some 13
-      | Input.Escape -> None  (* Escape handled separately *)
-    in
-    (match base_code with
-     | Some code ->
-       if modifier = 1 then
-         List.mem code b.codes
-       else begin
-         (* Modified special keys: try kitty_codes, then legacy shift/alt/ctrl codes *)
-         let has_kitty = List.exists (fun (kc, m) ->
-           kc = code && m = modifier) b.kitty_codes in
-         if has_kitty then true
-         else begin
-           (* Map modified arrows to legacy ncurses codes *)
-           let has_alt = mods.alt in
-           let has_ctrl = mods.ctrl in
-           let has_shift = mods.shift in
-           (* Map modified arrows to ALL legacy ncurses code variants *)
-           let mapped = match key with
-             | Input.Up ->
-               if has_alt then [564; 567; 573; 558]
-               else if has_ctrl then [567; 573; 558]
-               else if has_shift then [337] else []
-             | Input.Down ->
-               if has_alt then [523; 526; 532; 517]
-               else if has_ctrl then [526; 532; 517]
-               else if has_shift then [336] else []
-             | Input.Right ->
-               if has_alt then [558; 561] else if has_ctrl then [561]
-               else if has_shift then [402] else []
-             | Input.Left ->
-               if has_alt then [543; 546; 552]
-               else if has_ctrl then [546]
-               else if has_shift then [393] else []
-             | _ -> []
-           in
-           List.exists (fun c -> List.mem c b.codes) mapped
-         end
-       end
-     | None -> false)
-  | _ -> false
-
-(* Extract codepoint from event for compose feeding *)
-let codepoint_of_event = function
-  | Input.Key (cp, _) -> Some cp
-  | Input.Special (Input.Tab, _) -> Some 9
-  | Input.Special (Input.Enter, _) -> Some 13
-  | Input.Special (Input.Backspace, _) -> Some 127
-  | Input.Special (Input.Escape, _) -> Some 27
-  | _ -> None
 
 (* Open a terminal sub-tab, optionally with a specific command. *)
 let open_terminal_tab ?cmd (tab : Tab.t) r =
@@ -302,7 +109,7 @@ let rec handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r
   (* Handle compose mode first *)
   let compose_handled = match ctx.compose with
     | Some cs when Compose.active cs ->
-      (match codepoint_of_event ev with
+      (match Keymatch.codepoint_of_event ev with
        | Some cp ->
          let result = Compose.feed cs cp in
          (match result with
@@ -437,8 +244,8 @@ let rec handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r
        handle essential rocqtui keys. Mouse events always go through
        the normal path so clicking, dragging, tab switching all work. *)
     if term_focused && not is_mouse_event then begin
-      if match_binding ev Keys.quit then Some Quit
-      else if match_binding ev Keys.close_tab then begin
+      if Keymatch.match_binding ev Keys.quit then Some Quit
+      else if Keymatch.match_binding ev Keys.close_tab then begin
         (* Ctrl+W on a focused terminal: destroy the terminal *)
         let active_mt = Tab.active_msg_tab tab.msg in
         (match active_mt.mt_terminal with
@@ -455,14 +262,14 @@ let rec handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r
          | None -> ());
         Some Continue
       end
-      else if match_binding ev Keys.cycle_pane then begin
+      else if Keymatch.match_binding ev Keys.cycle_pane then begin
         tab.focused_pane <- `Script; Some Continue end
-      else if match_binding ev Keys.save then Some Save_prompt
-      else if match_binding ev Keys.build_menu then begin
+      else if Keymatch.match_binding ev Keys.save then Some Save_prompt
+      else if Keymatch.match_binding ev Keys.build_menu then begin
         Modal.toggle ctx.modal Modal.BuildMenu; Some Continue end
-      else if match_binding ev Keys.help then begin
+      else if Keymatch.match_binding ev Keys.help then begin
         Modal.push ctx.modal (Modal.Help { scroll = 0 }); Some Continue end
-      else if match_binding ev Keys.copy
+      else if Keymatch.match_binding ev Keys.copy
               && not (match ev with Input.Key (3, _) -> true
                 | Input.Key (99, m) when m.ctrl -> true | _ -> false) then begin
         (* Copy terminal selection (^Y only; ^C goes to terminal) *)
@@ -479,9 +286,9 @@ let rec handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r
          | None -> ());
         Some Continue
       end
-      else if match_binding ev Keys.open_terminal then begin
+      else if Keymatch.match_binding ev Keys.open_terminal then begin
         open_terminal_tab tab r; Some Continue end
-      else if match_binding ev Keys.open_claude then begin
+      else if Keymatch.match_binding ev Keys.open_claude then begin
         open_terminal_tab ~cmd:"claude" tab r; Some Continue end
       else if (match ev with Input.Special (Input.Escape, _) -> true | _ -> false) then begin
         (* ESC starts compose mode; double-ESC sends ESC to terminal *)
@@ -494,11 +301,11 @@ let rec handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r
       end
       else None
     end
-    else if match_binding ev Keys.quit then Some Quit
-    else if match_binding ev Keys.close_tab then Some Close_tab
-    else if match_binding ev Keys.save then Some Save_prompt
-    else if match_binding ev Keys.jump_back then begin
-      match pop_jump ctx with
+    else if Keymatch.match_binding ev Keys.quit then Some Quit
+    else if Keymatch.match_binding ev Keys.close_tab then Some Close_tab
+    else if Keymatch.match_binding ev Keys.save then Some Save_prompt
+    else if Keymatch.match_binding ev Keys.jump_back then begin
+      match Jump.pop ctx with
       | Some jp ->
         ctx.jump_target <- Some (jp.jp_line, jp.jp_col);
         Some (Jump_back jp)
@@ -506,7 +313,7 @@ let rec handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r
         Render.set_status r "No previous location.";
         Some Continue
     end
-    else if match_binding ev Keys.open_file then begin
+    else if Keymatch.match_binding ev Keys.open_file then begin
       let filename = Buffer.filename buf in
       let dir = match filename with
         | Some f -> Filename.dirname f
@@ -521,23 +328,23 @@ let rec handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r
          Render.set_status r "No _RocqProject found.");
       Some Continue
     end
-    else if match_binding ev Keys.interrupt then begin
+    else if Keymatch.match_binding ev Keys.interrupt then begin
       (match session with
        | Some s -> (try Unix.kill (Session.pid s) Sys.sigint with _ -> ())
        | None -> ());
       Some Continue
     end
-    else if match_binding ev Keys.step_forward then begin
+    else if Keymatch.match_binding ev Keys.step_forward then begin
       tab.goals_scroll <- 0; (Tab.ensure_msg_tab tab.msg "Rocq").mt_scroll <- 0;
       (match session with Some s -> Session.step_forward s | None -> ());
       Some Continue
     end
-    else if match_binding ev Keys.step_backward then begin
+    else if Keymatch.match_binding ev Keys.step_backward then begin
       tab.goals_scroll <- 0; (Tab.ensure_msg_tab tab.msg "Rocq").mt_scroll <- 0;
       (match session with Some s -> Session.step_backward s | None -> ());
       Some Continue
     end
-    else if match_binding ev Keys.go_to_cursor then begin
+    else if Keymatch.match_binding ev Keys.go_to_cursor then begin
       tab.goals_scroll <- 0; (Tab.ensure_msg_tab tab.msg "Rocq").mt_scroll <- 0;
       (match session with Some s -> Session.go_to_cursor s | None -> ());
       Some Continue
@@ -563,9 +370,9 @@ let rec handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r
       end;
       Some Continue
     end
-    else if match_binding ev Keys.toggle_hyps then begin
+    else if Keymatch.match_binding ev Keys.toggle_hyps then begin
       tab.show_all_hyps <- not tab.show_all_hyps; Some Continue end
-    else if match_binding ev Keys.options_menu then begin
+    else if Keymatch.match_binding ev Keys.options_menu then begin
       if View.is_options ctx then begin
         Modal.pop ctx.modal;
         (match session with Some s -> Session.sync_options_and_refresh s | None -> ())
@@ -573,7 +380,7 @@ let rec handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r
       Some Continue
     end
     else if View.is_options ctx then begin
-      let ch_opt = codepoint_of_event ev in
+      let ch_opt = Keymatch.codepoint_of_event ev in
       match ch_opt with
       | Some ch ->
         let c = Char.lowercase_ascii (Char.chr (ch land 0xFF)) in
@@ -591,16 +398,16 @@ let rec handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r
         (match session with Some s -> Session.sync_options_and_refresh s | None -> ());
         None
     end
-    else if match_binding ev Keys.reload then begin
+    else if Keymatch.match_binding ev Keys.reload then begin
       Some Reload
     end
-    else if match_binding ev Keys.theme_menu then begin
+    else if Keymatch.match_binding ev Keys.theme_menu then begin
       Modal.toggle ctx.modal Modal.ThemeMenu;
       Some Continue
     end
     else if View.is_theme ctx then begin
       Modal.pop ctx.modal;
-      (match codepoint_of_event ev with
+      (match Keymatch.codepoint_of_event ev with
        | Some ch ->
          let idx = ch - Char.code '1' in
          let themes = Theme.available in
@@ -613,13 +420,13 @@ let rec handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r
        | None -> ());
       Some Continue
     end
-    else if match_binding ev Keys.build_menu then begin
+    else if Keymatch.match_binding ev Keys.build_menu then begin
       Modal.toggle ctx.modal Modal.BuildMenu;
       Some Continue
     end
     else if View.is_build ctx then begin
       Modal.pop ctx.modal;
-      (match codepoint_of_event ev with
+      (match Keymatch.codepoint_of_event ev with
        | Some ch ->
          let c = Char.lowercase_ascii (Char.chr (ch land 0xFF)) in
          let project_info () =
@@ -678,19 +485,19 @@ let rec handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r
            (Some Continue)
        | None -> Some Continue)
     end
-    else if match_binding ev Keys.open_terminal then begin
+    else if Keymatch.match_binding ev Keys.open_terminal then begin
       open_terminal_tab tab r; Some Continue
     end
-    else if match_binding ev Keys.open_claude then begin
+    else if Keymatch.match_binding ev Keys.open_claude then begin
       open_terminal_tab ~cmd:"claude" tab r; Some Continue
     end
-    else if match_binding ev Keys.query_menu then begin
+    else if Keymatch.match_binding ev Keys.query_menu then begin
       Modal.toggle ctx.modal Modal.QueryMenu;
       Some Continue
     end
     else if View.is_query ctx then begin
       Modal.pop ctx.modal;
-      match codepoint_of_event ev with
+      match Keymatch.codepoint_of_event ev with
       | Some ch ->
         let c = Char.lowercase_ascii (Char.chr (ch land 0xFF)) in
         let handled =
@@ -756,7 +563,7 @@ let rec handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r
         else None  (* fall through to normal handling *)
       | None -> None
     end
-    else if match_binding ev Keys.cycle_pane then begin
+    else if Keymatch.match_binding ev Keys.cycle_pane then begin
       tab.focused_pane <- (match tab.focused_pane with
         | `Script -> `Goals | `Goals -> `Messages | `Messages -> `Script);
       Some Continue
@@ -879,7 +686,7 @@ let rec handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r
            Vterm_lib.Vterm_api.sel_extend vt ~line ~col
          | None ->
            if pane = Render.PScript then begin
-             match screen_to_buffer_pos r buf ~x ~y with
+             match Geom.screen_to_buffer_pos r buf ~x ~y with
              | Some (line, byte_col) -> Buffer.move_to buf line byte_col
              | None -> ()
            end else if pane = Render.PGoals || pane = Render.PMessages then begin
@@ -887,7 +694,7 @@ let rec handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r
                if pane = Render.PGoals then (tab.goals_sel, `Goals)
                else ((Tab.active_msg_tab tab.msg).mt_sel, `Messages)
              in
-             (match screen_to_pane_pos tab r ~x ~y pane_id with
+             (match Geom.screen_to_pane_pos tab r ~x ~y pane_id with
               | Some (row, byte_col) ->
                 ps.ps_cursor_line <- row;
                 ps.ps_cursor_col <- byte_col
@@ -1030,7 +837,7 @@ let rec handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r
                 else
                   ((Tab.active_msg_tab tab.msg).mt_sel, (Tab.active_msg_tab tab.msg).mt_lines_cache, (Tab.active_msg_tab tab.msg).mt_scroll, `Messages)
               in
-              match screen_to_pane_pos tab r ~x ~y pane_id with
+              match Geom.screen_to_pane_pos tab r ~x ~y pane_id with
               | Some (row, byte_col) ->
                 View.clear_pane_selection ps;
                 ps.ps_anchor_line <- row;
@@ -1075,7 +882,7 @@ let rec handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r
           View.clear_pane_selection tab.goals_sel;
           View.clear_pane_selection (Tab.active_msg_tab tab.msg).mt_sel;
           if has_cmd then begin
-            match screen_to_buffer_pos r buf ~x ~y with
+            match Geom.screen_to_buffer_pos r buf ~x ~y with
             | Some (line, byte_col) ->
               Buffer.move_to buf line byte_col;
               (match session with
@@ -1084,7 +891,7 @@ let rec handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r
             | None -> ()
           end
           else if has_shift then begin
-            match screen_to_buffer_pos r buf ~x ~y with
+            match Geom.screen_to_buffer_pos r buf ~x ~y with
             | Some (line, byte_col) ->
               if Buffer.selection buf = None then Buffer.set_anchor buf;
               Buffer.move_to buf line byte_col
@@ -1092,7 +899,7 @@ let rec handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r
           end
           else begin
             (* Click — position cursor; set anchor for potential drag *)
-            match screen_to_buffer_pos r buf ~x ~y with
+            match Geom.screen_to_buffer_pos r buf ~x ~y with
             | Some (line, byte_col) ->
               Buffer.clear_selection buf;
               Buffer.move_to buf line byte_col;
@@ -1108,7 +915,7 @@ let rec handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r
     (* Paste event *)
     else if (match ev with Input.Paste _ -> true | _ -> false) then begin
       let text = match ev with Input.Paste t -> normalize_newlines t | _ -> "" in
-      if text <> "" && not (edit_blocked tab) then begin
+      if text <> "" && not (Block.edit_blocked tab) then begin
         (match session with Some s -> Session.clear_error s | None -> ());
         ignore (Buffer.delete_selection buf);
         insert_string tab text;
@@ -1116,7 +923,7 @@ let rec handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r
       end;
       Some Continue
     end
-    else if match_binding ev Keys.jump_to_def then begin
+    else if Keymatch.match_binding ev Keys.jump_to_def then begin
       let (cl, cc) = Buffer.cursor buf in
       let line = Buffer.get_line buf cl in
       (* Try Require line first *)
@@ -1212,14 +1019,14 @@ let rec handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r
       in
       (match result with
        | Some (path, line_opt) ->
-         push_jump ctx tab;
+         Jump.push ctx tab;
          (match line_opt with
           | Some l -> ctx.jump_target <- Some (l, 0)
           | None -> ctx.jump_target <- None);
          Some (Open_file path)
        | None -> Some Continue)
     end
-    else if match_binding ev Keys.help then begin
+    else if Keymatch.match_binding ev Keys.help then begin
       if View.is_help ctx then begin
         Modal.pop ctx.modal;
         View.set_help_scroll ctx 0
@@ -1227,14 +1034,14 @@ let rec handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r
         Modal.push ctx.modal (Modal.Help { scroll = 0 });
       Some Continue
     end
-    else if match_binding ev Keys.minimap then begin
+    else if Keymatch.match_binding ev Keys.minimap then begin
       if Render.minimap_width r > 0 then
         Render.set_minimap_width r 0
       else
         Render.set_minimap_width r Minimap.width;
       Some Continue
     end
-    else if match_binding ev Keys.about then begin
+    else if Keymatch.match_binding ev Keys.about then begin
       let subject = match tab.focused_pane with
         | `Goals -> View.pane_selection_text tab.goals_sel tab.goals_lines_cache
         | `Messages -> View.pane_selection_text (Tab.active_msg_tab tab.msg).mt_sel (Tab.active_msg_tab tab.msg).mt_lines_cache
@@ -1247,7 +1054,7 @@ let rec handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r
          Session.query s ("About " ^ word ^ ".")       | _ -> ());
       Some Continue
     end
-    else if match_binding ev Keys.print_query then begin
+    else if Keymatch.match_binding ev Keys.print_query then begin
       let subject = match tab.focused_pane with
         | `Goals -> View.pane_selection_text tab.goals_sel tab.goals_lines_cache
         | `Messages -> View.pane_selection_text (Tab.active_msg_tab tab.msg).mt_sel (Tab.active_msg_tab tab.msg).mt_lines_cache
@@ -1260,7 +1067,7 @@ let rec handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r
          Session.query s ("Print " ^ word ^ ".")       | _ -> ());
       Some Continue
     end
-    else if match_binding ev Keys.copy then begin
+    else if Keymatch.match_binding ev Keys.copy then begin
       let text = match tab.focused_pane with
         | `Goals -> View.pane_selection_text tab.goals_sel tab.goals_lines_cache
         | `Messages -> View.pane_selection_text (Tab.active_msg_tab tab.msg).mt_sel (Tab.active_msg_tab tab.msg).mt_lines_cache
@@ -1273,14 +1080,14 @@ let rec handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r
        | None -> ());
       Some Continue
     end
-    else if match_binding ev Keys.undo then begin
+    else if Keymatch.match_binding ev Keys.undo then begin
       Buffer.undo buf;
-      rewind_if_needed tab;
+      Block.rewind_if_needed tab;
       Some Continue
     end
-    else if match_binding ev Keys.redo then begin
+    else if Keymatch.match_binding ev Keys.redo then begin
       Buffer.redo buf;
-      rewind_if_needed tab;
+      Block.rewind_if_needed tab;
       Some Continue
     end
     else None
@@ -1352,8 +1159,8 @@ let rec handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r
       let (rows, _) = Render.pane_dims r Render.PScript in
       Buffer.move_page_up buf (rows - 1); Some Continue
     (* Clipboard *)
-    | _ when match_binding ev Keys.cut ->
-      if not (edit_blocked tab) then begin
+    | _ when Keymatch.match_binding ev Keys.cut ->
+      if not (Block.edit_blocked tab) then begin
         (match session with Some s -> Session.clear_error s | None -> ());
         match Buffer.delete_selection buf with
         | Some text ->
@@ -1364,8 +1171,8 @@ let rec handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r
           Buffer.cut_line buf
       end;
       Some Continue
-    | _ when match_binding ev Keys.paste ->
-      if not (edit_blocked tab) then begin
+    | _ when Keymatch.match_binding ev Keys.paste ->
+      if not (Block.edit_blocked tab) then begin
         (match session with Some s -> Session.clear_error s | None -> ());
         ignore (Buffer.delete_selection buf);
         if ctx.clipboard <> "" then
@@ -1378,7 +1185,7 @@ let rec handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r
       Some Continue
     (* Delete *)
     | Input.Special (Input.Delete, _) ->
-      if not (edit_blocked tab) then begin
+      if not (Block.edit_blocked tab) then begin
         (match session with Some s -> Session.clear_error s | None -> ());
         (match Buffer.delete_selection buf with
          | Some _ -> () | None -> Buffer.delete_char_at buf)
@@ -1386,7 +1193,7 @@ let rec handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r
       Some Continue
     (* Backspace *)
     | Input.Special (Input.Backspace, _) ->
-      if not (edit_blocked ~for_backspace:true tab) then begin
+      if not (Block.edit_blocked ~for_backspace:true tab) then begin
         (match session with Some s -> Session.clear_error s | None -> ());
         (match Buffer.delete_selection buf with
          | Some _ -> () | None -> Buffer.delete_char_before buf)
@@ -1394,7 +1201,7 @@ let rec handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r
       Some Continue
     (* Enter *)
     | Input.Special (Input.Enter, _) ->
-      if not (edit_blocked tab) then begin
+      if not (Block.edit_blocked tab) then begin
         (match session with Some s -> Session.clear_error s | None -> ());
         ignore (Buffer.delete_selection buf);
         Buffer.insert_newline_auto_indent buf
@@ -1405,7 +1212,7 @@ let rec handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r
        single-line selection, Tab inserts spaces at the cursor and
        Shift+Tab unindents the current line. *)
     | Input.Special (Input.Tab, m) ->
-      if not (edit_blocked tab) then begin
+      if not (Block.edit_blocked tab) then begin
         (match session with Some s -> Session.clear_error s | None -> ());
         let width = !Config.indent_width in
         let multiline_sel =
@@ -1428,7 +1235,7 @@ let rec handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r
       Some Continue
     (* Printable character *)
     | Input.Key (cp, mods) when cp >= 32 && not mods.ctrl && not mods.alt ->
-      if not (edit_blocked tab) then begin
+      if not (Block.edit_blocked tab) then begin
         (match session with Some s -> Session.clear_error s | None -> ());
         ignore (Buffer.delete_selection buf);
         (* Encode codepoint as UTF-8 and insert *)
