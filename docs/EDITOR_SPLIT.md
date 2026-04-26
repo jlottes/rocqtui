@@ -83,10 +83,11 @@ bin/main.exe -- <file.v>`) between steps.
 - [x] editor.ml's terminal-focused Messages-arm collapses to two lines
 - editor.ml: 1410 → 1262 lines
 
-### Step 3: mouse
-- [ ] Extract `lib/editor/mouse.ml`:
-  - [ ] `handle : Editor_context.t -> Input.mouse_event -> Tab.t -> Render.t -> action`
-- [ ] editor.ml's `match ev with Input.Mouse m -> Mouse.handle ctx m tab r` arm
+### Step 3: mouse ✅
+- [x] Extract `lib/editor/mouse.ml` (311 lines):
+  - [x] `handle : Editor_context.t -> Input.mouse_event -> Tab.t -> Render.t -> unit`
+- [x] editor.ml's mouse arm collapses to four lines
+- editor.ml: 1262 → 955 lines
 
 ### Step 4: script-pane keys
 - [ ] Extract `lib/editor/script.ml`:
