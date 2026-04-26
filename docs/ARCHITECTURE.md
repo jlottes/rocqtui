@@ -13,13 +13,51 @@ emulator. **No ncurses** — all terminal I/O is direct ANSI escape sequences.
 - `render.ml` — pane layout on grid, chrome, overlays, tab/status bar, `present()`
 - `render_need.ml` — tracks No/Yes/Full render requests per frame
 
-### Editor (`lib/`)
+### Editor (`lib/editor/` namespace + `lib/`)
 
-- `editor.ml` — input event handling (`handle_event`)
+`lib/editor/` is a namespace using dune's `(include_subdirs qualified)`.
+From outside, modules are accessed as `Editor.Foo`; siblings inside
+`lib/editor/` reference each other unprefixed (`Geom`, `Mouse`, etc.).
+
+Top-level dispatch:
+
+- `editor/editor.ml` — `handle_event`: compose preprocessing → modal
+  pre-handling → `handle_global` (chained keybinding match) → per-pane
+  routing (delegates to `Script` / `Mouse` / `Pty`)
+- `editor/action.ml` — `action` and `jump_point` types, factored out
+  so submodules can return `Action.action` without circular deps with
+  `editor.ml`. `Editor.action` re-exports as a transparent alias
+
+Pure utilities:
+
+- `editor/keymatch.ml` — `match_binding`, `codepoint_of_event`
+  (input event ↔ keybinding match, both legacy ncurses and Kitty codes)
+- `editor/geom.ml` — screen ↔ buffer/pane coordinate conversion
+- `editor/jump.ml` — jump-back stack push/pop
+- `editor/block.ml` — edit-blocking (verified-region + MCP lock) and
+  rewind-on-undo
+
+Per-event-source handlers:
+
+- `editor/script.ml` — script-pane keyboard: navigation
+  (with/without selection), cut/copy/paste, delete, Enter with
+  auto-indent, Tab/Shift+Tab indent, printable input
+- `editor/mouse.ml` — mouse handling for all panes: terminal mouse
+  forwarding, border drag, text selection drag, scroll,
+  click-to-position
+- `editor/pty.ml` — PTY routing: open terminal sub-tab, send escape,
+  forward input events to the PTY (UTF-8 encoding, Kitty protocol)
+- `editor/modals.ml` — modal event dispatchers (Prompt, FilePicker,
+  OptionsMenu, ThemeMenu, BuildMenu, QueryMenu, Help) plus
+  `query_subject` / `run_query` helpers
+
+Outside the editor namespace:
+
 - `view.ml` — rendering (`render_all`, `render_script`, etc.)
-- `editor_context.ml` — shared mutable state (clipboard, compose, dragging, jump stack)
-- `modal.ml` — modal dialog stack (Help, QueryMenu, OptionsMenu, ThemeMenu,
-  BuildMenu, FilePicker, Prompt)
+- `editor_context.ml` — shared mutable state (clipboard, compose,
+  dragging, jump stack)
+- `modal.ml` — modal dialog stack (Help, QueryMenu, OptionsMenu,
+  ThemeMenu, BuildMenu, FilePicker, Prompt)
 - `keys.ml` — centralized key bindings
 
 ### Rocq integration (`lib/`)

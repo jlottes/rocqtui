@@ -80,10 +80,12 @@ Progress tracker for REFACTOR.md items, in priority order.
 - [x] main.ml calls View.render_all, editor.ml calls View helpers
 - Note: further splitting (handler.ml, mouse.ml) possible but not urgent
 
-## C2. Further editor.ml split (in progress)
+## C2. Further editor.ml split ✅
 See [`EDITOR_SPLIT.md`](EDITOR_SPLIT.md) for the detailed plan.
-Goal: break the ~1629-line `editor.ml` (which has grown back) into a
-`lib/editor/` namespace using `(include_subdirs qualified)`.
+Broke the ~1629-line `editor.ml` into a `lib/editor/` namespace using
+`(include_subdirs qualified)`. editor.ml: 1629 → 521 lines, with 9
+focused submodules (action, block, geom, jump, keymatch, modals,
+mouse, pty, script).
 
 ## D. Event-Driven Architecture (optional)
 - [ ] Define unified `event` type (input, file, session, build, mcp, timer)
