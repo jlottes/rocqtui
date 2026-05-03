@@ -361,3 +361,91 @@ let highlight_buffer buf =
     Array.iteri (fun i spans -> result.(i) <- List.rev spans) result;
     result
   end
+
+(* --- Identifier lookup at cursor (used by ^L, About, Print) --- *)
+
+(* Cursor's byte offset in [Buffer.text buf]. *)
+let cursor_byte_offset buf =
+  let (line, col) = Buffer.cursor buf in
+  let off = ref 0 in
+  for i = 0 to line - 1 do
+    off := !off + String.length (Buffer.get_line buf i) + 1
+  done;
+  !off + col
+
+(* With [empty_keyword_state] the Coq lexer labels every otherwise-untokenized
+   chunk as IDENT — including punctuation like ".", ":", "(", "+". Filter
+   to tokens whose content starts like a real identifier (letter, '_', or
+   any non-ASCII codepoint, which we treat as a Unicode letter). *)
+let is_real_ident_text s =
+  String.length s > 0 &&
+  let c = Char.code s.[0] in
+  (c >= Char.code 'a' && c <= Char.code 'z') ||
+  (c >= Char.code 'A' && c <= Char.code 'Z') ||
+  c = Char.code '_' || c >= 0x80
+
+(* Tokenize [text] and return all real IDENT/FIELD spans as (bp, ep) in source
+   order. Returns [] if the lexer fails before producing any. *)
+let collect_ident_spans text =
+  let acc = ref [] in
+  if String.length text = 0 then []
+  else begin
+    let comment_state = CLexer.LexerDiff.State.init () in
+    CLexer.LexerDiff.State.set comment_state;
+    let char_stream = Gramlib.Stream.of_string text in
+    let kw_state = CLexer.empty_keyword_state in
+    let tok_stream = CLexer.LexerDiff.tok_func char_stream in
+    (try
+       while true do
+         let tok = Gramlib.LStream.next kw_state tok_stream in
+         let loc = Gramlib.LStream.current_loc tok_stream in
+         (match tok with
+          | Tok.IDENT s | Tok.FIELD s when is_real_ident_text s ->
+            acc := (loc.Loc.bp, loc.Loc.ep) :: !acc
+          | _ -> ());
+         if tok = Tok.EOI then raise Exit
+       done
+     with
+     | Exit -> ()
+     | Gramlib.Stream.Failure -> ()
+     | CLexer.Error.E _ -> ());
+    CLexer.LexerDiff.State.drop ();
+    List.rev !acc
+  end
+
+let qualid_at_cursor buf =
+  let text = Buffer.text buf in
+  let off = cursor_byte_offset buf in
+  let toks = Array.of_list (collect_ident_spans text) in
+  let n = Array.length toks in
+  (* Find the first IDENT/FIELD whose [bp, ep] contains [off]. Inclusive on
+     both ends so the cursor sitting at a boundary picks the left token. *)
+  let rec find i =
+    if i >= n then None
+    else
+      let (bp, ep) = toks.(i) in
+      if bp > off then None
+      else if off <= ep then Some i
+      else find (i + 1)
+  in
+  match find 0 with
+  | None -> None
+  | Some i ->
+    (* Extend left through adjacent IDENT/FIELD tokens (no gap = qualified
+       name like Foo.Bar.baz where FIELD ".Bar" starts at the dot, which
+       is exactly where IDENT "Foo" ended). *)
+    let l = ref i in
+    while !l > 0 && snd toks.(!l - 1) = fst toks.(!l) do decr l done;
+    let r = ref i in
+    while !r + 1 < n && snd toks.(!r) = fst toks.(!r + 1) do incr r done;
+    let bp = fst toks.(!l) in
+    let ep = snd toks.(!r) in
+    if ep <= bp then None
+    else
+      let s = String.sub text bp (ep - bp) in
+      (* Trim a trailing sentence-terminator '.' that the lexer sometimes
+         folds into the final FIELD token (e.g. "Foo.Bar.baz." emits
+         FIELD "baz." rather than FIELD "baz" + KEYWORD "."). *)
+      let n = String.length s in
+      let s = if n > 0 && s.[n - 1] = '.' then String.sub s 0 (n - 1) else s in
+      if s = "" then None else Some s

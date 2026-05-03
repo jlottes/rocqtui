@@ -556,48 +556,64 @@ let paste buf =
     clamp_col buf;
     buf.modified <- true
 
-let is_ident_char c =
-  (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
-  (c >= '0' && c <= '9') || c = '_' || c = '\'' || c = '.'
+(* Rocq identifier chars: ASCII letters/digits/_/'/., plus any non-ASCII
+   codepoint (greek letters, math symbols, etc.). Operates on codepoints,
+   not bytes, so multi-byte UTF-8 doesn't get split mid-character. *)
+let is_ident_codepoint cp =
+  (cp >= Char.code 'a' && cp <= Char.code 'z') ||
+  (cp >= Char.code 'A' && cp <= Char.code 'Z') ||
+  (cp >= Char.code '0' && cp <= Char.code '9') ||
+  cp = Char.code '_' || cp = Char.code '\'' || cp = Char.code '.' ||
+  cp >= 0x80
+
+let ident_at line col =
+  let len = String.length line in
+  if col >= len then None
+  else
+    let (cp, _) = Utf8.decode line col in
+    if not (is_ident_codepoint cp) then None
+    else begin
+      let l = ref col in
+      let stop = ref false in
+      while not !stop && !l > 0 do
+        let p = Utf8.prev line !l in
+        let (cp, _) = Utf8.decode line p in
+        if is_ident_codepoint cp then l := p else stop := true
+      done;
+      let r = ref (Utf8.next line col) in
+      let stop = ref false in
+      while not !stop && !r < len do
+        let (cp, _) = Utf8.decode line !r in
+        if is_ident_codepoint cp then r := Utf8.next line !r else stop := true
+      done;
+      Some (!l, !r)
+    end
 
 let word_at_cursor buf =
   let line = buf.lines.(buf.cur_line) in
-  let len = String.length line in
-  let col = min buf.cur_col len in
-  if col >= len then None
-  else if not (is_ident_char line.[col]) then None
-  else begin
-    (* Expand left *)
-    let l = ref col in
-    while !l > 0 && is_ident_char line.[!l - 1] do decr l done;
-    (* Expand right *)
-    let r = ref col in
-    while !r < len && is_ident_char line.[!r] do incr r done;
-    let word = String.sub line !l (!r - !l) in
+  let col = min buf.cur_col (String.length line) in
+  match ident_at line col with
+  | None -> None
+  | Some (l, r) ->
+    let word = String.sub line l (r - l) in
     (* Trim trailing dots (qualified name separator vs sentence end) *)
     let word = if String.length word > 0 && word.[String.length word - 1] = '.'
       then String.sub word 0 (String.length word - 1) else word in
     if word = "" then None else Some word
-  end
 
 let select_word_at_cursor buf =
   let line = buf.lines.(buf.cur_line) in
-  let len = String.length line in
-  let col = min buf.cur_col len in
-  if col < len && is_ident_char line.[col] then begin
-    let l = ref col in
-    while !l > 0 && is_ident_char line.[!l - 1] do decr l done;
-    let r = ref col in
-    while !r < len && is_ident_char line.[!r] do incr r done;
-    (* Trim trailing dot *)
-    if !r > !l && line.[!r - 1] = '.' then decr r;
-    if !r > !l then begin
-      buf.cur_col <- !l;
-      buf.anchor <- Some (buf.cur_line, !l);
-      buf.cur_col <- !r;
+  let col = min buf.cur_col (String.length line) in
+  match ident_at line col with
+  | None -> ()
+  | Some (l, r) ->
+    let r = if r > l && line.[r - 1] = '.' then r - 1 else r in
+    if r > l then begin
+      buf.cur_col <- l;
+      buf.anchor <- Some (buf.cur_line, l);
+      buf.cur_col <- r;
       update_desired_vcol buf
     end
-  end
 
 let ensure_visible buf visible_rows =
   if buf.cur_line < buf.scroll_top then

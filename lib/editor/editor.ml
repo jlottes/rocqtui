@@ -360,8 +360,7 @@ let handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r =
              Render.set_status r "No module name at cursor.";
              None)
         | None ->
-          let word = match Buffer.selected_text buf with
-            | Some t -> Some t | None -> Buffer.word_at_cursor buf in
+          let word = Modals.query_subject tab in
           (match word, session with
            | Some w, Some s ->
              Session.query s ("Locate " ^ w ^ ".");
@@ -428,29 +427,15 @@ let handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r =
       Some Continue
     end
     else if Keymatch.match_binding ev Keys.about then begin
-      let subject = match tab.focused_pane with
-        | `Goals -> View.pane_selection_text tab.goals_sel tab.goals_lines_cache
-        | `Messages -> View.pane_selection_text (Tab.active_msg_tab tab.msg).mt_sel (Tab.active_msg_tab tab.msg).mt_lines_cache
-        | `Script ->
-          match Buffer.selected_text buf with
-          | Some text -> Some text | None -> Buffer.word_at_cursor buf
-      in
-      (match subject, session with
-       | Some word, Some s ->
-         Session.query s ("About " ^ word ^ ".")       | _ -> ());
+      (match Modals.query_subject tab, session with
+       | Some word, Some s -> Session.query s ("About " ^ word ^ ".")
+       | _ -> ());
       Some Continue
     end
     else if Keymatch.match_binding ev Keys.print_query then begin
-      let subject = match tab.focused_pane with
-        | `Goals -> View.pane_selection_text tab.goals_sel tab.goals_lines_cache
-        | `Messages -> View.pane_selection_text (Tab.active_msg_tab tab.msg).mt_sel (Tab.active_msg_tab tab.msg).mt_lines_cache
-        | `Script ->
-          match Buffer.selected_text buf with
-          | Some text -> Some text | None -> Buffer.word_at_cursor buf
-      in
-      (match subject, session with
-       | Some word, Some s ->
-         Session.query s ("Print " ^ word ^ ".")       | _ -> ());
+      (match Modals.query_subject tab, session with
+       | Some word, Some s -> Session.query s ("Print " ^ word ^ ".")
+       | _ -> ());
       Some Continue
     end
     else if Keymatch.match_binding ev Keys.copy then begin

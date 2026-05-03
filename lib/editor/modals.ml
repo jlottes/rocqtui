@@ -9,7 +9,10 @@ let query_subject (tab : Tab.t) =
   | `Script ->
     match Buffer.selected_text tab.buf with
     | Some text -> Some text
-    | None -> Buffer.word_at_cursor tab.buf
+    | None ->
+      match Highlight.qualid_at_cursor tab.buf with
+      | Some _ as s -> s
+      | None -> Buffer.word_at_cursor tab.buf
 
 let run_query session phrase =
   match session with
