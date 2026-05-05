@@ -29,6 +29,12 @@ val disk_changed : t -> bool
 (** Set the disk_changed flag. *)
 val set_disk_changed : t -> bool -> unit
 
+(** Monotonic counter, bumped every time the buffer's text content is
+    mutated. Observers can cache work keyed on this value and refresh
+    when it changes. Stable across cursor / scroll / selection moves;
+    unaffected by save (no content change). *)
+val revision : t -> int
+
 (** Line count. *)
 val line_count : t -> int
 

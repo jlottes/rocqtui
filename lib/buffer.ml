@@ -18,6 +18,7 @@ type t = {
   mutable modified : bool;
   mutable filename : string option;
   mutable disk_changed : bool;  (* file changed on disk since last load/save *)
+  mutable revision : int;  (* monotonic counter, bumped on any content mutation *)
   mutable cut_buf : string list;
   mutable anchor : (int * int) option;  (* (line, col) or None *)
   mutable undo_stack : snapshot list;
@@ -42,7 +43,8 @@ let create () =
     undo_stack = [];
     redo_stack = [];
     last_edit = Other;
-    disk_changed = false }
+    disk_changed = false;
+    revision = 0 }
 
 let ensure_capacity buf n =
   if n > Array.length buf.lines then begin
@@ -92,7 +94,8 @@ let undo buf =
     restore_snapshot buf snap;
     buf.undo_stack <- rest;
     buf.last_edit <- Other;
-    buf.modified <- true
+    buf.modified <- true;
+  buf.revision <- buf.revision + 1
 
 let redo buf =
   match buf.redo_stack with
@@ -102,7 +105,8 @@ let redo buf =
     restore_snapshot buf snap;
     buf.redo_stack <- rest;
     buf.last_edit <- Other;
-    buf.modified <- true
+    buf.modified <- true;
+  buf.revision <- buf.revision + 1
 
 let update_desired_vcol buf =
   buf.desired_vcol <- Utf8.byte_to_col buf.lines.(buf.cur_line) buf.cur_col
@@ -123,6 +127,7 @@ let reload buf =
     for i = n to buf.num_lines - 1 do buf.lines.(i) <- "" done;
     buf.num_lines <- n;
     buf.modified <- false;
+    buf.revision <- buf.revision + 1;
     buf.disk_changed <- false;
     buf.undo_stack <- [];
     buf.redo_stack <- [];
@@ -147,6 +152,7 @@ let set_text buf text =
   for i = n to buf.num_lines - 1 do buf.lines.(i) <- "" done;
   buf.num_lines <- n;
   buf.modified <- true;
+  buf.revision <- buf.revision + 1;
   if buf.cur_line >= n then begin
     buf.cur_line <- max 0 (n - 1);
     buf.cur_col <- 0
@@ -177,6 +183,7 @@ let set_filename buf f = buf.filename <- Some f
 let modified buf = buf.modified
 let disk_changed buf = buf.disk_changed
 let set_disk_changed buf v = buf.disk_changed <- v
+let revision buf = buf.revision
 let line_count buf = buf.num_lines
 let get_line buf i = buf.lines.(i)
 let cursor buf = (buf.cur_line, buf.cur_col)
@@ -358,6 +365,7 @@ let delete_selection buf =
     move_to_byte_offset buf s;
     buf.anchor <- None;
     buf.modified <- true;
+  buf.revision <- buf.revision + 1;
     Some deleted
 
 let insert_char buf ch =
@@ -372,7 +380,8 @@ let insert_char buf ch =
   in
   buf.lines.(buf.cur_line) <- new_line;
   buf.cur_col <- col + 1;
-  buf.modified <- true
+  buf.modified <- true;
+  buf.revision <- buf.revision + 1
 
 let insert_newline buf =
   push_undo buf Newline;
@@ -391,7 +400,8 @@ let insert_newline buf =
   buf.num_lines <- buf.num_lines + 1;
   buf.cur_line <- buf.cur_line + 1;
   buf.cur_col <- 0;
-  buf.modified <- true
+  buf.modified <- true;
+  buf.revision <- buf.revision + 1
 
 (* Like insert_newline, but prefix the new line with the leading whitespace
    of the line the cursor was on (capped at cursor column, so splitting
@@ -420,6 +430,7 @@ let insert_newline_auto_indent buf =
   buf.cur_line <- buf.cur_line + 1;
   buf.cur_col <- indent_len;
   buf.modified <- true;
+  buf.revision <- buf.revision + 1;
   update_desired_vcol buf
 
 (* Range of fully-or-partially selected lines for line-wise operations.
@@ -457,7 +468,8 @@ let indent_lines buf width =
   buf.cur_line <- cl';
   buf.cur_col <- cc';
   update_desired_vcol buf;
-  buf.modified <- true
+  buf.modified <- true;
+  buf.revision <- buf.revision + 1
 
 let unindent_lines buf width =
   let (first, last) = selection_line_range buf in
@@ -489,7 +501,8 @@ let unindent_lines buf width =
   buf.cur_line <- cl';
   buf.cur_col <- cc';
   update_desired_vcol buf;
-  if !any then buf.modified <- true
+  if !any then buf.modified <- true;
+  buf.revision <- buf.revision + 1
 
 let delete_char_before buf =
   push_undo buf Delete;
@@ -503,7 +516,8 @@ let delete_char_before buf =
       ^ String.sub line col (len - col);
     buf.cur_col <- prev_col;
     update_desired_vcol buf;
-    buf.modified <- true
+    buf.modified <- true;
+  buf.revision <- buf.revision + 1
   end else if buf.cur_line > 0 then begin
     (* Join with previous line *)
     let prev = buf.lines.(buf.cur_line - 1) in
@@ -518,7 +532,8 @@ let delete_char_before buf =
     buf.num_lines <- buf.num_lines - 1;
     buf.cur_line <- buf.cur_line - 1;
     buf.cur_col <- new_col;
-    buf.modified <- true
+    buf.modified <- true;
+  buf.revision <- buf.revision + 1
   end
 
 let delete_char_at buf =
@@ -531,7 +546,8 @@ let delete_char_at buf =
     buf.lines.(buf.cur_line) <-
       String.sub line 0 col
       ^ String.sub line next_col (len - next_col);
-    buf.modified <- true
+    buf.modified <- true;
+  buf.revision <- buf.revision + 1
   end else if buf.cur_line < buf.num_lines - 1 then begin
     (* Join with next line *)
     buf.lines.(buf.cur_line) <- line ^ buf.lines.(buf.cur_line + 1);
@@ -540,7 +556,8 @@ let delete_char_at buf =
     done;
     buf.lines.(buf.num_lines - 1) <- "";
     buf.num_lines <- buf.num_lines - 1;
-    buf.modified <- true
+    buf.modified <- true;
+  buf.revision <- buf.revision + 1
   end
 
 let cut_line buf =
@@ -562,7 +579,8 @@ let cut_line buf =
     buf.lines.(0) <- "";
     buf.cur_col <- 0
   end;
-  buf.modified <- true
+  buf.modified <- true;
+  buf.revision <- buf.revision + 1
 
 let paste buf =
   match buf.cut_buf with
@@ -580,7 +598,8 @@ let paste buf =
     ) lines;
     buf.num_lines <- buf.num_lines + n;
     clamp_col buf;
-    buf.modified <- true
+    buf.modified <- true;
+  buf.revision <- buf.revision + 1
 
 (* Rocq identifier chars: ASCII letters/digits/_/'/., plus any non-ASCII
    codepoint (greek letters, math symbols, etc.). Operates on codepoints,

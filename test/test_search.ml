@@ -214,6 +214,51 @@ let test_toggle_case () =
   check_eq "after toggle back: smart again (3 matches)"
     ~expected:3 ~got:(Array.length s.matches) show_int
 
+let test_buffer_revision () =
+  let buf = Buffer.create () in
+  let r0 = Buffer.revision buf in
+  Buffer.Unsafe.set_text buf "hello";
+  let r1 = Buffer.revision buf in
+  check_eq "buffer revision: bumps on set_text" ~expected:true
+    ~got:(r1 > r0) string_of_bool;
+  Buffer.move_to buf 0 3;  (* cursor move, no content change *)
+  check_eq "buffer revision: stable across cursor moves"
+    ~expected:r1 ~got:(Buffer.revision buf) string_of_int;
+  Buffer.Unsafe.insert_char buf 'x';
+  check_eq "buffer revision: bumps on insert_char" ~expected:true
+    ~got:(Buffer.revision buf > r1) string_of_bool
+
+let test_tab_search_lazy_refresh () =
+  let tab = Tab.create_blank () in
+  Buffer.Unsafe.set_text tab.buf "foo bar foo";
+  let s = Search.create tab.buf in
+  let s = Search.update_query s tab.buf "foo" in
+  Tab.set_search tab (Some s);
+  let got1 = Option.get (Tab.search_state tab) in
+  check_eq "tab search: 2 matches initially"
+    ~expected:2 ~got:(Array.length got1.matches) show_int;
+  Buffer.Unsafe.set_text tab.buf "foo bar foo foo";
+  let got2 = Option.get (Tab.search_state tab) in
+  check_eq "tab search: refreshes after edit (3 matches)"
+    ~expected:3 ~got:(Array.length got2.matches) show_int;
+  (* Reading again with no buffer change must not re-run. *)
+  let r_before = Buffer.revision tab.buf in
+  let _ = Tab.search_state tab in
+  check_eq "tab search: read without edit doesn't bump revision"
+    ~expected:r_before ~got:(Buffer.revision tab.buf) string_of_int
+
+let test_tab_search_set_and_clear () =
+  let tab = Tab.create_blank () in
+  check_eq "tab search: initially None"
+    ~expected:true ~got:(Tab.search_state tab = None) string_of_bool;
+  let s = Search.create tab.buf in
+  Tab.set_search tab (Some s);
+  check_eq "tab search: present after set"
+    ~expected:true ~got:(Tab.search_state tab <> None) string_of_bool;
+  Tab.set_search tab None;
+  check_eq "tab search: cleared after set None"
+    ~expected:true ~got:(Tab.search_state tab = None) string_of_bool
+
 let test_is_case_insensitive () =
   let f = Search.empty_flags in
   check_eq "is_case_insensitive: smart + lowercase => true"
@@ -248,6 +293,9 @@ let () =
   test_update_after_edit_preserves_current ();
   test_update_after_edit_match_removed ();
   test_toggle_case ();
+  test_buffer_revision ();
+  test_tab_search_lazy_refresh ();
+  test_tab_search_set_and_clear ();
   test_is_case_insensitive ();
   Printf.printf "\n%d passed, %d failed\n" !pass !fail;
   if !fail > 0 then exit 1;

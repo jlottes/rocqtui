@@ -38,6 +38,8 @@ type t = {
   goals_sel : pane_selection;
   mutable goals_lines_cache : string list;
   msg : msg_tabs;
+  mutable search : Search.state option;
+  mutable search_revision : int;
 }
 
 type manager = {
@@ -48,6 +50,17 @@ type manager = {
 
 val create_blank : ?args:string list -> unit -> t
 val create_from_file : ?args:string list -> string -> t
+
+(** Tab's search state, refreshed against the buffer if the buffer has
+    been mutated since the matches were last computed. Returns [None]
+    when search is inactive on this tab. Callers should prefer this over
+    reading the [search] field directly. *)
+val search_state : t -> Search.state option
+
+(** Replace the tab's search state. Records the current buffer revision
+    so the next [search_state] read won't refresh unnecessarily. *)
+val set_search : t -> Search.state option -> unit
+
 val active_tab : manager -> t
 val find_by_id : manager -> int -> t option
 val index_of_id : manager -> int -> int option

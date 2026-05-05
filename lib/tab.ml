@@ -136,6 +136,10 @@ type t = {
   goals_sel : pane_selection;
   mutable goals_lines_cache : string list;
   msg : msg_tabs;
+  mutable search : Search.state option;
+  (* [Buffer.revision buf] when [search] was last refreshed; only
+     meaningful when [search <> None]. *)
+  mutable search_revision : int;
 }
 
 type manager = {
@@ -160,7 +164,9 @@ let make_tab ?(args=[]) buf session =
     last_ensured_cur = None;
     goals_sel = fresh_pane_sel ();
     goals_lines_cache = [];
-    msg = fresh_msg_tabs () }
+    msg = fresh_msg_tabs ();
+    search = None;
+    search_revision = 0 }
 
 let create_blank ?(args=[]) () =
   let buf = Buffer.create () in
@@ -182,6 +188,26 @@ let create_from_file ?(args=[]) filename =
      verified content yet, so the check passes trivially. *)
   ignore (Region_buffer.try_reload_from_disk tab.rb);
   tab
+
+(* Search state with on-demand refresh: if the buffer has changed since
+   the search was last computed, re-run the matcher. Returns the
+   (possibly updated) state stored on the tab. *)
+let search_state tab =
+  match tab.search with
+  | None -> None
+  | Some s ->
+    let rev = Buffer.revision tab.buf in
+    if rev = tab.search_revision then Some s
+    else begin
+      let s' = Search.update_after_edit s tab.buf in
+      tab.search <- Some s';
+      tab.search_revision <- rev;
+      Some s'
+    end
+
+let set_search tab st =
+  tab.search <- st;
+  tab.search_revision <- Buffer.revision tab.buf
 
 let active_tab mgr =
   List.nth mgr.tabs mgr.active
