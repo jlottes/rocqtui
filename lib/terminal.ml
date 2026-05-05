@@ -216,16 +216,36 @@ let render t (grid : Grid.t) ~row ~col ~width ~height =
             if cell.selected then { base with reverse = not base.reverse }
             else base
           in
-          let grid_cell = grid.cells.(grid_row).(gc) in
-          grid_cell.text <- cell.text;
-          grid_cell.width <- cell.width;
-          grid_cell.attr <- attr;
-          (* Wide char: mark continuation cell *)
-          if cell.width = 2 && gc + 1 < col + width && gc + 1 < grid.cols then begin
-            let next = grid.cells.(grid_row).(gc + 1) in
-            next.text <- "";
-            next.width <- 0;
-            next.attr <- attr
+          (* vterm encodes tabs as a single cell with code=ENC_TAB (0x07)
+             and dynamic width 1..8 that pads to the next multiple of 8.
+             Expand into [cell.width] single-space cells so the host
+             cursor advances correctly and stale grid content doesn't
+             show through. *)
+          let is_tab =
+            String.length cell.text = 1 && cell.text.[0] = '\x07'
+          in
+          if is_tab then begin
+            for i = 0 to cell.width - 1 do
+              let cgc = gc + i in
+              if cgc < col + width && cgc < grid.cols then begin
+                let cc = grid.cells.(grid_row).(cgc) in
+                cc.text <- " ";
+                cc.width <- 1;
+                cc.attr <- attr
+              end
+            done
+          end else begin
+            let grid_cell = grid.cells.(grid_row).(gc) in
+            grid_cell.text <- cell.text;
+            grid_cell.width <- cell.width;
+            grid_cell.attr <- attr;
+            (* Wide char: mark continuation cell *)
+            if cell.width = 2 && gc + 1 < col + width && gc + 1 < grid.cols then begin
+              let next = grid.cells.(grid_row).(gc + 1) in
+              next.text <- "";
+              next.width <- 0;
+              next.attr <- attr
+            end
           end;
           x := !x + cell.width
         end
