@@ -152,7 +152,7 @@ let minimap = {
   display = "^M"; context = Global; description = "Minimap" }
 
 let theme_menu = {
-  name = "theme_menu"; codes = [267]; kitty_codes = []; display = "F3";
+  name = "theme_menu"; codes = [271]; kitty_codes = []; display = "F7";
   context = Global; description = "Theme" }
 
 let reload = {
@@ -332,7 +332,7 @@ let generate_help () =
   Stdlib.Buffer.add_string buf "\n  ─── Themes ";
   for _ = 1 to 33 do Stdlib.Buffer.add_string buf "─" done;
   Stdlib.Buffer.add_string buf "\n";
-  Stdlib.Buffer.add_string buf "  F3 to switch themes, or -theme NAME on command line:\n";
+  Stdlib.Buffer.add_string buf (Printf.sprintf "  %s to switch themes, or -theme NAME on command line:\n" theme_menu.display);
   Stdlib.Buffer.add_string buf "    solarized-dark  solarized-light  classic\n";
   Stdlib.Buffer.add_string buf "    monokai  nord\n";
   Stdlib.Buffer.add_string buf "\n  Press any key to close this help screen.\n";

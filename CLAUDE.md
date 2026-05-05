@@ -90,7 +90,7 @@ See `lib/keys.ml` for the source of truth. Summary:
 | ^M | Minimap (Kitty protocol only) |
 | F1 | Help (scrollable) |
 | F2 | Print options |
-| F3 | Theme picker |
+| F7 | Theme picker |
 | F4 | Reload from disk |
 | F5 | Build menu |
 | F6 | Open Claude (in project dir) |

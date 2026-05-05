@@ -44,7 +44,7 @@ let text = {|
   ^T             Printing options panel
   F1             This help screen
   F2             Toggle minimap
-  F3             Change color theme
+  F7             Change color theme
   F4             Reload from disk (prompts if dirty)
   F5             Build menu (make file/all/deps)
   Drag borders   Resize panes
@@ -62,7 +62,7 @@ let text = {|
              ESC e x  ∃     ESC | -  ⊢
 
   ─── Themes ───────────────────────────────────
-  F3 to switch themes, or -theme NAME on command line:
+  F7 to switch themes, or -theme NAME on command line:
     solarized-dark  solarized-light  classic
     monokai  nord
 

@@ -478,7 +478,7 @@ let render_theme_bar (ctx : Editor_context.t) r =
     let marker = if name = ctx.theme_name then "*" else "" in
     Printf.sprintf "[%c]%s%s" key name marker
   ) Theme.available in
-  Render.set_status r (String.concat "  " parts ^ "  F3:close")
+  Render.set_status r (String.concat "  " parts ^ "  " ^ Keys.theme_menu.display ^ ":close")
 
 let render_build_bar r =
   let running = Build.is_running () in
