@@ -79,6 +79,8 @@ See `lib/keys.ml` for the source of truth. Summary:
 | ^X | Exit all |
 | ^C | Copy (also to system clipboard) |
 | ^N | New tab |
+| ^F | Find / re-open search prompt |
+| F3 / Shift+F3 | Next / previous match (with active search) |
 | ^B | Jump back |
 | ^L | Jump to definition |
 | ^E | Go to cursor (set target) |

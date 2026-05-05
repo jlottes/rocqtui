@@ -225,6 +225,17 @@ let append_to_query (tab : Tab.t) text =
   Tab.set_search tab (Some (Search.update_query s buf (s.query ^ text)));
   move_cursor_to_current tab
 
+let search_advance (tab : Tab.t) dir =
+  match Tab.search_state tab with
+  | Some s ->
+    let s' = match dir with
+      | `Next -> Search.next s
+      | `Prev -> Search.prev s
+    in
+    Tab.set_search tab (Some s');
+    move_cursor_to_current tab
+  | None -> ()
+
 let handle_search_prompt (ctx : Editor_context.t) ev (tab : Tab.t) =
   let buf = tab.buf in
   let with_state f =
@@ -271,8 +282,11 @@ let handle_search_prompt (ctx : Editor_context.t) ev (tab : Tab.t) =
   | Input.Key (cp, m) when m.alt && cp = Char.code 'r' ->
     with_state Search.toggle_regex
 
-  | Input.Special (Input.F 3, m) ->
-    with_state (fun s _ -> if m.shift then Search.prev s else Search.next s)
+  | ev when Keymatch.match_binding ev Keys.search_next ->
+    search_advance tab `Next; Some Continue
+
+  | ev when Keymatch.match_binding ev Keys.search_prev ->
+    search_advance tab `Prev; Some Continue
 
   (* Printable codepoint (ASCII or UTF-8): append to the query. *)
   | Input.Key (cp, m)

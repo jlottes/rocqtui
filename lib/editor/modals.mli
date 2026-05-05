@@ -48,3 +48,8 @@ val handle_help :
     event — caller never needs to fall through. *)
 val handle_search_prompt :
   Editor_context.t -> Input.event -> Tab.t -> Action.action option
+
+(** Advance the tab's current match in the given direction and move the
+    buffer cursor to it. No-op if search is inactive on this tab. Used
+    by both the search prompt and the global F3 / Shift+F3 bindings. *)
+val search_advance : Tab.t -> [ `Next | `Prev ] -> unit

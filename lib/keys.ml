@@ -127,6 +127,14 @@ let search = {
   name = "search"; codes = [ctrl 'f']; kitty_codes = []; display = "^F";
   context = Global; description = "Find" }
 
+let search_next = {
+  name = "search_next"; codes = [267]; kitty_codes = []; display = "F3";
+  context = Global; description = "Find next" }
+
+let search_prev = {
+  name = "search_prev"; codes = []; kitty_codes = [(267, 2)];
+  display = "Shift+F3"; context = Global; description = "Find previous" }
+
 let prev_tab = {
   name = "prev_tab"; codes = [552]; kitty_codes = []; display = "Alt+Left";
   context = Global; description = "Prev tab" }
@@ -325,6 +333,27 @@ let generate_help () =
     new_tab;
     { close_tab with description = "Close tab (exit if last)" };
     prev_tab; next_tab;
+  ];
+  section "Search" [
+    { search with description = "Open / re-open search prompt" };
+    { search_next with description = "Next match (also in prompt)" };
+    { search_prev with description = "Previous match (also in prompt)" };
+    { (let b = { name="search_toggle_case"; codes=[]; kitty_codes=[];
+                 display="Alt+C"; context=Global;
+                 description="Toggle case (in prompt; smart-case otherwise)" } in b)
+      with name = "search_toggle_case" };
+    { (let b = { name="search_toggle_regex"; codes=[]; kitty_codes=[];
+                 display="Alt+R"; context=Global;
+                 description="Toggle regex (in prompt)" } in b)
+      with name = "search_toggle_regex" };
+    { (let b = { name="search_accept"; codes=[]; kitty_codes=[];
+                 display="Enter"; context=Global;
+                 description="Close prompt, keep search active" } in b)
+      with name = "search_accept" };
+    { (let b = { name="search_cancel"; codes=[]; kitty_codes=[];
+                 display="^G"; context=Global;
+                 description="Cancel search (in prompt; restores cursor)" } in b)
+      with name = "search_cancel" };
   ];
   Stdlib.Buffer.add_string buf "\n  ─── Compose (ESC) ";
   for _ = 1 to 25 do Stdlib.Buffer.add_string buf "─" done;
