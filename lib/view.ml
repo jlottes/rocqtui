@@ -429,6 +429,24 @@ let render_script (ctx : Editor_context.t) r (tab : Tab.t) =
    | Some (sel_start, sel_end) ->
      overlay_range sel_start sel_end a.ga_selection
    | None -> ());
+  (* Overlay search matches: all matches with the subtle attr first,
+     then the current match on top with the high-contrast attr. *)
+  (match Tab.search_state tab with
+   | Some s when Array.length s.matches > 0 ->
+     let overlay_match (m : Search.match_) attr =
+       let row = m.start_.line - scroll in
+       if row >= 0 && row < rows
+          && m.start_.line = m.end_.line
+          && m.start_.line < Buffer.line_count buf then
+         chgat_byte_range r Render.PScript
+           (Buffer.get_line buf m.start_.line)
+           row hscroll cols m.start_.col m.end_.col attr
+     in
+     Array.iter (fun m -> overlay_match m a.ga_search_match) s.matches;
+     (match Search.current_match s with
+      | Some m -> overlay_match m a.ga_search_current
+      | None -> ())
+   | _ -> ());
   (* Minimap -- render into the minimap pane *)
   if Render.minimap_width r > 0 then begin
     let mm_rect = Render.pane_rect r Render.PMinimap in
@@ -494,20 +512,36 @@ let render_build_bar r =
   in
   Render.set_status r text
 
-let render_search_bar (tab : Tab.t) r =
+let render_search_bar (ctx : Editor_context.t) (tab : Tab.t) r =
   let s = Tab.search_state tab in
-  let query, count, idx =
+  let query, count, idx, case_insensitive, regex =
     match s with
-    | None -> "", 0, 0
+    | None -> "", 0, 0, true, false
     | Some s ->
       s.query, Array.length s.matches,
-      (if s.current >= 0 then s.current + 1 else 0)
+      (if s.current >= 0 then s.current + 1 else 0),
+      Search.is_case_insensitive ~query:s.query ~flags:s.flags,
+      s.flags.regex
   in
   let counter =
-    if count = 0 && query = "" then ""
+    if count = 0 && query = "" then "       "  (* keep alignment *)
     else Printf.sprintf "  %d/%d" idx count
   in
-  Render.set_status r (Printf.sprintf "Search: %s%s" query counter)
+  let case_ind = if case_insensitive then "[aa]" else "[Aa]" in
+  let regex_ind = if regex then "[.*]" else "[..]" in
+  let compose_ind =
+    match ctx.compose with
+    | Some cs when Compose.active cs ->
+      let typed =
+        String.concat "" (List.map key_to_string (Compose.keys_so_far cs))
+      in
+      if typed = "" then "  [c]"
+      else Printf.sprintf "  [c: %s]" typed
+    | _ -> ""
+  in
+  Render.set_status r
+    (Printf.sprintf "Search: %s%s  %s %s%s"
+       query counter case_ind regex_ind compose_ind)
 
 let render_options_bar r =
   let parts = List.map (fun (e : Printopts.entry) ->
@@ -526,7 +560,7 @@ let update_status (ctx : Editor_context.t) r (tab : Tab.t) =
   | Some (Modal.Prompt p) ->
     Render.set_status r p.message
   | Some Modal.SearchPrompt ->
-    render_search_bar tab r
+    render_search_bar ctx tab r
   | _ ->
   if is_help ctx then
     Render.set_status r "F1:close  Up/Down/PgUp/PgDn:scroll  any other key:close"

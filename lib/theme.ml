@@ -21,6 +21,11 @@ type t = {
   border_fg : color;
   selection_bg : color;
   selection_fg : color;
+
+  (* Search-match overlays *)
+  search_match_bg : color;
+  search_current_bg : color;
+  search_current_fg : color;
 }
 
 (* Shorthand constructors *)
@@ -67,6 +72,9 @@ let solarized_dark = {
   border_fg = sol_base01;
   selection_bg = sol_base01;
   selection_fg = sol_base03;
+  search_match_bg = sol_base02;
+  search_current_bg = sol_yellow;
+  search_current_fg = sol_base03;
 }
 
 let solarized_light = {
@@ -90,6 +98,9 @@ let solarized_light = {
   border_fg = sol_base1;
   selection_bg = sol_base1;
   selection_fg = c 230;
+  search_match_bg = c 254;  (* sol_base2 — subtle warm tint *)
+  search_current_bg = sol_yellow;
+  search_current_fg = sol_base03;
 }
 
 (* Classic: basic 8-color theme, works on any terminal *)
@@ -114,6 +125,9 @@ let classic = {
   border_fg = c 6;    (* cyan *)
   selection_bg = c 4;  (* blue *)
   selection_fg = c 7;  (* white *)
+  search_match_bg = c 6;  (* cyan *)
+  search_current_bg = c 3;  (* yellow *)
+  search_current_fg = c 0;  (* black *)
 }
 
 (* Monokai-inspired *)
@@ -138,6 +152,9 @@ let monokai = {
   border_fg = c 245;
   selection_bg = c 239;
   selection_fg = c 255;
+  search_match_bg = c 238;
+  search_current_bg = c 220;  (* yellow *)
+  search_current_fg = c 235;
 }
 
 (* Nord *)
@@ -162,6 +179,9 @@ let nord = {
   border_fg = c 60;
   selection_bg = c 60;
   selection_fg = c 253;
+  search_match_bg = c 59;
+  search_current_bg = c 179;  (* warm yellow *)
+  search_current_fg = c 236;
 }
 
 let default = solarized_dark
@@ -210,6 +230,8 @@ type grid_attrs = {
   ga_status : Grid.attr;
   ga_border : Grid.attr;
   ga_selection : Grid.attr;
+  ga_search_match : Grid.attr;
+  ga_search_current : Grid.attr;
   ga_tab_active : Grid.attr;
   ga_tab_inactive : Grid.attr;
 }
@@ -248,6 +270,8 @@ let grid_attrs_of_theme (theme : t) : grid_attrs =
     ga_status = a theme.status_fg theme.status_bg;
     ga_border = a theme.border_fg theme.bg;
     ga_selection = a theme.selection_fg theme.selection_bg;
+    ga_search_match = a theme.default_fg theme.search_match_bg;
+    ga_search_current = ab theme.search_current_fg theme.search_current_bg;
     ga_tab_active = ab theme.status_fg theme.status_bg;
     ga_tab_inactive = a theme.border_fg theme.status_bg;
   }

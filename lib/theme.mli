@@ -38,6 +38,11 @@ type t = {
   (* Selection *)
   selection_bg : color;
   selection_fg : color;
+
+  (* Search match overlays *)
+  search_match_bg : color;
+  search_current_bg : color;
+  search_current_fg : color;
 }
 
 (** List of available theme names. *)
@@ -81,6 +86,8 @@ type grid_attrs = {
   ga_status : Grid.attr;
   ga_border : Grid.attr;
   ga_selection : Grid.attr;
+  ga_search_match : Grid.attr;
+  ga_search_current : Grid.attr;
   ga_tab_active : Grid.attr;
   ga_tab_inactive : Grid.attr;
 }
