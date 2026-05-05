@@ -87,3 +87,24 @@ let col_to_byte s target_col =
 
 let string_width s =
   byte_to_col s (String.length s)
+
+let encode cp =
+  if cp < 0x80 then String.make 1 (Char.chr cp)
+  else if cp < 0x800 then
+    let b = Bytes.create 2 in
+    Bytes.set b 0 (Char.chr (0xC0 lor (cp lsr 6)));
+    Bytes.set b 1 (Char.chr (0x80 lor (cp land 0x3F)));
+    Bytes.to_string b
+  else if cp < 0x10000 then
+    let b = Bytes.create 3 in
+    Bytes.set b 0 (Char.chr (0xE0 lor (cp lsr 12)));
+    Bytes.set b 1 (Char.chr (0x80 lor ((cp lsr 6) land 0x3F)));
+    Bytes.set b 2 (Char.chr (0x80 lor (cp land 0x3F)));
+    Bytes.to_string b
+  else
+    let b = Bytes.create 4 in
+    Bytes.set b 0 (Char.chr (0xF0 lor (cp lsr 18)));
+    Bytes.set b 1 (Char.chr (0x80 lor ((cp lsr 12) land 0x3F)));
+    Bytes.set b 2 (Char.chr (0x80 lor ((cp lsr 6) land 0x3F)));
+    Bytes.set b 3 (Char.chr (0x80 lor (cp land 0x3F)));
+    Bytes.to_string b

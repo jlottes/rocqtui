@@ -494,6 +494,21 @@ let render_build_bar r =
   in
   Render.set_status r text
 
+let render_search_bar (tab : Tab.t) r =
+  let s = Tab.search_state tab in
+  let query, count, idx =
+    match s with
+    | None -> "", 0, 0
+    | Some s ->
+      s.query, Array.length s.matches,
+      (if s.current >= 0 then s.current + 1 else 0)
+  in
+  let counter =
+    if count = 0 && query = "" then ""
+    else Printf.sprintf "  %d/%d" idx count
+  in
+  Render.set_status r (Printf.sprintf "Search: %s%s" query counter)
+
 let render_options_bar r =
   let parts = List.map (fun (e : Printopts.entry) ->
     if e.enabled then
@@ -510,6 +525,8 @@ let update_status (ctx : Editor_context.t) r (tab : Tab.t) =
   match Modal.top ctx.modal with
   | Some (Modal.Prompt p) ->
     Render.set_status r p.message
+  | Some Modal.SearchPrompt ->
+    render_search_bar tab r
   | _ ->
   if is_help ctx then
     Render.set_status r "F1:close  Up/Down/PgUp/PgDn:scroll  any other key:close"

@@ -123,6 +123,10 @@ let new_tab = {
   name = "new_tab"; codes = [ctrl 'n']; kitty_codes = []; display = "^N";
   context = Global; description = "New tab" }
 
+let search = {
+  name = "search"; codes = [ctrl 'f']; kitty_codes = []; display = "^F";
+  context = Global; description = "Find" }
+
 let prev_tab = {
   name = "prev_tab"; codes = [552]; kitty_codes = []; display = "Alt+Left";
   context = Global; description = "Prev tab" }

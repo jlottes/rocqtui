@@ -38,18 +38,32 @@ let handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r =
          let result = Compose.feed cs cp in
          (match result with
           | Compose.Pending ->
-            Render.set_status r (View.format_compose_status r cs);
-            Render.present r
+            (* Skip the bottom-bar compose status when SearchPrompt is
+               on top — leave the prompt visible. Phase 4 will render
+               the compose indicator inline within the prompt. *)
+            (match Modal.top ctx.modal with
+             | Some Modal.SearchPrompt -> ()
+             | _ ->
+               Render.set_status r (View.format_compose_status r cs);
+               Render.present r)
           | Compose.Composed text ->
-            if term_focused then begin
-              (* Send composed text to terminal *)
-              let active_mt = Tab.active_msg_tab tab.msg in
-              (match active_mt.mt_terminal with
-               | Some term -> Terminal.send term text
-               | None -> ())
-            end else if not (Region_buffer.locked tab.rb) then begin
-              ignore (Region_buffer.try_replace_selection tab.rb text)
-            end
+            (match Modal.top ctx.modal with
+             | Some Modal.SearchPrompt ->
+               (* Append composed text to the search query. *)
+               let s = match Tab.search_state tab with
+                 | Some s -> s
+                 | None -> Search.create tab.buf in
+               Tab.set_search tab
+                 (Some (Search.update_query s tab.buf (s.query ^ text)))
+             | _ ->
+               if term_focused then begin
+                 let active_mt = Tab.active_msg_tab tab.msg in
+                 (match active_mt.mt_terminal with
+                  | Some term -> Terminal.send term text
+                  | None -> ())
+               end else if not (Region_buffer.locked tab.rb) then begin
+                 ignore (Region_buffer.try_replace_selection tab.rb text)
+               end)
           | Compose.NoMatch ->
             if term_focused then begin
               (* Double-ESC: send ESC to terminal *)
@@ -77,6 +91,7 @@ let handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r =
   else
   let prompt_action = match Modal.top ctx.modal with
     | Some (Modal.Prompt p) -> Modals.handle_prompt ctx p.handler ev
+    | Some Modal.SearchPrompt -> Modals.handle_search_prompt ctx ev tab
     | _ -> None
   in
   match prompt_action with
@@ -204,6 +219,13 @@ let handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r =
          Modal.push ctx.modal (Modal.FilePicker fp)
        | None ->
          Render.set_status r "No _RocqProject found.");
+      Some Continue
+    end
+    else if Keymatch.match_binding ev Keys.search then begin
+      (match Tab.search_state tab with
+       | None -> Tab.set_search tab (Some (Search.create tab.buf))
+       | Some _ -> ());
+      Modal.push ctx.modal Modal.SearchPrompt;
       Some Continue
     end
     else if Keymatch.match_binding ev Keys.interrupt then begin

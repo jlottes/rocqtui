@@ -48,6 +48,7 @@ val redo : binding
 val new_tab : binding
 val prev_tab : binding
 val next_tab : binding
+val search : binding
 val cut : binding
 val paste : binding
 val help : binding

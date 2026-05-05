@@ -11,6 +11,9 @@ type kind =
       message : string;
       handler : Input.event -> prompt_result;
     }
+  | SearchPrompt
+    (* No payload: the search state lives on Tab.t (per-tab persistence).
+       Dispatched via Editor.Modals.handle_search_prompt. *)
 
 and prompt_result =
   | Handled    (* prompt consumed the event, dismiss *)
@@ -46,6 +49,7 @@ let same_kind a b =
   | BuildMenu, BuildMenu -> true
   | FilePicker _, FilePicker _ -> true
   | Prompt _, Prompt _ -> true
+  | SearchPrompt, SearchPrompt -> true
   | _ -> false
 
 let toggle t kind =

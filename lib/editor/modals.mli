@@ -41,3 +41,10 @@ val handle_query :
 (** While Help is open: scroll keys, mouse wheel, or close. *)
 val handle_help :
   Editor_context.t -> Input.event -> Render.t -> Action.action option
+
+(** While SearchPrompt is open: edit the query, navigate matches, toggle
+    flags. ESC starts compose (handled at the editor's compose layer);
+    [^G] cancels and restores the saved cursor. The prompt absorbs every
+    event — caller never needs to fall through. *)
+val handle_search_prompt :
+  Editor_context.t -> Input.event -> Tab.t -> Action.action option

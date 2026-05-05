@@ -16,6 +16,10 @@ type kind =
       message : string;
       handler : Input.event -> prompt_result;
     }
+  | SearchPrompt
+    (** The search prompt — incremental search bar at the bottom of the
+        screen. The search state itself lives on [Tab.t]. The
+        dispatcher is [Editor.Modals.handle_search_prompt]. *)
 
 type t
 

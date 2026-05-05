@@ -14,6 +14,9 @@ val codepoint_width : int -> int
 (** Display width of a UTF-8 string (sum of codepoint widths). *)
 val string_width : string -> int
 
+(** Encode a Unicode codepoint as a UTF-8 string. *)
+val encode : int -> string
+
 (** Byte offset of the next codepoint after byte offset [i].
     Returns [String.length s] if at end. *)
 val next : string -> int -> int

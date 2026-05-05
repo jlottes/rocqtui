@@ -24,27 +24,6 @@ let insert_string (tab : Tab.t) s =
   if not (Region_buffer.locked tab.rb) then
     ignore (Region_buffer.try_replace_selection tab.rb s)
 
-let encode_codepoint cp =
-  if cp < 128 then String.make 1 (Char.chr cp)
-  else if cp < 0x800 then
-    let b = Bytes.create 2 in
-    Bytes.set b 0 (Char.chr (0xC0 lor (cp lsr 6)));
-    Bytes.set b 1 (Char.chr (0x80 lor (cp land 0x3F)));
-    Bytes.to_string b
-  else if cp < 0x10000 then
-    let b = Bytes.create 3 in
-    Bytes.set b 0 (Char.chr (0xE0 lor (cp lsr 12)));
-    Bytes.set b 1 (Char.chr (0x80 lor ((cp lsr 6) land 0x3F)));
-    Bytes.set b 2 (Char.chr (0x80 lor (cp land 0x3F)));
-    Bytes.to_string b
-  else
-    let b = Bytes.create 4 in
-    Bytes.set b 0 (Char.chr (0xF0 lor (cp lsr 18)));
-    Bytes.set b 1 (Char.chr (0x80 lor ((cp lsr 12) land 0x3F)));
-    Bytes.set b 2 (Char.chr (0x80 lor ((cp lsr 6) land 0x3F)));
-    Bytes.set b 3 (Char.chr (0x80 lor (cp land 0x3F)));
-    Bytes.to_string b
-
 let handle (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r =
   let buf = tab.buf in
   let session = tab.session in
@@ -188,7 +167,7 @@ let handle (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r =
   | Input.Key (cp, mods) when cp >= 32 && not mods.ctrl && not mods.alt ->
     let inserted_text =
       if cp < 128 then String.make 1 (Char.chr cp)
-      else encode_codepoint cp
+      else Utf8.encode cp
     in
     (match Region_buffer.try_replace_selection tab.rb inserted_text with
      | Region_buffer.Applied ->

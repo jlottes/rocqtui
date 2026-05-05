@@ -203,6 +203,85 @@ let handle_query (ctx : Editor_context.t) ev (tab : Tab.t) =
     in
     if handled then Some Continue else None
 
+(* Move the buffer cursor to the current match, if any. Called after
+   any operation that changes [current] so the user sees where the
+   match is. *)
+let move_cursor_to_current (tab : Tab.t) =
+  match Tab.search_state tab with
+  | Some s ->
+    (match Search.current_match s with
+     | Some m -> Buffer.move_to tab.buf m.start_.line m.start_.col
+     | None -> ())
+  | None -> ()
+
+(* Append a string to the search query, recompute matches. Initializes
+   a fresh state if search wasn't active. *)
+let append_to_query (tab : Tab.t) text =
+  let buf = tab.buf in
+  let s = match Tab.search_state tab with
+    | Some s -> s
+    | None -> Search.create buf
+  in
+  Tab.set_search tab (Some (Search.update_query s buf (s.query ^ text)));
+  move_cursor_to_current tab
+
+let handle_search_prompt (ctx : Editor_context.t) ev (tab : Tab.t) =
+  let buf = tab.buf in
+  let with_state f =
+    (match Tab.search_state tab with
+     | Some s -> Tab.set_search tab (Some (f s buf))
+     | None -> ());
+    move_cursor_to_current tab;
+    Some Continue
+  in
+  match ev with
+  | Input.Special (Input.Enter, _) ->
+    Modal.pop ctx.modal;
+    Some Continue
+
+  | Input.Special (Input.Escape, _) ->
+    (* Start compose; subsequent keys feed the compose layer until it
+       resolves. The editor's compose handler routes the composed text
+       back into the query when SearchPrompt is on top. *)
+    (match ctx.compose with
+     | Some cs -> Compose.start cs
+     | None -> ());
+    Some Continue
+
+  | Input.Special (Input.Backspace, _) ->
+    with_state (fun s buf ->
+      if s.query = "" then s
+      else
+        let len = String.length s.query in
+        let prev_off = Utf8.prev s.query len in
+        Search.update_query s buf (String.sub s.query 0 prev_off))
+
+  (* ^G cancels the prompt: restore cursor, drop search state. *)
+  | Input.Key (cp, m) when m.ctrl && cp = Char.code 'g' ->
+    (match Tab.search_state tab with
+     | Some s -> Buffer.move_to buf s.saved_cursor.line s.saved_cursor.col
+     | None -> ());
+    Tab.set_search tab None;
+    Modal.pop ctx.modal;
+    Some Continue
+
+  | Input.Key (cp, m) when m.alt && cp = Char.code 'c' ->
+    with_state Search.toggle_case
+
+  | Input.Key (cp, m) when m.alt && cp = Char.code 'r' ->
+    with_state Search.toggle_regex
+
+  | Input.Special (Input.F 3, m) ->
+    with_state (fun s _ -> if m.shift then Search.prev s else Search.next s)
+
+  (* Printable codepoint (ASCII or UTF-8): append to the query. *)
+  | Input.Key (cp, m)
+    when not m.ctrl && not m.alt && cp >= 32 && cp <> 127 ->
+    append_to_query tab (Utf8.encode cp);
+    Some Continue
+
+  | _ -> Some Continue
+
 let handle_help (ctx : Editor_context.t) ev r =
   let (rows, _) = Render.pane_dims r Render.PScript in
   let n = List.length View.help_lines in
