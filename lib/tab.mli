@@ -27,6 +27,7 @@ type msg_tabs = {
 type t = {
   id : int;
   buf : Buffer.t;
+  rb : Region_buffer.t;  (** Edit gateway. Owns the lock state. *)
   mutable session : Session.t option;
   session_args : string list;
   mutable focused_pane : [`Script | `Goals | `Messages];
@@ -37,7 +38,6 @@ type t = {
   goals_sel : pane_selection;
   mutable goals_lines_cache : string list;
   msg : msg_tabs;
-  mutable locked : bool;
 }
 
 type manager = {

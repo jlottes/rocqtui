@@ -530,7 +530,7 @@ let handle_resource _t uri mgr =
           | Session.Error msg -> "error: " ^ msg);
       ]
     ) ranges in
-    let locked = tab.Tab.locked in
+    let locked = Region_buffer.locked tab.Tab.rb in
     let state_json = `Assoc [
       "buffer", `String (Buffer.text tab.buf);
       "verified_end", `Int vend;
@@ -601,6 +601,33 @@ let edit_prologue (tab : Tab.t) =
   | Some s -> Session.clear_error s
   | None -> ()
 
+(* Convert a Region_buffer rejection into a structured tool error.
+   The [rejection_reason] field is part of the public MCP contract so
+   downstream bridges can switch on it without parsing the message. *)
+let rejection_reason_str (r : Region_buffer.reject_reason) =
+  match r with
+  | Region_buffer.In_verified_region -> "in_verified_region"
+  | Region_buffer.Erodes_boundary -> "erodes_boundary"
+  | Region_buffer.In_pending_region -> "in_pending_region"
+
+let rejection_message (r : Region_buffer.reject_reason) =
+  match r with
+  | Region_buffer.In_verified_region ->
+    "Edit overlaps the verified region. Step backward (^B) or rewind first."
+  | Region_buffer.Erodes_boundary ->
+    "Edit would erode the sentence boundary at the verified end."
+  | Region_buffer.In_pending_region ->
+    "Edit overlaps the pending region. Wait for verification to finish or step back."
+
+let rejection_response reason =
+  (false, `Assoc [
+    "content", `List [
+      `Assoc ["type", `String "text";
+              "text", `String (rejection_message reason)]];
+    "isError", `Bool true;
+    "rejection_reason", `String (rejection_reason_str reason);
+  ])
+
 (* --- Tool handlers --- *)
 
 let resolve_tab args mgr =
@@ -650,32 +677,27 @@ let handle_tool t client name args mgr =
     let offset = args |> Yojson.Safe.Util.member "offset" |> to_int_lenient in
     let text = args |> Yojson.Safe.Util.member "text" |> Yojson.Safe.Util.to_string in
     edit_prologue tab;
-    Buffer.move_to_byte_offset tab.buf offset;
-    String.iter (fun c ->
-      if c = '\n' then Buffer.insert_newline tab.buf
-      else Buffer.insert_char tab.buf c
-    ) text;
-    let ctx = edit_context tab.buf offset (String.length text) in
-    (true, `Assoc ["content", `List [
-      `Assoc ["type", `String "text"; "text", `String ctx]
-    ]])
+    (match Region_buffer.try_replace
+             tab.Tab.rb ~start:offset ~old_end:offset text with
+     | Region_buffer.Applied ->
+       let ctx = edit_context tab.buf offset (String.length text) in
+       (true, `Assoc ["content", `List [
+         `Assoc ["type", `String "text"; "text", `String ctx]
+       ]])
+     | Region_buffer.Rejected r -> rejection_response r)
   | "replace_range" ->
     let s = args |> Yojson.Safe.Util.member "start" |> to_int_lenient in
     let e = args |> Yojson.Safe.Util.member "end" |> to_int_lenient in
     let text = args |> Yojson.Safe.Util.member "text" |> Yojson.Safe.Util.to_string in
     edit_prologue tab;
-    Buffer.move_to_byte_offset tab.buf s;
-    Buffer.set_anchor tab.buf;
-    Buffer.move_to_byte_offset tab.buf e;
-    ignore (Buffer.delete_selection tab.buf);
-    String.iter (fun c ->
-      if c = '\n' then Buffer.insert_newline tab.buf
-      else Buffer.insert_char tab.buf c
-    ) text;
-    let ctx = edit_context tab.buf s (String.length text) in
-    (true, `Assoc ["content", `List [
-      `Assoc ["type", `String "text"; "text", `String ctx]
-    ]])
+    (match Region_buffer.try_replace
+             tab.Tab.rb ~start:s ~old_end:e text with
+     | Region_buffer.Applied ->
+       let ctx = edit_context tab.buf s (String.length text) in
+       (true, `Assoc ["content", `List [
+         `Assoc ["type", `String "text"; "text", `String ctx]
+       ]])
+     | Region_buffer.Rejected r -> rejection_response r)
   | "move_cursor" ->
     let line = args |> Yojson.Safe.Util.member "line" |> to_int_lenient in
     let col = args |> Yojson.Safe.Util.member "col" |> to_int_lenient in
@@ -783,14 +805,14 @@ let handle_tool t client name args mgr =
     let s = args |> Yojson.Safe.Util.member "start" |> to_int_lenient in
     let e = args |> Yojson.Safe.Util.member "end" |> to_int_lenient in
     edit_prologue tab;
-    Buffer.move_to_byte_offset tab.buf s;
-    Buffer.set_anchor tab.buf;
-    Buffer.move_to_byte_offset tab.buf e;
-    ignore (Buffer.delete_selection tab.buf);
-    let ctx = edit_context tab.buf s 0 in
-    (true, `Assoc ["content", `List [
-      `Assoc ["type", `String "text"; "text", `String ctx]
-    ]])
+    (match Region_buffer.try_replace
+             tab.Tab.rb ~start:s ~old_end:e "" with
+     | Region_buffer.Applied ->
+       let ctx = edit_context tab.buf s 0 in
+       (true, `Assoc ["content", `List [
+         `Assoc ["type", `String "text"; "text", `String ctx]
+       ]])
+     | Region_buffer.Rejected r -> rejection_response r)
   | "open_file" ->
     let filename = args |> Yojson.Safe.Util.member "filename"
                    |> Yojson.Safe.Util.to_string in
@@ -826,15 +848,19 @@ let handle_tool t client name args mgr =
            ]))]
        ]]))
   | "undo" ->
-    Buffer.undo tab.buf;
-    (true, `Assoc ["content", `List [
-      `Assoc ["type", `String "text"; "text", `String "OK"]
-    ]])
+    (match Region_buffer.try_undo tab.Tab.rb with
+     | Region_buffer.Applied ->
+       (true, `Assoc ["content", `List [
+         `Assoc ["type", `String "text"; "text", `String "OK"]
+       ]])
+     | Region_buffer.Rejected r -> rejection_response r)
   | "redo" ->
-    Buffer.redo tab.buf;
-    (true, `Assoc ["content", `List [
-      `Assoc ["type", `String "text"; "text", `String "OK"]
-    ]])
+    (match Region_buffer.try_redo tab.Tab.rb with
+     | Region_buffer.Applied ->
+       (true, `Assoc ["content", `List [
+         `Assoc ["type", `String "text"; "text", `String "OK"]
+       ]])
+     | Region_buffer.Rejected r -> rejection_response r)
   | "offset_of_line" ->
     let line = args |> Yojson.Safe.Util.member "line"
                |> to_int_lenient in
@@ -884,20 +910,22 @@ let handle_tool t client name args mgr =
     (* Sort by start offset descending so earlier offsets stay valid *)
     let sorted = List.sort (fun (a, _, _) (b, _, _) -> compare b a) parsed in
     edit_prologue tab;
-    (* Apply each edit *)
-    List.iter (fun (s, e, text) ->
-      Buffer.move_to_byte_offset tab.buf s;
-      Buffer.set_anchor tab.buf;
-      Buffer.move_to_byte_offset tab.buf e;
-      ignore (Buffer.delete_selection tab.buf);
-      String.iter (fun c ->
-        if c = '\n' then Buffer.insert_newline tab.buf
-        else Buffer.insert_char tab.buf c
-      ) text
-    ) sorted;
-    (true, `Assoc ["content", `List [
-      `Assoc ["type", `String "text"; "text", `String "OK"]
-    ]])
+    (* Apply each edit; stop on first rejection. Earlier edits remain
+       applied — caller sees partial state plus the rejection reason. *)
+    let rec apply_all = function
+      | [] -> None
+      | (s, e, text) :: rest ->
+        match Region_buffer.try_replace
+                tab.Tab.rb ~start:s ~old_end:e text with
+        | Region_buffer.Applied -> apply_all rest
+        | Region_buffer.Rejected r -> Some r
+    in
+    (match apply_all sorted with
+     | None ->
+       (true, `Assoc ["content", `List [
+         `Assoc ["type", `String "text"; "text", `String "OK"]
+       ]])
+     | Some r -> rejection_response r)
   | "replace_text" ->
     let old_text = args |> Yojson.Safe.Util.member "old_text"
                    |> Yojson.Safe.Util.to_string in
@@ -945,29 +973,32 @@ let handle_tool t client name args mgr =
           (* Apply replacements in reverse order so offsets stay valid *)
           let sorted = List.sort (fun a b -> compare b a) to_replace in
           edit_prologue tab;
-          List.iter (fun pos ->
-            Buffer.move_to_byte_offset tab.buf pos;
-            Buffer.set_anchor tab.buf;
-            Buffer.move_to_byte_offset tab.buf (pos + old_len);
-            ignore (Buffer.delete_selection tab.buf);
-            String.iter (fun c ->
-              if c = '\n' then Buffer.insert_newline tab.buf
-              else Buffer.insert_char tab.buf c
-            ) new_text
-          ) sorted;
-          let n_replaced = List.length to_replace in
-          (* Return context around the first replacement for verification *)
-          let first_pos = List.nth (List.rev sorted) 0 in
-          let ctx_start = max 0 (first_pos - 20) in
-          let new_buf = Buffer.text tab.buf in
-          let ctx_end = min (String.length new_buf)
-                          (first_pos + String.length new_text + 20) in
-          let context = String.sub new_buf ctx_start (ctx_end - ctx_start) in
-          (true, `Assoc ["content", `List [
-            `Assoc ["type", `String "text"; "text",
-              `String (Printf.sprintf "Replaced %d occurrence(s). Context:\n...%s..."
-                         n_replaced context)]
-          ]])
+          let rejection = ref None in
+          let rec apply = function
+            | [] -> ()
+            | pos :: rest ->
+              match Region_buffer.try_replace tab.Tab.rb
+                      ~start:pos ~old_end:(pos + old_len) new_text with
+              | Region_buffer.Applied -> apply rest
+              | Region_buffer.Rejected r -> rejection := Some r
+          in
+          apply sorted;
+          (match !rejection with
+           | Some r -> rejection_response r
+           | None ->
+             let n_replaced = List.length to_replace in
+             (* Return context around the first replacement *)
+             let first_pos = List.nth (List.rev sorted) 0 in
+             let ctx_start = max 0 (first_pos - 20) in
+             let new_buf = Buffer.text tab.buf in
+             let ctx_end = min (String.length new_buf)
+                             (first_pos + String.length new_text + 20) in
+             let context = String.sub new_buf ctx_start (ctx_end - ctx_start) in
+             (true, `Assoc ["content", `List [
+               `Assoc ["type", `String "text"; "text",
+                 `String (Printf.sprintf "Replaced %d occurrence(s). Context:\n...%s..."
+                            n_replaced context)]
+             ]]))
         end
       end
     end
@@ -1023,12 +1054,12 @@ let handle_tool t client name args mgr =
         `String (if busy then "true" else "false")]
     ]])
   | "lock" ->
-    if tab.locked then
+    if Region_buffer.locked tab.Tab.rb then
       (false, `Assoc ["content", `List [
         `Assoc ["type", `String "text"; "text", `String "Already locked"]
       ]; "isError", `Bool true])
     else begin
-      tab.Tab.locked <- true;
+      Region_buffer.lock tab.Tab.rb;
       t.locked_tabs <- (tab_idx, client.id) :: t.locked_tabs;
       (true, `Assoc ["content", `List [
         `Assoc ["type", `String "text"; "text", `String "OK"]
@@ -1042,7 +1073,7 @@ let handle_tool t client name args mgr =
         not (tid = tab_idx && cid = client.id)) t.locked_tabs;
       (* Only unlock the tab if no other client holds a lock on it *)
       if not (List.exists (fun (tid, _) -> tid = tab_idx) t.locked_tabs) then
-        tab.Tab.locked <- false
+        Region_buffer.unlock tab.Tab.rb
     end;
     (was_locked, `Assoc ["content", `List [
       `Assoc ["type", `String "text"; "text",
@@ -1314,7 +1345,7 @@ let handle_ready t ready_fds mgr =
       (* Unlock the tab if no other client holds a lock on it *)
       if not (List.exists (fun (tid2, _) -> tid2 = tid) t.locked_tabs) then
         match Tab.find_by_id mgr tid with
-        | Some tab -> tab.Tab.locked <- false
+        | Some tab -> Region_buffer.unlock tab.Tab.rb
         | None -> ()
     ) client_locks;
     t.clients <- List.filter (fun c2 -> c2.fd != c.fd) t.clients

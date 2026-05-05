@@ -3,12 +3,7 @@
 
 let load_text_into_buf text =
   let buf = Rocqtui_lib.Buffer.create () in
-  let lines = String.split_on_char '\n' text in
-  List.iteri (fun i line ->
-    String.iter (fun ch -> Rocqtui_lib.Buffer.insert_char buf ch) line;
-    if i < List.length lines - 1 then
-      Rocqtui_lib.Buffer.insert_newline buf
-  ) lines;
+  Rocqtui_lib.Buffer.Unsafe.set_text buf text;
   buf
 
 let color_name c = match c with

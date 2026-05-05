@@ -285,8 +285,9 @@ let handle (ctx : Editor_context.t) (mev : Input.mouse_event) (tab : Tab.t) r =
         | Some (line, byte_col) ->
           Buffer.move_to buf line byte_col;
           (match session with
-           | Some s -> Session.go_to_cursor s
-           | None -> ())
+           | Some s when not (Region_buffer.locked tab.rb) ->
+             Session.go_to_cursor s
+           | _ -> ())
         | None -> ()
       end
       else if has_shift then begin

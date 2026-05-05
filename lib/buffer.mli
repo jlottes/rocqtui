@@ -1,15 +1,14 @@
-(** Text buffer with cursor tracking. *)
+(** Text buffer with cursor tracking.
+
+    All text-mutating operations live in the [Unsafe] sub-module and
+    must only be called from [Region_buffer]. The top-level interface
+    is read-only (plus filename, save, cursor, selection helpers).
+    See [docs/REGION_INVARIANTS.md] for why. *)
 
 type t
 
 (** Create an empty buffer. *)
 val create : unit -> t
-
-(** Load a file into the buffer. *)
-val load_file : string -> t
-
-(** Reload the buffer from its file on disk. Resets undo history. *)
-val reload : t -> unit
 
 (** Save buffer to its file. Returns false if no filename is set. *)
 val save : t -> bool
@@ -63,6 +62,9 @@ val move_page_down : t -> int -> unit
 (** Move cursor to a byte offset in the buffer text. *)
 val move_to_byte_offset : t -> int -> unit
 
+(** Convert the cursor's (line, col) position to a byte offset. *)
+val cursor_byte_offset : t -> int
+
 (** Move cursor to a specific (line, byte_col) position. *)
 val move_to : t -> int -> int -> unit
 
@@ -80,38 +82,10 @@ val selection : t -> (int * int) option
 (** Get the selected text, or None. *)
 val selected_text : t -> string option
 
-(** Delete the selected range and return the deleted text. *)
-val delete_selection : t -> string option
-
-(** Undo/redo. *)
-val undo : t -> unit
-val redo : t -> unit
-
-(** Editing. *)
-val insert_char : t -> char -> unit
-val insert_newline : t -> unit
-
-(** Like [insert_newline], but prefixes the new line with the leading
-    whitespace of the current line (capped at the cursor column). *)
-val insert_newline_auto_indent : t -> unit
-
-(** Prepend [width] spaces to every line covered by the current selection
-    (or the cursor line if no selection). Adjusts cursor and anchor
-    columns to keep them on the same characters. *)
-val indent_lines : t -> int -> unit
-
-(** Remove up to [width] leading spaces from every line covered by the
-    current selection (or the cursor line if no selection). *)
-val unindent_lines : t -> int -> unit
-
-val delete_char_before : t -> unit
-val delete_char_at : t -> unit
-
-(** Cut the current line (nano ^K style: cuts and appends to cut buffer). *)
-val cut_line : t -> unit
-
-(** Paste the cut buffer below the current line. *)
-val paste : t -> unit
+(** Range of lines (inclusive) covered by the current selection, or
+    just the cursor line if there is no selection. Used by line-wise
+    operations and by the region-edit gateway. *)
+val selection_line_range : t -> int * int
 
 (** Ensure cursor is visible given the visible row count. *)
 val ensure_visible : t -> int -> unit
@@ -124,3 +98,37 @@ val select_word_at_cursor : t -> unit
 
 (** Get the full buffer text as a single string. *)
 val text : t -> string
+
+(** Read-only access to the cut buffer (used for paste). *)
+val cut_buffer : t -> string list
+
+(** Compute what [text buf] would be after a successful [undo]
+    (or [redo]), without applying. Returns [None] if the stack is
+    empty. Used by the region-edit gateway to validate invariants
+    before committing. *)
+val peek_undo_text : t -> string option
+val peek_redo_text : t -> string option
+
+(** {1 Unsafe mutators}
+
+    These bypass the region-invariant gateway. Only [Region_buffer]
+    should call them — every other path should go through the gateway
+    so that verified-region/error-region/target invariants are
+    enforced. The [Unsafe] prefix flags this at the call site. *)
+
+module Unsafe : sig
+  val reload : t -> unit
+  val set_text : t -> string -> unit
+  val undo : t -> unit
+  val redo : t -> unit
+  val insert_char : t -> char -> unit
+  val insert_newline : t -> unit
+  val insert_newline_auto_indent : t -> unit
+  val delete_char_before : t -> unit
+  val delete_char_at : t -> unit
+  val delete_selection : t -> string option
+  val cut_line : t -> unit
+  val paste : t -> unit
+  val indent_lines : t -> int -> unit
+  val unindent_lines : t -> int -> unit
+end

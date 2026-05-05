@@ -8,10 +8,14 @@ type file_event =
 
 type t = {
   watcher : File_watch.t;
+  mutable deferred : string list;
+  (* Paths whose change events arrived while a tab was locked by
+     an external client. Re-tried on each poll until the lock
+     releases. *)
 }
 
 let create () =
-  { watcher = File_watch.create () }
+  { watcher = File_watch.create (); deferred = [] }
 
 let watch_fd t = File_watch.watch_fd t.watcher
 
@@ -22,67 +26,75 @@ let close t =
   File_watch.close t.watcher
 
 (* Reload a tab's buffer from disk: rewind session, reload, re-watch.
-   If [keep_verified] is true, skip the session rewind — the caller has
-   determined the external edit is entirely past the verified region. *)
+   If [keep_verified] is true, skip the session rewind and let the
+   gateway decide if the reload preserves the verified region. *)
 let reload_tab ?(keep_verified = false) t (tab : Tab.t) path =
-  (match tab.session with
-   | Some s when not keep_verified -> Session.go_to_offset s 0
-   | _ -> ());
-  Buffer.reload tab.buf;
-  Buffer.set_disk_changed tab.buf false;
-  File_watch.add_watch t.watcher path
+  if not keep_verified then
+    (match tab.session with
+     | Some s -> Session.go_to_offset s 0
+     | None -> ());
+  let result = Region_buffer.try_reload_from_disk tab.rb in
+  (match result with
+   | Region_buffer.Applied ->
+     Buffer.set_disk_changed tab.buf false;
+     File_watch.add_watch t.watcher path
+   | Region_buffer.Rejected _ -> ());
+  result
 
 (* Check for file changes and process them against open tabs.
-   Returns a list of events describing what happened. *)
+   Returns a list of events describing what happened. Events for tabs
+   whose buffer is locked are deferred and retried on subsequent polls,
+   so external file changes are handled the moment the lock releases
+   rather than racing the bridge mid-sequence. *)
 let poll t (tabs : Tab.t list) =
-  if not (File_watch.poll t.watcher) then []
+  let new_events =
+    if File_watch.poll t.watcher then File_watch.take_changed t.watcher
+    else []
+  in
+  let to_process =
+    List.sort_uniq String.compare (t.deferred @ new_events)
+  in
+  if to_process = [] then []
   else begin
-    let changed = File_watch.take_changed t.watcher in
+    t.deferred <- [];
     let events = ref [] in
+    let still_deferred = ref [] in
+    let defer path =
+      if not (List.mem path !still_deferred) then
+        still_deferred := path :: !still_deferred
+    in
     List.iter (fun path ->
       List.iter (fun (tab : Tab.t) ->
         match Buffer.filename tab.buf with
         | Some f when f = path ->
-          Buffer.set_disk_changed tab.buf true;
-          if Buffer.modified tab.buf then
-            (* Dirty buffer — just notify, don't reload *)
-            events := DiskChanged path :: !events
+          if Region_buffer.locked tab.rb then
+            defer path
           else begin
-            (* Compare disk content with buffer to detect actual changes *)
-            let old_text = Buffer.text tab.buf in
-            let new_text = try
-              let ic = open_in path in
-              let s = In_channel.input_all ic in
-              close_in ic; s
-            with _ -> old_text in
-            if old_text = new_text then
-              (* No actual change — likely our own save. Clear the flag. *)
-              Buffer.set_disk_changed tab.buf false
+            Buffer.set_disk_changed tab.buf true;
+            if Buffer.modified tab.buf then
+              (* Dirty buffer — just notify, don't reload *)
+              events := DiskChanged path :: !events
             else begin
-              let vend = match tab.session with
-                | Some s -> Session.verified_end s | None -> 0 in
-              if vend > 0 then begin
-                let min_len = min (String.length old_text) (String.length new_text) in
-                let diff_at = ref min_len in
-                (try for i = 0 to min_len - 1 do
-                   if old_text.[i] <> new_text.[i] then begin
-                     diff_at := i; raise Exit
-                   end
-                 done with Exit -> ());
-                if !diff_at < vend then
-                  events := VerifiedAffected path :: !events
-                else begin
-                  reload_tab ~keep_verified:true t tab path;
+              let old_text = Buffer.text tab.buf in
+              let new_text = try
+                let ic = open_in path in
+                let s = In_channel.input_all ic in
+                close_in ic; s
+              with _ -> old_text in
+              if old_text = new_text then
+                Buffer.set_disk_changed tab.buf false
+              else begin
+                match reload_tab ~keep_verified:true t tab path with
+                | Region_buffer.Applied ->
                   events := Reloaded path :: !events
-                end
-              end else begin
-                reload_tab t tab path;
-                events := Reloaded path :: !events
+                | Region_buffer.Rejected _ ->
+                  events := VerifiedAffected path :: !events
               end
             end
           end
         | _ -> ()
       ) tabs
-    ) changed;
+    ) to_process;
+    t.deferred <- !still_deferred;
     List.rev !events
   end

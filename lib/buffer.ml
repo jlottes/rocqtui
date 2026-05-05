@@ -107,23 +107,6 @@ let redo buf =
 let update_desired_vcol buf =
   buf.desired_vcol <- Utf8.byte_to_col buf.lines.(buf.cur_line) buf.cur_col
 
-let load_file path =
-  let ic = open_in path in
-  let buf = create () in
-  buf.filename <- Some path;
-  let lines = ref [] in
-  (try while true do lines := input_line ic :: !lines done
-   with End_of_file -> ());
-  close_in ic;
-  let lines = List.rev !lines in
-  let n = max 1 (List.length lines) in
-  ensure_capacity buf n;
-  List.iteri (fun i l -> buf.lines.(i) <- l) lines;
-  buf.num_lines <- n;
-  buf.modified <- false;
-  buf.disk_changed <- false;
-  buf
-
 let reload buf =
   match buf.filename with
   | None -> ()
@@ -150,6 +133,26 @@ let reload buf =
       buf.cur_col <- 0
     end else if buf.cur_col > String.length buf.lines.(buf.cur_line) then
       buf.cur_col <- String.length buf.lines.(buf.cur_line)
+
+let set_text buf text =
+  push_undo buf Other;
+  let lines = String.split_on_char '\n' text in
+  let lines = match List.rev lines with
+    | "" :: rest when rest <> [] -> List.rev rest
+    | _ -> lines
+  in
+  let n = max 1 (List.length lines) in
+  ensure_capacity buf n;
+  List.iteri (fun i l -> buf.lines.(i) <- l) lines;
+  for i = n to buf.num_lines - 1 do buf.lines.(i) <- "" done;
+  buf.num_lines <- n;
+  buf.modified <- true;
+  if buf.cur_line >= n then begin
+    buf.cur_line <- max 0 (n - 1);
+    buf.cur_col <- 0
+  end else if buf.cur_col > String.length buf.lines.(buf.cur_line) then
+    buf.cur_col <- String.length buf.lines.(buf.cur_line);
+  update_desired_vcol buf
 
 let save buf =
   match buf.filename with
@@ -270,9 +273,32 @@ let move_to buf line col =
   buf.cur_col <- min col (String.length buf.lines.(buf.cur_line));
   update_desired_vcol buf
 
+let cursor_byte_offset buf =
+  let off = ref 0 in
+  for i = 0 to buf.cur_line - 1 do
+    off := !off + String.length buf.lines.(i) + 1
+  done;
+  !off + buf.cur_col
+
 let text buf =
   let parts = Array.to_list (Array.sub buf.lines 0 buf.num_lines) in
   String.concat "\n" parts ^ "\n"
+
+let cut_buffer buf = buf.cut_buf
+
+let text_of_snapshot snap =
+  let parts = Array.to_list (Array.sub snap.s_lines 0 snap.s_num_lines) in
+  String.concat "\n" parts ^ "\n"
+
+let peek_undo_text buf =
+  match buf.undo_stack with
+  | [] -> None
+  | snap :: _ -> Some (text_of_snapshot snap)
+
+let peek_redo_text buf =
+  match buf.redo_stack with
+  | [] -> None
+  | snap :: _ -> Some (text_of_snapshot snap)
 
 (* Convert (line, col) to byte offset in the buffer text *)
 let pos_to_offset buf line col =
@@ -631,3 +657,21 @@ let ensure_visible_h buf visible_rows visible_cols =
     buf.hscroll <- max 0 (cursor_vcol - margin)
   else if cursor_vcol >= buf.hscroll + visible_cols then
     buf.hscroll <- cursor_vcol - visible_cols + 1 + margin
+
+(* Unsafe mutators — only for use by Region_buffer. *)
+module Unsafe = struct
+  let reload = reload
+  let set_text = set_text
+  let undo = undo
+  let redo = redo
+  let insert_char = insert_char
+  let insert_newline = insert_newline
+  let insert_newline_auto_indent = insert_newline_auto_indent
+  let delete_char_before = delete_char_before
+  let delete_char_at = delete_char_at
+  let delete_selection = delete_selection
+  let cut_line = cut_line
+  let paste = paste
+  let indent_lines = indent_lines
+  let unindent_lines = unindent_lines
+end

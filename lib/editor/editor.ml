@@ -47,9 +47,8 @@ let handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r =
               (match active_mt.mt_terminal with
                | Some term -> Terminal.send term text
                | None -> ())
-            end else begin
-              ignore (Buffer.delete_selection buf);
-              Script.insert_string tab text
+            end else if not (Region_buffer.locked tab.rb) then begin
+              ignore (Region_buffer.try_replace_selection tab.rb text)
             end
           | Compose.NoMatch ->
             if term_focused then begin
@@ -214,18 +213,24 @@ let handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r =
       Some Continue
     end
     else if Keymatch.match_binding ev Keys.step_forward then begin
-      tab.goals_scroll <- 0; (Tab.ensure_msg_tab tab.msg "Rocq").mt_scroll <- 0;
-      (match session with Some s -> Session.step_forward s | None -> ());
+      if not (Region_buffer.locked tab.rb) then begin
+        tab.goals_scroll <- 0; (Tab.ensure_msg_tab tab.msg "Rocq").mt_scroll <- 0;
+        (match session with Some s -> Session.step_forward s | None -> ())
+      end;
       Some Continue
     end
     else if Keymatch.match_binding ev Keys.step_backward then begin
-      tab.goals_scroll <- 0; (Tab.ensure_msg_tab tab.msg "Rocq").mt_scroll <- 0;
-      (match session with Some s -> Session.step_backward s | None -> ());
+      if not (Region_buffer.locked tab.rb) then begin
+        tab.goals_scroll <- 0; (Tab.ensure_msg_tab tab.msg "Rocq").mt_scroll <- 0;
+        (match session with Some s -> Session.step_backward s | None -> ())
+      end;
       Some Continue
     end
     else if Keymatch.match_binding ev Keys.go_to_cursor then begin
-      tab.goals_scroll <- 0; (Tab.ensure_msg_tab tab.msg "Rocq").mt_scroll <- 0;
-      (match session with Some s -> Session.go_to_cursor s | None -> ());
+      if not (Region_buffer.locked tab.rb) then begin
+        tab.goals_scroll <- 0; (Tab.ensure_msg_tab tab.msg "Rocq").mt_scroll <- 0;
+        (match session with Some s -> Session.go_to_cursor s | None -> ())
+      end;
       Some Continue
     end
     else if (match ev with Input.Special (Input.Escape, _) -> true | _ -> false) then begin
@@ -301,11 +306,12 @@ let handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r =
     (* Paste event *)
     else if (match ev with Input.Paste _ -> true | _ -> false) then begin
       let text = match ev with Input.Paste t -> Script.normalize_newlines t | _ -> "" in
-      if text <> "" && not (Block.edit_blocked tab) then begin
-        (match session with Some s -> Session.clear_error s | None -> ());
-        ignore (Buffer.delete_selection buf);
-        Script.insert_string tab text;
-        ctx.clipboard <- text
+      if text <> "" && not (Region_buffer.locked tab.rb) then begin
+        match Region_buffer.try_replace_selection tab.rb text with
+        | Region_buffer.Applied ->
+          (match session with Some s -> Session.clear_error s | None -> ());
+          ctx.clipboard <- text
+        | Region_buffer.Rejected _ -> ()
       end;
       Some Continue
     end
@@ -452,13 +458,13 @@ let handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r =
       Some Continue
     end
     else if Keymatch.match_binding ev Keys.undo then begin
-      Buffer.undo buf;
-      Block.rewind_if_needed tab;
+      if not (Region_buffer.locked tab.rb) then
+        ignore (Region_buffer.try_undo tab.rb);
       Some Continue
     end
     else if Keymatch.match_binding ev Keys.redo then begin
-      Buffer.redo buf;
-      Block.rewind_if_needed tab;
+      if not (Region_buffer.locked tab.rb) then
+        ignore (Region_buffer.try_redo tab.rb);
       Some Continue
     end
     else None

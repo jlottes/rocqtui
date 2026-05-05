@@ -75,6 +75,42 @@ let call_tool conn name args =
     "arguments", args;
   ])
 
+(* Inspect a tools/call response for a region-buffer rejection.
+   Returns Some (reason, message) if the call returned isError:true with
+   a rejection_reason field, None otherwise. *)
+let extract_rejection result =
+  match result with
+  | Some (`Assoc fields, _) ->
+    let is_error = match List.assoc_opt "isError" fields with
+      | Some (`Bool true) -> true | _ -> false in
+    if not is_error then None
+    else
+      let reason = match List.assoc_opt "rejection_reason" fields with
+        | Some (`String s) -> Some s | _ -> None in
+      (match reason with
+       | None -> None
+       | Some r ->
+         let msg = match List.assoc_opt "content" fields with
+           | Some (`List ((`Assoc c) :: _)) ->
+             (match List.assoc_opt "text" c with
+              | Some (`String s) -> s | _ -> "")
+           | _ -> ""
+         in
+         Some (r, msg))
+  | _ -> None
+
+(* Like call_tool but raises a tool_error if the call was rejected by
+   the region-buffer gateway. Used for buffer-mutating low-level calls. *)
+let call_tool_or_reject conn name args =
+  let result = call_tool conn name args in
+  (match extract_rejection result with
+   | Some (reason, msg) ->
+     raise (Failure (Yojson.Safe.to_string
+       (Mcp_json.tool_error
+          (Printf.sprintf "%s rejected: %s (%s)" name msg reason))))
+   | None -> ());
+  result
+
 let read_resource conn uri =
   match call conn "resources/read" (`Assoc ["uri", `String uri]) with
   | Some (`Assoc result, _) ->
@@ -285,7 +321,7 @@ let handle_proof_insert conn args state =
   let actual_text = if needs_space then " " ^ insert_text else insert_text in
   let old_vend = vend in
   (* Insert text *)
-  ignore (call_tool conn "insert_text"
+  ignore (call_tool_or_reject conn "insert_text"
     (`Assoc [
       "offset", `Int vend;
       "text", `String actual_text;
@@ -312,7 +348,7 @@ let handle_proof_insert conn args state =
   let delete_from = final_vend in
   let delete_to = old_vend + String.length actual_text in
   if delete_to > delete_from then begin
-    ignore (call_tool conn "delete_range"
+    ignore (call_tool_or_reject conn "delete_range"
       (`Assoc ["start", `Int delete_from; "end", `Int delete_to]));
     (* Re-read state after deletion *)
     ignore (poll_until_idle conn ?tab ())
@@ -421,7 +457,7 @@ let handle_proof_rewind conn args state =
     ignore (poll_until_idle conn ?tab ());
     (* Delete if requested *)
     if delete then begin
-      ignore (call_tool conn "delete_range"
+      ignore (call_tool_or_reject conn "delete_range"
         (`Assoc ["start", `Int match_start; "end", `Int vend]));
       ignore (poll_until_idle conn ?tab ())
     end;

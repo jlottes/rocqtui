@@ -16,13 +16,13 @@ let normalize_newlines s =
   done;
   Stdlib.Buffer.contents buf
 
+(* User-keystroke text insertion. Yields to a held lock — the bridge
+   uses the lock to make compound ops appear atomic from the user's
+   perspective, so user keystrokes (compose output, etc.) must not
+   slip in mid-sequence. *)
 let insert_string (tab : Tab.t) s =
-  if not (Block.edit_blocked tab) then
-    let buf = tab.buf in
-    String.iter (fun c ->
-      if c = '\n' then Buffer.insert_newline buf
-      else Buffer.insert_char buf c
-    ) s
+  if not (Region_buffer.locked tab.rb) then
+    ignore (Region_buffer.try_replace_selection tab.rb s)
 
 let encode_codepoint cp =
   if cp < 128 then String.make 1 (Char.chr cp)
@@ -97,90 +97,102 @@ let handle (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r =
     Buffer.clear_selection buf;
     let (rows, _) = Render.pane_dims r Render.PScript in
     Buffer.move_page_up buf (rows - 1); Some Continue
+  (* Edit ops below: gated on the buffer lock so user keystrokes
+     yield while an MCP client is driving this tab. The lock is the
+     bridge's "appear atomic from the user's perspective" mechanism;
+     [Region_buffer.try_*] does not check it (the lock holder must be
+     able to mutate). *)
+  | _ when Region_buffer.locked tab.rb && (
+      Keymatch.match_binding ev Keys.cut
+      || Keymatch.match_binding ev Keys.paste
+      || (match ev with
+          | Input.Special ((Input.Delete | Input.Backspace
+                          | Input.Enter | Input.Tab), _) -> true
+          | Input.Key (cp, mods) when cp >= 32
+              && not mods.ctrl && not mods.alt -> true
+          | _ -> false)) ->
+    Some Continue
   (* Clipboard *)
   | _ when Keymatch.match_binding ev Keys.cut ->
-    if not (Block.edit_blocked tab) then begin
-      (match session with Some s -> Session.clear_error s | None -> ());
-      match Buffer.delete_selection buf with
-      | Some text ->
-        ctx.clipboard <- text;
-        Clipboard.copy_to_system text
-      | None ->
-        ctx.clipboard <- "";
-        Buffer.cut_line buf
-    end;
+    let captured = Buffer.selected_text buf in
+    let result = match captured with
+      | Some _ -> Region_buffer.try_replace_selection tab.rb ""
+      | None -> Region_buffer.try_cut_line tab.rb
+    in
+    (match result with
+     | Region_buffer.Applied ->
+       (match session with Some s -> Session.clear_error s | None -> ());
+       (match captured with
+        | Some t -> ctx.clipboard <- t; Clipboard.copy_to_system t
+        | None -> ctx.clipboard <- "")
+     | Region_buffer.Rejected _ -> ());
     Some Continue
   | _ when Keymatch.match_binding ev Keys.paste ->
-    if not (Block.edit_blocked tab) then begin
-      (match session with Some s -> Session.clear_error s | None -> ());
-      ignore (Buffer.delete_selection buf);
+    let result =
       if ctx.clipboard <> "" then
-        String.iter (fun c ->
-          if c = '\n' then Buffer.insert_newline buf
-          else Buffer.insert_char buf c
-        ) ctx.clipboard
-      else Buffer.paste buf
-    end;
+        Region_buffer.try_replace_selection tab.rb ctx.clipboard
+      else
+        Region_buffer.try_paste tab.rb
+    in
+    (match result with
+     | Region_buffer.Applied ->
+       (match session with Some s -> Session.clear_error s | None -> ())
+     | Region_buffer.Rejected _ -> ());
     Some Continue
   (* Delete *)
   | Input.Special (Input.Delete, _) ->
-    if not (Block.edit_blocked tab) then begin
-      (match session with Some s -> Session.clear_error s | None -> ());
-      (match Buffer.delete_selection buf with
-       | Some _ -> () | None -> Buffer.delete_char_at buf)
-    end;
+    (match Region_buffer.try_delete_forward tab.rb with
+     | Region_buffer.Applied ->
+       (match session with Some s -> Session.clear_error s | None -> ())
+     | Region_buffer.Rejected _ -> ());
     Some Continue
   (* Backspace *)
   | Input.Special (Input.Backspace, _) ->
-    if not (Block.edit_blocked ~for_backspace:true tab) then begin
-      (match session with Some s -> Session.clear_error s | None -> ());
-      (match Buffer.delete_selection buf with
-       | Some _ -> () | None -> Buffer.delete_char_before buf)
-    end;
+    (match Region_buffer.try_delete_backward tab.rb with
+     | Region_buffer.Applied ->
+       (match session with Some s -> Session.clear_error s | None -> ())
+     | Region_buffer.Rejected _ -> ());
     Some Continue
   (* Enter *)
   | Input.Special (Input.Enter, _) ->
-    if not (Block.edit_blocked tab) then begin
-      (match session with Some s -> Session.clear_error s | None -> ());
-      ignore (Buffer.delete_selection buf);
-      Buffer.insert_newline_auto_indent buf
-    end;
+    (match Region_buffer.try_enter tab.rb with
+     | Region_buffer.Applied ->
+       (match session with Some s -> Session.clear_error s | None -> ())
+     | Region_buffer.Rejected _ -> ());
     Some Continue
   (* Tab / Shift+Tab: indent or unindent. With a multi-line selection,
      always indents/unindents the covered lines. With no selection or a
      single-line selection, Tab inserts spaces at the cursor and
      Shift+Tab unindents the current line. *)
   | Input.Special (Input.Tab, m) ->
-    if not (Block.edit_blocked tab) then begin
-      (match session with Some s -> Session.clear_error s | None -> ());
-      let width = !Config.indent_width in
-      let multiline_sel =
-        match Buffer.selection buf with
+    let width = !Config.indent_width in
+    let multiline_sel =
+      match Buffer.selection buf with
+      | None -> false
+      | Some _ ->
+        match Buffer.selected_text buf with
+        | Some s -> String.contains s '\n'
         | None -> false
-        | Some _ ->
-          match Buffer.selected_text buf with
-          | Some s -> String.contains s '\n'
-          | None -> false
-      in
-      if m.shift then
-        Buffer.unindent_lines buf width
-      else if multiline_sel then
-        Buffer.indent_lines buf width
-      else begin
-        ignore (Buffer.delete_selection buf);
-        for _ = 1 to width do Buffer.insert_char buf ' ' done
-      end
-    end;
+    in
+    let result =
+      if m.shift then Region_buffer.try_unindent_lines tab.rb width
+      else if multiline_sel then Region_buffer.try_indent_lines tab.rb width
+      else Region_buffer.try_replace_selection tab.rb (String.make width ' ')
+    in
+    (match result with
+     | Region_buffer.Applied ->
+       (match session with Some s -> Session.clear_error s | None -> ())
+     | Region_buffer.Rejected _ -> ());
     Some Continue
   (* Printable character *)
   | Input.Key (cp, mods) when cp >= 32 && not mods.ctrl && not mods.alt ->
-    if not (Block.edit_blocked tab) then begin
-      (match session with Some s -> Session.clear_error s | None -> ());
-      ignore (Buffer.delete_selection buf);
-      if cp < 128 then
-        Buffer.insert_char buf (Char.chr cp)
-      else
-        insert_string tab (encode_codepoint cp)
-    end;
+    let inserted_text =
+      if cp < 128 then String.make 1 (Char.chr cp)
+      else encode_codepoint cp
+    in
+    (match Region_buffer.try_replace_selection tab.rb inserted_text with
+     | Region_buffer.Applied ->
+       (match session with Some s -> Session.clear_error s | None -> ())
+     | Region_buffer.Rejected _ -> ());
     Some Continue
   | _ -> None

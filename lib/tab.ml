@@ -125,6 +125,7 @@ let sync_terminals mt =
 type t = {
   id : int;
   buf : Buffer.t;
+  rb : Region_buffer.t;
   mutable session : Session.t option;
   session_args : string list;
   mutable focused_pane : [`Script | `Goals | `Messages];
@@ -135,7 +136,6 @@ type t = {
   goals_sel : pane_selection;
   mutable goals_lines_cache : string list;
   msg : msg_tabs;
-  mutable locked : bool;
 }
 
 type manager = {
@@ -150,7 +150,9 @@ let fresh_id () =
   id
 
 let make_tab ?(args=[]) buf session =
-  { id = fresh_id (); buf; session; session_args = args;
+  { id = fresh_id (); buf;
+    rb = Region_buffer.create buf ~session;
+    session; session_args = args;
     focused_pane = `Script;
     goals_scroll = 0;
     show_all_hyps = false;
@@ -158,8 +160,7 @@ let make_tab ?(args=[]) buf session =
     last_ensured_cur = None;
     goals_sel = fresh_pane_sel ();
     goals_lines_cache = [];
-    msg = fresh_msg_tabs ();
-    locked = false }
+    msg = fresh_msg_tabs () }
 
 let create_blank ?(args=[]) () =
   let buf = Buffer.create () in
@@ -170,19 +171,17 @@ let create_blank ?(args=[]) () =
   make_tab ~args buf session
 
 let create_from_file ?(args=[]) filename =
-  let buf =
-    if Sys.file_exists filename then Buffer.load_file filename
-    else begin
-      let b = Buffer.create () in
-      Buffer.set_filename b filename;
-      b
-    end
-  in
+  let buf = Buffer.create () in
+  Buffer.set_filename buf filename;
   let session =
     try Some (Session.create ~args buf)
     with _ -> None
   in
-  make_tab ~args buf session
+  let tab = make_tab ~args buf session in
+  (* Initial load: routed through the gateway. The session has no
+     verified content yet, so the check passes trivially. *)
+  ignore (Region_buffer.try_reload_from_disk tab.rb);
+  tab
 
 let active_tab mgr =
   List.nth mgr.tabs mgr.active

@@ -1,12 +1,8 @@
 open Rocqtui_lib
 
 let load text =
-  let tmp = Filename.temp_file "qa" ".v" in
-  let oc = open_out tmp in
-  output_string oc text;
-  close_out oc;
-  let buf = Buffer.load_file tmp in
-  Sys.remove tmp;
+  let buf = Buffer.create () in
+  Buffer.Unsafe.set_text buf text;
   buf
 
 let check label text ~line ~col ~expected =

@@ -13,8 +13,12 @@ val add_watch : t -> string -> unit
 val close : t -> unit
 
 (** Reload a tab's buffer from disk (rewinds session, re-watches).
-    If [keep_verified] is true, skip the session rewind. *)
-val reload_tab : ?keep_verified:bool -> t -> Tab.t -> string -> unit
+    If [keep_verified] is true, skip the session rewind and let the
+    region-buffer gateway decide whether the reload is safe. Returns
+    the gateway's result so callers can distinguish a successful
+    reload from a region-violating one. *)
+val reload_tab :
+  ?keep_verified:bool -> t -> Tab.t -> string -> Region_buffer.result
 
 (** Poll for file changes. Returns events for each affected tab. *)
 val poll : t -> Tab.t list -> file_event list

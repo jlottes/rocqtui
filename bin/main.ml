@@ -321,7 +321,7 @@ let () =
               (match Buffer.filename tab.buf with
                | Some path ->
                  let do_reload () =
-                   File_manager.reload_tab fm tab path;
+                   ignore (File_manager.reload_tab fm tab path);
                    Render.set_status r
                      (Printf.sprintf "%s reloaded" (Filename.basename path));
                    Render_need.request ()
@@ -355,7 +355,7 @@ let () =
                          Modal.Handled
                        end else if is_ctrl_key ev 114 || is_ctrl_key ev 18 then begin
                          (match Buffer.filename tab.buf with
-                          | Some f -> File_manager.reload_tab fm tab f
+                          | Some f -> ignore (File_manager.reload_tab fm tab f)
                           | None -> ());
                          Render.set_status r "Reloaded from disk.";
                          Modal.Handled
