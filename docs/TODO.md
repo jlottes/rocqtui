@@ -73,7 +73,7 @@ or hand-written).
 - [x] Messages pane tabs: Rocq + Build, auto-activation, click to switch
 - [ ] Jump to error: parse compiler output for "File X, line N" errors,
       open the file and jump to the error line
-- [ ] Build status in status bar (spinner, "building...", exit code)
+- [x] Build status in status bar (spinner, "building...", exit code)
 
 ## File Management
 

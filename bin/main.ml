@@ -163,15 +163,22 @@ let () =
        doesn't flicker as activity toggles — the glyph animates when
        active and is a static dot when idle. *)
     let active = Tab.active_tab mgr in
-    (if Mcp_server.has_clients mcp then
-       let glyph =
-         if Mcp_server.is_tab_active mcp active.id then
-           Mcp_server.spinner_char mcp
-         else "\xc2\xb7"  (* U+00B7 middle dot *)
-       in
-       ctx.status_extra <- glyph ^ " Claude"
-     else
-       ctx.status_extra <- "");
+    let mcp_indicator =
+      if Mcp_server.has_clients mcp then
+        let glyph =
+          if Mcp_server.is_tab_active mcp active.id then
+            Mcp_server.spinner_char mcp
+          else "\xc2\xb7"  (* U+00B7 middle dot *)
+        in
+        glyph ^ " Claude"
+      else ""
+    in
+    let build_indicator = Build.status_indicator () in
+    ctx.status_extra <-
+      (match mcp_indicator, build_indicator with
+       | "", "" -> ""
+       | a, "" | "", a -> a
+       | a, b -> a ^ "  " ^ b);
     let tab = Tab.active_tab mgr in
     if Tab.count mgr > 1 then begin
       let dnames = Tab.display_names mgr in
@@ -310,6 +317,8 @@ let () =
     end;
     (* Poll build subprocess *)
     if Build.poll () then Render_need.request ();
+    (* Keep redrawing while the build spinner / result indicator is live. *)
+    if Build.needs_repaint () then Render_need.request ();
     (* Poll file manager *)
     List.iter (fun ev ->
       let msg = match ev with

@@ -8,10 +8,25 @@ type t = {
   mutable buf : string;            (* partial line buffer *)
   mutable finished : bool;
   mutable exit_code : int option;
+  mutable finished_at : float option;
   description : string;            (* e.g. "make theory/groups.vo" *)
 }
 
 let active : t option ref = ref None
+
+(* Braille spinner frames for the status-bar build indicator. *)
+let spinner_chars = [|
+  "\xe2\xa0\x8b"; (* ⠋ *) "\xe2\xa0\x99"; (* ⠙ *)
+  "\xe2\xa0\xb9"; (* ⠹ *) "\xe2\xa0\xb8"; (* ⠸ *)
+  "\xe2\xa0\xbc"; (* ⠼ *) "\xe2\xa0\xb4"; (* ⠴ *)
+  "\xe2\xa0\xa6"; (* ⠦ *) "\xe2\xa0\xa7"; (* ⠧ *)
+|]
+let spinner_frame = ref 0
+let last_spinner_advance = ref 0.0
+let spinner_interval = 0.08
+
+(* How long to keep showing the ✓/✗ result after a build finishes. *)
+let finished_indicator_lifetime = 4.0
 
 let is_running () = match !active with
   | Some b -> not b.finished
@@ -39,6 +54,7 @@ let start ~project_dir ~cmd ~args ~desc =
       pid; fd = read_fd;
       output = []; buf = "";
       finished = false; exit_code = None;
+      finished_at = None;
       description = desc;
     };
     true
@@ -76,6 +92,7 @@ let poll () = match !active with
              | Unix.WSIGNALED _ -> Some (-1)
              | Unix.WSTOPPED _ -> Some (-2));
            b.finished <- true;
+           b.finished_at <- Some (Unix.gettimeofday ());
            (try Unix.close b.fd with _ -> ());
            (* Add exit status line *)
            let exit_msg = match b.exit_code with
@@ -124,6 +141,7 @@ let cancel () = match !active with
      with _ -> ());
     b.finished <- true;
     b.exit_code <- Some (-1);
+    b.finished_at <- Some (Unix.gettimeofday ());
     b.output <- "=== Build cancelled ===" :: b.output;
     (try Unix.close b.fd with _ -> ())
 
@@ -207,6 +225,7 @@ let build_deps ~project_dir v_path =
       pid = 0; fd = Unix.stdin; (* dummy *)
       output = ["No dependencies to build."];
       buf = ""; finished = true; exit_code = Some 0;
+      finished_at = Some (Unix.gettimeofday ());
       description = "deps (none)";
     };
     true
@@ -214,3 +233,35 @@ let build_deps ~project_dir v_path =
     let desc = Printf.sprintf "make %d deps" (List.length deps) in
     start ~project_dir ~cmd:"make"
       ~args:(["-C"; project_dir] @ deps) ~desc
+
+(* True while a build is running, or while the post-build ✓/✗ indicator
+   is still visible. Main loop uses this to keep requesting renders so the
+   spinner animates and the result indicator times out cleanly. *)
+let needs_repaint () = match !active with
+  | None -> false
+  | Some b when not b.finished -> true
+  | Some b ->
+    (match b.finished_at with
+     | Some t -> Unix.gettimeofday () -. t < finished_indicator_lifetime
+     | None -> false)
+
+(* Status-bar indicator: spinner + description while running, ✓/✗
+   briefly after finish, empty when no build. *)
+let status_indicator () = match !active with
+  | None -> ""
+  | Some b when not b.finished ->
+    let now = Unix.gettimeofday () in
+    if now -. !last_spinner_advance >= spinner_interval then begin
+      spinner_frame := (!spinner_frame + 1) mod Array.length spinner_chars;
+      last_spinner_advance := now
+    end;
+    Printf.sprintf "%s %s" spinner_chars.(!spinner_frame) b.description
+  | Some b ->
+    (match b.finished_at with
+     | Some t when Unix.gettimeofday () -. t < finished_indicator_lifetime ->
+       (match b.exit_code with
+        | Some 0 -> Printf.sprintf "\xe2\x9c\x93 %s" b.description
+        | Some (-1) -> Printf.sprintf "\xe2\x9c\x97 %s (cancelled)" b.description
+        | Some c -> Printf.sprintf "\xe2\x9c\x97 %s (exit %d)" b.description c
+        | None -> Printf.sprintf "\xe2\x9c\x97 %s" b.description)
+     | _ -> "")

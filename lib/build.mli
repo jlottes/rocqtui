@@ -35,3 +35,13 @@ val build_deps : project_dir:string -> string -> bool
 
 (** Run make clean. Returns false if busy. *)
 val build_clean : project_dir:string -> bool
+
+(** True while a build is running, or while the post-build result
+    indicator is still visible. The main loop uses this to keep
+    requesting renders so the spinner animates and the indicator
+    times out cleanly. *)
+val needs_repaint : unit -> bool
+
+(** Status-bar indicator: spinner + description while running,
+    ✓/✗ briefly after finish, empty otherwise. *)
+val status_indicator : unit -> string
