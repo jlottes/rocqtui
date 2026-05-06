@@ -34,8 +34,6 @@ Pure utilities:
   (input event ↔ keybinding match, both legacy ncurses and Kitty codes)
 - `editor/geom.ml` — screen ↔ buffer/pane coordinate conversion
 - `editor/jump.ml` — jump-back stack push/pop
-- `editor/block.ml` — edit-blocking (verified-region + MCP lock) and
-  rewind-on-undo
 
 Per-event-source handlers:
 
@@ -57,7 +55,7 @@ Outside the editor namespace:
 - `editor_context.ml` — shared mutable state (clipboard, compose,
   dragging, jump stack)
 - `modal.ml` — modal dialog stack (Help, QueryMenu, OptionsMenu,
-  ThemeMenu, BuildMenu, FilePicker, Prompt)
+  ThemeMenu, BuildMenu, FilePicker, Prompt, SearchPrompt)
 - `keys.ml` — centralized key bindings
 
 ### Rocq integration (`lib/`)
@@ -71,8 +69,19 @@ Outside the editor namespace:
 
 ### Buffer & tabs (`lib/`)
 
-- `buffer.ml` — text buffer with undo/redo, UTF-8 cursor, selection
-- `tab.ml` — tab manager, display name disambiguation, message sub-tabs
+- `buffer.ml` — text buffer with undo/redo, UTF-8 cursor, selection.
+  All mutators are gated under `Buffer.Unsafe`; only `Region_buffer`
+  should call them. The top-level interface is read-only.
+- `region_buffer.ml` — text-mutation gateway. Sole writer of buffer
+  text. Each user-visible edit goes through a `try_*` function returning
+  `Applied | Rejected of {In_verified_region | Erodes_boundary |
+  In_pending_region}`. Pre-flight check, no apply-then-revert. Also
+  owns the per-buffer "external client" lock (queryable, not consulted
+  by `try_*`). See [`docs/REGION_INVARIANTS.md`](REGION_INVARIANTS.md).
+- `search.ml` — pure incremental-search state (matcher + match list,
+  refreshed lazily on buffer revision change)
+- `tab.ml` — tab manager, display name disambiguation, message sub-tabs.
+  `Tab.t` owns the `Region_buffer.t` and the per-tab `Search.state`.
 
 ### Features (`lib/`)
 
@@ -118,6 +127,17 @@ the bundled compiled terminfo under `data/terminfo/`.
   emits all cells.
 - **`Editor_context.t`** holds all editor mutable state — `editor.ml` has no
   global refs.
+- **Region invariants are enforced at one chokepoint** — `Region_buffer`
+  is the sole writer of buffer text. Every editor path (keystrokes,
+  mouse paste, MCP `text_edit`, file-watch reload, undo/redo) routes
+  through a `try_*` function that pre-flight checks the verified-region
+  and sentence-boundary invariants. `Buffer.Unsafe` flags any direct
+  caller. See [`docs/REGION_INVARIANTS.md`](REGION_INVARIANTS.md).
+- **The MCP "buffer lock"** lives on `Region_buffer.t` and is queryable
+  only — `try_*` does not consult it. It's the bridge's "appear atomic"
+  mechanism for compound ops; the keystroke path, user stepping, and
+  inotify-driven auto-reload yield to it explicitly. Deferred file
+  events are retried on each poll until the lock releases.
 - **`Modal.t`** is a stack of modal dialogs. Prompts are non-blocking modals.
 - **`File_picker.t`** state lives inside `Modal.FilePicker`, not a global ref.
 - **Theme colors** are `Grid.color` values, supporting TrueColor directly in
