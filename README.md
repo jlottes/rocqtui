@@ -59,15 +59,19 @@ rocqtui -theme solarized-dark path/to/file.v
 | `^E` | Set proof target to cursor |
 | `Alt+Down` / `Alt+Up` | Step forward / backward |
 | `Alt+.` | Interrupt Rocq |
+| `^F` | Find / re-open search prompt |
+| `F3` / `Shift+F3` | Next / previous match |
 | `^P` | Cycle pane focus |
 | `^T` | Open embedded terminal (in project dir) |
 | `^Q` | Query menu (About, Print, Search, Check, Locate) |
 | `^M` | Minimap (Kitty keyboard protocol required) |
 | `F1` | Help |
-| `F3` | Theme picker |
+| `F2` | Options menu |
 | `F4` | Reload from disk |
 | `F5` | Build menu |
 | `F6` | Open Claude Code in project dir |
+| `F7` | Theme picker |
+| `F12` | Force redraw |
 
 ## Project files
 

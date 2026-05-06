@@ -37,7 +37,8 @@
 
 ## Editor Features
 
-- [ ] Search (^F) — find text in the editor, highlight matches
+- [x] Search (^F) — incremental find with match highlighting,
+      F3/Shift+F3 to step, scroll wheel passes through prompt
 - [ ] Search and replace
 - [ ] Line numbers gutter in the script pane
 - [x] Tab/indent support (Tab key inserts spaces or tab character)
@@ -117,7 +118,7 @@ or hand-written).
 
 ## Documentation
 
-- [ ] README with usage instructions, keybindings summary
+- [x] README with usage instructions, keybindings summary
 - [ ] man page or --help output
-- [ ] MCP API documentation for Claude Code integration
+- [x] MCP API documentation for Claude Code integration (CLAUDE_MCP.md)
 - [ ] Contributing guide
