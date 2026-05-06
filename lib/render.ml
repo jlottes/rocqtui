@@ -90,6 +90,8 @@ let resize t =
   Grid.resize t.curr h w;
   Grid.resize t.prev h w;
   Grid.clear t.prev;  (* force full redraw *)
+  (* Clear any stale content past the new edge from a shrink. *)
+  Term.clear_screen ();
   compute_layout t
 
 (* --- Pane hit testing --- *)

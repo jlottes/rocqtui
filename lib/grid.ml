@@ -287,9 +287,7 @@ let emit_all curr buf =
         cur_attr := cell.attr;
         Stdlib.Buffer.add_string buf cell.text
       end
-    done;
-    (* Clear any trailing content beyond what we wrote *)
-    Stdlib.Buffer.add_string buf "\x1b[K"
+    done
   done;
   if !cur_attr <> default_attr then
     Stdlib.Buffer.add_string buf "\x1b[0m"
@@ -300,7 +298,6 @@ let diff ~prev ~curr buf =
   let cur_col = ref (-1) in
   let cur_attr = ref default_attr in
   for r = 0 to curr.rows - 1 do
-    let last_written_col = ref (-1) in
     for c = 0 to curr.cols - 1 do
       let cell = curr.cells.(r).(c) in
       if cell.width = 0 then ()  (* skip continuation cells *)
@@ -322,16 +319,10 @@ let diff ~prev ~curr buf =
           cur_attr := cell.attr;
           (* Write text *)
           Stdlib.Buffer.add_string buf cell.text;
-          cur_col := !cur_col + (max 1 cell.width);
-          last_written_col := c + (max 1 cell.width) - 1
+          cur_col := !cur_col + (max 1 cell.width)
         end
       end
-    done;
-    (* Clear trailing content if we wrote near the end of the row.
-       This ensures terminals with dynamic line widths (like glterm)
-       don't show stale content beyond the last column. *)
-    if !last_written_col >= curr.cols - 1 then
-      Stdlib.Buffer.add_string buf "\x1b[K"
+    done
   done;
   (* Reset attributes at end *)
   if !cur_attr <> default_attr then
