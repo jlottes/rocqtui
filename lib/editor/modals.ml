@@ -294,6 +294,14 @@ let handle_search_prompt (ctx : Editor_context.t) ev (tab : Tab.t) =
     append_to_query tab (Utf8.encode cp);
     Some Continue
 
+  (* Scroll wheel falls through to the normal mouse path so the user
+     can scroll the buffer while the prompt is open. Clicks and other
+     mouse events stay absorbed so they don't move the cursor or
+     start a selection mid-search. *)
+  | Input.Mouse mev
+    when mev.button = Input.ScrollUp || mev.button = Input.ScrollDown ->
+    None
+
   | _ -> Some Continue
 
 let handle_help (ctx : Editor_context.t) ev r =
