@@ -513,19 +513,32 @@ let handle_query conn args _state =
   let final = apply_display conn args ?tab final in
   build_response final
 
+(* Unwrap an inner MCP tool's content-envelope result so the bridge's
+   dispatch loop only wraps it once (otherwise the response is
+   doubly-encoded as JSON inside JSON). *)
+let unwrap_inner_result result =
+  match Yojson.Safe.Util.member "content" result with
+  | `List ((`Assoc c) :: _) ->
+    (match List.assoc_opt "text" c with
+     | Some (`String txt) ->
+       (try Yojson.Safe.from_string txt
+        with Yojson.Json_error _ -> `String txt)
+     | _ -> result)
+  | _ -> result
+
 let handle_save conn args _state =
   let tab_args = match Yojson.Safe.Util.member "tab" args with
     | `Int _ as t -> `Assoc ["tab", t]
     | _ -> `Assoc [] in
   match call_tool conn "save" tab_args with
-  | Some (result, _) -> result
+  | Some (result, _) -> unwrap_inner_result result
   | None -> Mcp_json.tool_error "No response from save"
 
 let handle_open_file conn args _state =
   let open Yojson.Safe.Util in
   let filename = args |> member "filename" |> to_string in
   match call_tool conn "open_file" (`Assoc ["filename", `String filename]) with
-  | Some (result, _) -> result
+  | Some (result, _) -> unwrap_inner_result result
   | None -> Mcp_json.tool_error "No response from open_file"
 
 let handle_build_deps conn args _state =
