@@ -23,6 +23,14 @@ val find_unique :
   haystack:string -> needle:string ->
   ?after_text:string -> ?line:int -> unit -> match_result
 
+(** Check if [pattern] matches the head of [text] starting at [head_start]
+    (whitespace-normalized; leading whitespace at [head_start] is allowed
+    and not consumed). Returns [(match_start, match_end)] — the original
+    offsets of the first and just-past-last matched non-space char — or
+    [None]. *)
+val head_matches :
+  text:string -> head_start:int -> pattern:string -> (int * int) option
+
 (** Check if [pattern] matches the tail of [text] ending at [tail_end].
     Returns the start offset of the match in the original text, or None. *)
 val tail_matches : text:string -> tail_end:int -> pattern:string -> int option

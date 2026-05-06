@@ -496,6 +496,54 @@ let handle_proof_rewind conn args state =
       "rewound_text", `String rewound_text;
     ]
 
+let handle_replace_after conn args state =
+  let open Yojson.Safe.Util in
+  let match_text = args |> member "match" |> to_string in
+  let replacement = args |> member "replacement" |> to_string in
+  let tab = match args |> member "tab" with
+    | `Int n -> Some n | _ -> None in
+  let text = state.buffer in
+  let vend = state.verified_end in
+  match Text_match.head_matches ~text ~head_start:vend ~pattern:match_text with
+  | None ->
+    let preview = Context.after text ~boundary:vend ~max_bytes:200 () in
+    raise (Failure (Yojson.Safe.to_string
+      (Mcp_json.tool_error
+         (Printf.sprintf "Text does not match head of unverified region.\n\
+                          Expected: %S\nActual: %S" match_text preview))))
+  | Some (match_start, match_end) ->
+    let replaced_text =
+      String.sub text match_start (match_end - match_start) in
+    (* If the replacement would land at vend, region_buffer requires the
+       first inserted byte to be whitespace (otherwise it erodes the
+       sentence boundary). Mirrors proof_insert's auto-prepend. *)
+    let actual_replacement =
+      if match_start = vend
+         && String.length replacement > 0
+         && not (Sentence.is_space replacement.[0]) then
+        " " ^ replacement
+      else replacement
+    in
+    if match_end > match_start then begin
+      ignore (call_tool_or_reject conn "delete_range"
+        (`Assoc ["start", `Int match_start; "end", `Int match_end]));
+      ignore (poll_until_idle conn ?tab ())
+    end;
+    if String.length actual_replacement > 0 then begin
+      ignore (call_tool_or_reject conn "insert_text"
+        (`Assoc [
+          "offset", `Int match_start;
+          "text", `String actual_replacement;
+        ]));
+      ignore (poll_until_idle conn ?tab ())
+    end;
+    let final = get_state conn ?tab () in
+    let final = apply_display conn args ?tab final in
+    let resp = build_response final in
+    merge_json resp [
+      "replaced_text", `String replaced_text;
+    ]
+
 let handle_query conn args _state =
   let open Yojson.Safe.Util in
   let command = args |> member "command" |> to_string in
@@ -607,6 +655,22 @@ let tool_defs = [
      ];
      "required", `List [`String "sentences"];
    ]);
+  ("replace_after", "Replace text at the head of the unverified region",
+   `Assoc [
+     "type", `String "object";
+     "properties", `Assoc [
+       "match", `Assoc ["type", `String "string";
+         "description", `String "Text matching the head of the \
+           unverified region (whitespace-normalized; leading whitespace \
+           at the boundary is ignored)"];
+       "replacement", `Assoc ["type", `String "string";
+         "description", `String "Text to substitute in place of match \
+           (empty to delete)"];
+       "display", `Assoc ["type", `String "object"];
+       "tab", `Assoc ["type", `String "integer"];
+     ];
+     "required", `List [`String "match"; `String "replacement"];
+   ]);
   ("query", "Run a Rocq query (About, Print, Search, Check, etc.)",
    `Assoc [
      "type", `String "object";
@@ -686,7 +750,8 @@ let dispatch conn msg =
       | `Int n -> Some n | _ -> None in
     (* Lock for mutating tools *)
     let needs_lock = List.mem name
-      ["verify_to"; "proof_insert"; "proof_forward"; "proof_rewind"] in
+      ["verify_to"; "proof_insert"; "proof_forward"; "proof_rewind";
+       "replace_after"] in
     if needs_lock then
       ignore (call_tool conn "lock" (match tab with
         | Some t -> `Assoc ["tab", `Int t] | None -> `Assoc []));
@@ -698,6 +763,7 @@ let dispatch conn msg =
            | "proof_insert" -> handle_proof_insert conn args state
            | "proof_forward" -> handle_proof_forward conn args state
            | "proof_rewind" -> handle_proof_rewind conn args state
+           | "replace_after" -> handle_replace_after conn args state
            | "query" -> handle_query conn args state
            | "save" -> handle_save conn args state
            | "open_file" -> handle_open_file conn args state

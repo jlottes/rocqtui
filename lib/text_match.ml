@@ -141,6 +141,36 @@ let find_unique ~haystack ~needle ?after_text ?line () =
     let lines = List.map (line_of_offset haystack) matches in
     Ambiguous lines
 
+(* Check if pattern matches the head of text starting at head_start
+   (whitespace-normalized). Leading whitespace at head_start is allowed
+   and not consumed. Returns (match_start, match_end) — the original
+   offsets of the first and just-past-last matched non-space char — or
+   None. Trailing whitespace within the matched span is included. *)
+let head_matches ~text ~head_start ~pattern =
+  let len = String.length text in
+  if head_start >= len then None
+  else begin
+    let norm_pat = normalize pattern in
+    let plen = String.length norm_pat in
+    if plen = 0 then None
+    else begin
+      let chunk_end = min len (head_start + (plen * 3) + 16) in
+      let chunk = String.sub text head_start (chunk_end - head_start) in
+      let norm_chunk = normalize chunk in
+      let clen = String.length norm_chunk in
+      if clen >= plen
+         && String.sub norm_chunk 0 plen = norm_pat then begin
+        let offset_map = build_offset_map chunk in
+        if Array.length offset_map < plen then None
+        else
+          let orig_start = offset_map.(0) in
+          let orig_last = offset_map.(plen - 1) in
+          Some (head_start + orig_start, head_start + orig_last + 1)
+      end else
+        None
+    end
+  end
+
 (* Check if pattern matches the tail of text ending at tail_end.
    Returns the start offset of the match in the original text, or None. *)
 let tail_matches ~text ~tail_end ~pattern =

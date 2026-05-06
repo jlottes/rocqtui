@@ -98,6 +98,22 @@ Extra response: `verified_text`, `failed_sentence`, `error`.
 
 Extra response: `count`, `rewound_text`.
 
+#### `replace_after` — edit unverified text at the boundary
+
+```jsonc
+{ "match": "Admitted.",        // must match head of unverified region
+                                //   (whitespace-normalized; leading
+                                //    whitespace at boundary is ignored)
+  "replacement": "" }           // raw text; empty deletes the match
+```
+
+Pure buffer edit on the unverified side — does not touch the verified
+region or STM. Use to clean up stale text (e.g. an `Admitted.`
+placeholder left behind after `proof_insert("... Qed.")`) or to fix
+the next-up sentence before `proof_forward`.
+
+Extra response: `replaced_text`.
+
 ### Other tools
 
 - `query({ "command": "About nat." })` — runs a Rocq query. Result in
@@ -115,7 +131,8 @@ Extra response: `count`, `rewound_text`.
 2. `verify_to(before_text: "Lemma foo : ...\nProof.")`
 3. `proof_insert` tactics, check `goals`, repeat. `proof_rewind` if
    stuck. `query` to explore.
-4. `proof_insert("\nQed.")`, `save()`.
+4. `proof_insert("\nQed.")`, then `replace_after("Admitted.", "")` if
+   you were filling in a placeholder. `save()`.
 
 **Re-verify after upstream changes:**
 1. `build_deps()`
@@ -124,8 +141,8 @@ Extra response: `count`, `rewound_text`.
 
 ## Notes
 
-- Text matching in `verify_to`/`proof_forward`/`proof_rewind` collapses
-  whitespace runs to a single space.
+- Text matching in `verify_to`/`proof_forward`/`proof_rewind`/
+  `replace_after` collapses whitespace runs to a single space.
 - Sentences end with `.` followed by whitespace/EOF, or are bullets
   (`-`, `+`, `*`) or braces (`{`, `}`).
 
