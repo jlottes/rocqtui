@@ -1,53 +1,6 @@
 open Rocqtui_lib
 
-let () =
-  (* Parse command line: rocqtui [-theme NAME] [file1.v file2.v ...] [-- rocq-args...] *)
-  let filenames = ref [] in
-  let extra_args = ref [] in
-  let theme_name = ref None in
-  let xcompose = ref false in
-  let after_dashdash = ref false in
-  let skip_next = ref false in
-  Array.iteri (fun i arg ->
-    if i = 0 then ()
-    else if !skip_next then
-      skip_next := false
-    else if !after_dashdash then
-      extra_args := arg :: !extra_args
-    else if arg = "--" then
-      after_dashdash := true
-    else if arg = "-theme" then begin
-      if i + 1 < Array.length Sys.argv then begin
-        theme_name := Some Sys.argv.(i + 1);
-        skip_next := true
-      end
-    end
-    else if arg = "-xcompose" || arg = "--xcompose" then
-      xcompose := true
-    else
-      filenames := arg :: !filenames
-  ) Sys.argv;
-  let filenames = List.rev !filenames in
-  let extra_args = List.rev !extra_args in
-  let theme = match !theme_name with
-    | Some n -> Theme.find n
-    | None -> Theme.default
-  in
-  Sys.set_signal Sys.sigint Sys.Signal_ignore;
-  Sys.set_signal Sys.sigtstp Sys.Signal_ignore;
-  Term.init ();
-  let r = Render.create () in
-  Theme.apply theme;
-  Rocq_protocol.set_interrupt_hook (fun t ->
-    (* Read input event to check for ^C *)
-    match Input.read_event ~timeout:0.0 Unix.stdin with
-    | Some (Input.Key (99, m)) when m.ctrl ->  (* ctrl+c = codepoint 99 *)
-      (try Unix.kill (Rocq_protocol.pid t) Sys.sigint with _ -> ())
-    | Some (Input.Key (3, _)) ->  (* raw ctrl+c = 3 *)
-      (try Unix.kill (Rocq_protocol.pid t) Sys.sigint with _ -> ())
-    | _ -> ());
-  Printexc.record_backtrace true;
-  (* Create tabs *)
+let build_initial_state ~filenames ~extra_args =
   let project_dirs = ref [] in
   let create_tab_for_file filename =
     let (project_dir, project_args) = Project.find_args (Some filename) in
@@ -67,6 +20,114 @@ let () =
   List.iter (fun tab ->
     if tab != List.hd initial_tabs then Tab.add_tab mgr tab
   ) initial_tabs;
+  (mgr, !project_dirs)
+
+(* Headless loop: no terminal, no rendering, no stdin input. Just runs
+   the MCP server and drives Rocq sessions so that an external client
+   (typically the rocqtui_mcp bridge) can exercise the API end-to-end. *)
+let run_headless ~filenames ~extra_args ~socket_path =
+  Printexc.record_backtrace true;
+  let (mgr, project_dirs) = build_initial_state ~filenames ~extra_args in
+  let mcp = Mcp_server.create ?socket_path () in
+  List.iter (Mcp_server.create_project_symlink mcp) project_dirs;
+  let fm = File_manager.create () in
+  List.iter (fun (t : Tab.t) ->
+    match Buffer.filename t.buf with
+    | Some f -> File_manager.add_watch fm f
+    | None -> ()
+  ) mgr.tabs;
+  let running = ref true in
+  let stop _ = running := false in
+  Sys.set_signal Sys.sigint  (Sys.Signal_handle stop);
+  Sys.set_signal Sys.sigterm (Sys.Signal_handle stop);
+  Sys.set_signal Sys.sigpipe Sys.Signal_ignore;
+  Printf.printf "rocqtui headless: socket=%s pid=%d\n%!"
+    (Mcp_server.socket_path mcp) (Unix.getpid ());
+  while !running do
+    let tab = Tab.active_tab mgr in
+    let timeout =
+      if Session.is_busy_opt tab.session then 0.01 else 0.1
+    in
+    let mcp_fds = Mcp_server.server_fd mcp :: Mcp_server.client_fds mcp in
+    let watch_fds = [File_manager.watch_fd fm] in
+    let extra_fds = mcp_fds @ watch_fds in
+    let ready =
+      try Main_loop.select_with_watches extra_fds timeout
+      with Unix.Unix_error (Unix.EINTR, _, _) -> []
+    in
+    ignore (Mcp_server.handle_ready mcp ready mgr);
+    ignore (File_manager.poll fm mgr.Tab.tabs);
+    if Tab.poll_all mgr then
+      Mcp_server.poll_notifications mcp mgr
+  done;
+  Mcp_server.shutdown mcp;
+  File_manager.close fm;
+  List.iter (fun (tab : Tab.t) ->
+    match tab.session with Some s -> Session.quit s | None -> ()
+  ) mgr.tabs
+
+let () =
+  (* Parse command line: rocqtui [-theme NAME] [--headless] [--socket-path P]
+     [file1.v file2.v ...] [-- rocq-args...] *)
+  let filenames = ref [] in
+  let extra_args = ref [] in
+  let theme_name = ref None in
+  let xcompose = ref false in
+  let headless = ref false in
+  let socket_path = ref None in
+  let after_dashdash = ref false in
+  let skip_next = ref false in
+  Array.iteri (fun i arg ->
+    if i = 0 then ()
+    else if !skip_next then
+      skip_next := false
+    else if !after_dashdash then
+      extra_args := arg :: !extra_args
+    else if arg = "--" then
+      after_dashdash := true
+    else if arg = "-theme" then begin
+      if i + 1 < Array.length Sys.argv then begin
+        theme_name := Some Sys.argv.(i + 1);
+        skip_next := true
+      end
+    end
+    else if arg = "-xcompose" || arg = "--xcompose" then
+      xcompose := true
+    else if arg = "--headless" then
+      headless := true
+    else if arg = "--socket-path" then begin
+      if i + 1 < Array.length Sys.argv then begin
+        socket_path := Some Sys.argv.(i + 1);
+        skip_next := true
+      end
+    end
+    else
+      filenames := arg :: !filenames
+  ) Sys.argv;
+  let filenames = List.rev !filenames in
+  let extra_args = List.rev !extra_args in
+  if !headless then
+    run_headless ~filenames ~extra_args ~socket_path:!socket_path
+  else
+  let theme = match !theme_name with
+    | Some n -> Theme.find n
+    | None -> Theme.default
+  in
+  Sys.set_signal Sys.sigint Sys.Signal_ignore;
+  Sys.set_signal Sys.sigtstp Sys.Signal_ignore;
+  Term.init ();
+  let r = Render.create () in
+  Theme.apply theme;
+  Rocq_protocol.set_interrupt_hook (fun t ->
+    (* Read input event to check for ^C *)
+    match Input.read_event ~timeout:0.0 Unix.stdin with
+    | Some (Input.Key (99, m)) when m.ctrl ->  (* ctrl+c = codepoint 99 *)
+      (try Unix.kill (Rocq_protocol.pid t) Sys.sigint with _ -> ())
+    | Some (Input.Key (3, _)) ->  (* raw ctrl+c = 3 *)
+      (try Unix.kill (Rocq_protocol.pid t) Sys.sigint with _ -> ())
+    | _ -> ());
+  Printexc.record_backtrace true;
+  let (mgr, project_dirs) = build_initial_state ~filenames ~extra_args in
   if Tab.count mgr > 1 then
     Render.set_tab_bar r true;
   (* Editor context *)
@@ -87,7 +148,7 @@ let () =
   (* Start MCP server *)
   let mcp = Mcp_server.create () in
   (* Create MCP socket symlinks in project directories *)
-  List.iter (Mcp_server.create_project_symlink mcp) !project_dirs;
+  List.iter (Mcp_server.create_project_symlink mcp) project_dirs;
   (* File manager *)
   let fm = File_manager.create () in
   List.iter (fun (t : Tab.t) ->

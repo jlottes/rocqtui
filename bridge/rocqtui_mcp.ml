@@ -177,6 +177,30 @@ let get_state conn ?(tab=(-1)) () =
   else "rocqtui://state" in
   parse_state (read_resource conn uri)
 
+(* If [args] carries a [display] options block, replace [state.goals] with
+   a fresh render via the [get_goals] MCP tool. The [rocqtui://state]
+   resource only carries the IDE's persistent rendering, so per-call
+   display options would otherwise be silently dropped. *)
+let apply_display conn args ?tab state =
+  match Yojson.Safe.Util.member "display" args with
+  | `Assoc _ as opts ->
+    let tool_args =
+      let base = ["options", opts] in
+      match tab with
+      | Some n -> ("tab", `Int n) :: base
+      | None -> base
+    in
+    (match call_tool conn "get_goals" (`Assoc tool_args) with
+     | Some (`Assoc fields, _) ->
+       (match List.assoc_opt "content" fields with
+        | Some (`List ((`Assoc c) :: _)) ->
+          (match List.assoc_opt "text" c with
+           | Some (`String t) -> { state with goals = Some t }
+           | _ -> state)
+        | _ -> state)
+     | _ -> state)
+  | _ -> state
+
 (* --- Poll until idle --- *)
 
 let poll_interval = 0.05  (* 50ms *)
@@ -273,6 +297,7 @@ let handle_verify_to conn args state =
   ignore (call_tool conn "go_to_offset"
     (`Assoc ["offset", `Int offset]));
   let final = poll_until_idle conn ?tab () in
+  let final = apply_display conn args ?tab final in
   let resp = build_response final in
   (* Check for errors *)
   let extra = match final.error with
@@ -354,6 +379,7 @@ let handle_proof_insert conn args state =
     ignore (poll_until_idle conn ?tab ())
   end;
   let final2 = get_state conn ?tab () in
+  let final2 = apply_display conn args ?tab final2 in
   let resp = build_response final2 in
   merge_json resp [
     "verified_text", `String verified_text;
@@ -416,6 +442,7 @@ let handle_proof_forward conn args state =
       (fs, Some msg)
     | None -> (None, None)
   in
+  let final = apply_display conn args ?tab final in
   let resp = build_response final in
   merge_json resp [
     "verified_text", `String verified_text;
@@ -462,6 +489,7 @@ let handle_proof_rewind conn args state =
       ignore (poll_until_idle conn ?tab ())
     end;
     let final = get_state conn ?tab () in
+    let final = apply_display conn args ?tab final in
     let resp = build_response final in
     merge_json resp [
       "count", `Int count;
@@ -482,6 +510,7 @@ let handle_query conn args _state =
   let tab = match args |> member "tab" with
     | `Int n -> Some n | _ -> None in
   let final = get_state conn ?tab () in
+  let final = apply_display conn args ?tab final in
   build_response final
 
 let handle_save conn args _state =

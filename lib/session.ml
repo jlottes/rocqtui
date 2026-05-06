@@ -465,17 +465,50 @@ let is_busy_opt = function
   | Some t -> is_busy t
   | None -> false
 
-let query t phrase =
+(* Bake current Printopts into a transient state so [Stm.query] renders
+   with them. SetOptions and inline [Set Printing ...] in the query
+   phrase don't work: [Stm.query] wraps in [State.purify] which restores
+   the snapshot at [at]; multi-sentence phrases iterate with each
+   sentence starting from [at]'s snapshot afresh (interp_gen freezes
+   the new system into s_cache after each sentence, so the next
+   iteration's unfreeze hits a cache miss and reverts Goptions). What
+   does work: [Stm.add] freezes live Goptions into the new state's
+   snapshot. We Add one [Set Printing X.] per option, query at the
+   resulting tip, then [edit_at] back to undo the document mutation. *)
+let query ?(extra_opts=[]) t phrase =
   t.msgs <- [];
-  let opts = Printopts.to_set_options () in
-  ignore (Rocq_protocol.set_options t.rocq opts);
+  let prev_tip = t.tip in
+  let setup = Printopts.to_vernac_sentences ~override:extra_opts () in
+  let final_tip = ref prev_tip in
+  let setup_ok = ref true in
+  List.iter (fun sent ->
+    if !setup_ok then begin
+      let eid = t.next_edit_id in
+      t.next_edit_id <- eid - 1;
+      match Rocq_protocol.add t.rocq
+        ~state_id:!final_tip ~edit_id:eid ~verbose:false
+        ~bp:0 ~line:0 ~bol:0 sent with
+      | Interface.Good (new_id, _) -> final_tip := new_id
+      | Interface.Fail _ -> setup_ok := false
+    end
+  ) setup;
   process_feedback t;
-  Rocq_protocol.query t.rocq ~state_id:t.tip phrase;
-  process_feedback t
+  (* Discard any feedback from the setup sentences; the user only
+     wants to see output from their actual query. *)
+  t.msgs <- [];
+  let query_at = if !setup_ok then !final_tip else prev_tip in
+  Rocq_protocol.query t.rocq ~state_id:query_at phrase;
+  process_feedback t;
+  let query_msgs = t.msgs in
+  if !final_tip <> prev_tip then begin
+    ignore (Rocq_protocol.edit_at t.rocq prev_tip);
+    process_feedback t
+  end;
+  t.msgs <- query_msgs
 
 (* Synchronously fetch goals and format them *)
-let fetch_goals_text ?(all_hyps=true) t =
-  let opts = Printopts.to_set_options () in
+let fetch_goals_text ?(all_hyps=true) ?(extra_opts=[]) t =
+  let opts = Printopts.to_set_options_with extra_opts in
   ignore (Rocq_protocol.set_options t.rocq opts);
   process_feedback t;
   match Rocq_protocol.goals t.rocq with
@@ -486,15 +519,6 @@ let fetch_goals_text ?(all_hyps=true) t =
     process_feedback t; None
   | Interface.Fail _ ->
     process_feedback t; None
-
-let with_options t temp_opts f =
-  ignore (Rocq_protocol.set_options t.rocq temp_opts);
-  process_feedback t;
-  f ();
-  (* Restore user's options *)
-  let user_opts = Printopts.to_set_options () in
-  ignore (Rocq_protocol.set_options t.rocq user_opts);
-  process_feedback t
 
 let sync_options_and_refresh t =
   t.goals_dirty <- true;

@@ -31,12 +31,18 @@ Lemma/Theorem/Definition statement, even past 500 bytes.
 
 ## Tools
 
-All tools accept optional `"tab"` (integer ID) and `"display"`:
+All tools accept optional `"tab"` (integer ID) and `"display"`. The
+`display` block sets per-call printing options when rendering the goal
+text (and, for `query`, the query's output). Omitted keys fall through
+to the IDE's persistent toggles.
 
 ```jsonc
 "display": {
-  "implicit": true, "all": true, "notations": false,
-  "coercions": true, "universes": true, "existential": true
+  "implicit": true, "coercions": true, "notations": false,
+  "all": true, "existential": true, "universes": true,
+  "parens": true, "unfocused": true, "records": false,
+  "matching": false, "synth": false, "goal_names": true,
+  "projections": true, "compact_contexts": true, "evar_line": false
 }
 ```
 

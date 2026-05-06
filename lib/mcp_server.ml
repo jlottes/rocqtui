@@ -66,6 +66,38 @@ let json_notification method_ params =
   ]
 
 (* Robust int extraction — handles both `Int and `String "123" *)
+(* Parse a printing-options object passed as the [options] / [display]
+   argument on tools that accept per-call rendering overrides. Keys are
+   snake_case names matching the entries in {!Printopts}. Unknown keys
+   are ignored. *)
+let display_option_keys = [
+  "implicit",         ["Printing"; "Implicit"];
+  "coercions",        ["Printing"; "Coercions"];
+  "notations",        ["Printing"; "Notations"];
+  "all",              ["Printing"; "All"];
+  "existential",      ["Printing"; "Existential"; "Instances"];
+  "universes",        ["Printing"; "Universes"];
+  "parens",           ["Printing"; "Parentheses"];
+  "unfocused",        ["Printing"; "Unfocused"];
+  "records",          ["Printing"; "Records"];
+  "matching",         ["Printing"; "Matching"];
+  "synth",            ["Printing"; "Synth"];
+  "goal_names",       ["Printing"; "Goal"; "Names"];
+  "projections",      ["Printing"; "Projections"];
+  "compact_contexts", ["Printing"; "Compact"; "Contexts"];
+  "evar_line",        ["Printing"; "Dependent"; "Evars"; "Line"];
+]
+
+let parse_display_options options =
+  match options with
+  | `Assoc _ ->
+    List.filter_map (fun (key, rocq_name) ->
+      match Yojson.Safe.Util.member key options with
+      | `Bool v -> Some (rocq_name, Interface.BoolValue v)
+      | _ -> None
+    ) display_option_keys
+  | _ -> []
+
 let to_int_lenient json =
   match json with
   | `Int n -> n
@@ -144,15 +176,9 @@ let tool_defs = [
        "command", `Assoc ["type", `String "string"];
        "options", `Assoc [
          "type", `String "object";
-         "description", `String "Temporary printing options to set before the query. Restored after.";
-         "properties", `Assoc [
-           "implicit", `Assoc ["type", `String "boolean"];
-           "all", `Assoc ["type", `String "boolean"];
-           "notations", `Assoc ["type", `String "boolean"];
-           "coercions", `Assoc ["type", `String "boolean"];
-           "universes", `Assoc ["type", `String "boolean"];
-           "existential", `Assoc ["type", `String "boolean"];
-         ];
+         "description", `String "Per-call printing-option overrides for this query.";
+         "properties", `Assoc (List.map (fun (k, _) ->
+           k, `Assoc ["type", `String "boolean"]) display_option_keys);
        ];
      ];
      "required", `List [`String "command"];
@@ -173,12 +199,9 @@ let tool_defs = [
      "properties", `Assoc [
        "options", `Assoc [
          "type", `String "object";
-         "description", `String "Printing options for this query";
-         "properties", `Assoc [
-           "implicit", `Assoc ["type", `String "boolean"];
-           "all", `Assoc ["type", `String "boolean"];
-           "notations", `Assoc ["type", `String "boolean"];
-         ];
+         "description", `String "Per-call printing-option overrides for the rendered goal text.";
+         "properties", `Assoc (List.map (fun (k, _) ->
+           k, `Assoc ["type", `String "boolean"]) display_option_keys);
        ];
      ];
    ]);
@@ -708,30 +731,10 @@ let handle_tool t client name args mgr =
   | "query" ->
     let open Yojson.Safe.Util in
     let cmd = args |> member "command" |> to_string in
-    let options = args |> member "options" in
+    let temp_opts = parse_display_options (args |> member "options") in
     (match tab.session with
      | Some s ->
-       let temp_opts = match options with
-         | `Assoc _ ->
-           let opt name rocq_name =
-             match options |> member name with
-             | `Bool v -> Some (rocq_name, Interface.BoolValue v)
-             | _ -> None
-           in
-           List.filter_map Fun.id [
-             opt "implicit" ["Printing"; "Implicit"];
-             opt "all" ["Printing"; "All"];
-             opt "notations" ["Printing"; "Notations"];
-             opt "coercions" ["Printing"; "Coercions"];
-             opt "universes" ["Printing"; "Universes"];
-             opt "existential" ["Printing"; "Existential"; "Instances"];
-           ]
-         | _ -> []
-       in
-       if temp_opts <> [] then
-         Session.with_options s temp_opts (fun () -> Session.query s cmd)
-       else
-         Session.query s cmd
+       Session.query ~extra_opts:temp_opts s cmd
      | None -> ());
     let msgs = match tab.session with
       | Some s -> Session.messages s | None -> [] in
@@ -754,34 +757,13 @@ let handle_tool t client name args mgr =
     ]])
   | "get_goals" ->
     let open Yojson.Safe.Util in
-    let options = args |> member "options" in
+    let temp_opts = parse_display_options (args |> member "options") in
     (match tab.session with
      | Some s ->
-       let parse_opts () = match options with
-         | `Assoc _ ->
-           let opt name rocq_name =
-             match options |> member name with
-             | `Bool v -> Some (rocq_name, Interface.BoolValue v)
-             | _ -> None
-           in
-           List.filter_map Fun.id [
-             opt "implicit" ["Printing"; "Implicit"];
-             opt "all" ["Printing"; "All"];
-             opt "notations" ["Printing"; "Notations"];
-           ]
-         | _ -> []
-       in
-       let temp_opts = parse_opts () in
        let goals_text = ref "No proof in progress." in
-       let fetch () =
-         match Session.fetch_goals_text s with
-         | Some t -> goals_text := t
-         | None -> ()
-       in
-       if temp_opts <> [] then
-         Session.with_options s temp_opts fetch
-       else
-         fetch ();
+       (match Session.fetch_goals_text ~extra_opts:temp_opts s with
+        | Some t -> goals_text := t
+        | None -> ());
        (false, `Assoc ["content", `List [
          `Assoc ["type", `String "text"; "text", `String !goals_text]
        ]])

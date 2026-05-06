@@ -49,8 +49,21 @@ val sentence_ranges : t -> sentence_display list
 val is_busy : t -> bool
 val is_busy_opt : t option -> bool
 val pid : t -> int
-val query : t -> string -> unit
-val with_options : t -> (string list * Interface.option_value) list -> (unit -> unit) -> unit
-val fetch_goals_text : ?all_hyps:bool -> t -> string option
+
+(** Run a query (e.g. [About foo.]) at the current tip with the
+    current Printopts baked in. Per-call [extra_opts] override
+    persistent options for this query only. Implementation: Add one
+    [Set Printing X.] sentence per option to a transient state on top
+    of [tip], query at that state, then [edit_at] back. Slightly
+    expensive (one round-trip per option) but the only way to affect
+    [Stm.query]'s rendering — see [session.ml] for the rationale. *)
+val query :
+  ?extra_opts:(string list * Interface.option_value) list ->
+  t -> string -> unit
+
+val fetch_goals_text :
+  ?all_hyps:bool ->
+  ?extra_opts:(string list * Interface.option_value) list ->
+  t -> string option
 val sync_options_and_refresh : t -> unit
 val quit : t -> unit

@@ -1,0 +1,3 @@
+(executables
+ (names test_smoke test_display_options test_query_display)
+ (libraries rocqtui_lib unix yojson))
