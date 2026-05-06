@@ -1,4 +1,5 @@
 (executables
  (names test_smoke test_display_options test_query_display test_display_keys
-        test_error_recovery test_buffer_mutation test_save test_open_file)
+        test_error_recovery test_buffer_mutation test_save test_open_file
+        test_bridge_validation)
  (libraries rocqtui_lib unix yojson str))
