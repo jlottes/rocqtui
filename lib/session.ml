@@ -1,3 +1,17 @@
+(* Default render width when no caller specifies one. Matches Rocq's
+   own [Pp.string_of_ppcmds] (which uses [Format.str_formatter]'s
+   default margin of ~78). The View passes the actual goals/messages
+   pane width so panes wider or narrower than 78 reflow correctly. *)
+let default_width = 78
+
+let string_of_pp ?(width=default_width) pp =
+  let buf = Stdlib.Buffer.create 256 in
+  let fmt = Format.formatter_of_buffer buf in
+  Format.pp_set_margin fmt width;
+  Format.fprintf fmt "@[%a@]" Pp.pp_with pp;
+  Format.pp_print_flush fmt ();
+  Stdlib.Buffer.contents buf
+
 type sentence_status = Processing | Verified | Error of string
 
 type sentence_info = {
@@ -14,7 +28,11 @@ type t = {
   mutable sentences : sentence_info list;  (* stack, most recent first *)
   mutable next_edit_id : int;
   mutable goals_cache : Interface.goals option;
-  mutable msgs : string list;
+  (* Messages stored as Pp.t so they can be re-rendered at the current
+     pane width. Sentence Error status keeps a stringified copy at
+     default width — used for short status display where width doesn't
+     matter much. *)
+  mutable msgs : Pp.t list;
   mutable err_range : (int * int) option;
   mutable target_end : int;  (* user's target boundary *)
   mutable goals_dirty : bool;  (* goals need refresh when idle *)
@@ -45,18 +63,17 @@ let process_one_feedback t (fb : Feedback.feedback) =
   | Feedback.Message (Feedback.Error, _, _, msg) ->
     (match find_sentence t sid with
      | Some s ->
-       let err_msg = Pp.string_of_ppcmds msg in
-       s.status <- Error err_msg;
-       t.msgs <- t.msgs @ [err_msg];
+       s.status <- Error (string_of_pp msg);
+       t.msgs <- t.msgs @ [msg];
        t.err_range <- Some (s.start_off, s.end_off);
        t.state_changed <- true
      | None ->
-       t.msgs <- t.msgs @ [Pp.string_of_ppcmds msg])
+       t.msgs <- t.msgs @ [msg])
   | Feedback.Message (Feedback.Warning, _, _, msg) ->
-    t.msgs <- t.msgs @ ["Warning: " ^ Pp.string_of_ppcmds msg];
+    t.msgs <- t.msgs @ [Pp.(str "Warning: " ++ msg)];
     t.state_changed <- true
   | Feedback.Message (_, _, _, msg) ->
-    t.msgs <- t.msgs @ [Pp.string_of_ppcmds msg];
+    t.msgs <- t.msgs @ [msg];
     t.state_changed <- true
   | _ -> ()
 
@@ -101,9 +118,15 @@ let rewind_errors t =
     t.goals_dirty <- true;
     t.state_changed <- true
 
-(* Format goals for display *)
-let format_goals ?(all_hyps=true) (gs : Interface.goals) =
+(* Format goals for display.
+
+   [width] is the rendering width used by the Pp pretty-printer for
+   hypothesis types and goal conclusions. Each rendered Pp is prefixed
+   with two spaces of indentation; the prefix only lands on the first
+   line of a multi-line wrap, matching prior behavior. *)
+let format_goals ?(all_hyps=true) ?(width=default_width) (gs : Interface.goals) =
   let ob = Stdlib.Buffer.create 256 in
+  let pp_to_string pp = string_of_pp ~width pp in
   let fg = gs.Interface.fg_goals in
   let n = List.length fg in
   if n = 0 then begin
@@ -116,13 +139,13 @@ let format_goals ?(all_hyps=true) (gs : Interface.goals) =
     | [], [], _ ->
       Stdlib.Buffer.add_string ob "All goals completed except some admitted goals:\n\n";
       List.iter (fun (g : Interface.goal) ->
-        Stdlib.Buffer.add_string ob ("  " ^ Pp.string_of_ppcmds g.Interface.goal_ccl ^ "\n")
+        Stdlib.Buffer.add_string ob ("  " ^ pp_to_string g.Interface.goal_ccl ^ "\n")
       ) given_up;
       Stdlib.Buffer.add_string ob "\nYou need to go back and solve them.\n"
     | [], _, _ ->
       Stdlib.Buffer.add_string ob "All remaining goals are on the shelf:\n\n";
       List.iter (fun (g : Interface.goal) ->
-        Stdlib.Buffer.add_string ob ("  " ^ Pp.string_of_ppcmds g.Interface.goal_ccl ^ "\n")
+        Stdlib.Buffer.add_string ob ("  " ^ pp_to_string g.Interface.goal_ccl ^ "\n")
       ) shelved
     | _, _, _ ->
       Stdlib.Buffer.add_string ob "This subproof is complete, but there are unfocused goals:\n\n";
@@ -132,7 +155,7 @@ let format_goals ?(all_hyps=true) (gs : Interface.goals) =
           | None -> Printf.sprintf "(%d/%d)" (i + 1) (List.length bg)
         in
         Stdlib.Buffer.add_string ob (Printf.sprintf "  ______________________________________%s\n" annot);
-        Stdlib.Buffer.add_string ob ("  " ^ Pp.string_of_ppcmds g.Interface.goal_ccl ^ "\n\n")
+        Stdlib.Buffer.add_string ob ("  " ^ pp_to_string g.Interface.goal_ccl ^ "\n\n")
       ) bg
   end else begin
     Stdlib.Buffer.add_string ob (Printf.sprintf "%d subgoal%s\n\n" n (if n > 1 then "s" else ""));
@@ -140,7 +163,7 @@ let format_goals ?(all_hyps=true) (gs : Interface.goals) =
       let show_hyps = (i = 0) || all_hyps in
       if show_hyps then begin
         List.iter (fun hyp ->
-          Stdlib.Buffer.add_string ob ("  " ^ Pp.string_of_ppcmds hyp ^ "\n")
+          Stdlib.Buffer.add_string ob ("  " ^ pp_to_string hyp ^ "\n")
         ) g.Interface.goal_hyp
       end;
       let annot = match g.Interface.goal_name with
@@ -149,7 +172,7 @@ let format_goals ?(all_hyps=true) (gs : Interface.goals) =
       in
       Stdlib.Buffer.add_string ob
         (Printf.sprintf "  ______________________________________%s\n" annot);
-      Stdlib.Buffer.add_string ob ("  " ^ Pp.string_of_ppcmds g.Interface.goal_ccl ^ "\n\n")
+      Stdlib.Buffer.add_string ob ("  " ^ pp_to_string g.Interface.goal_ccl ^ "\n\n")
     ) fg
   end;
   Stdlib.Buffer.contents ob
@@ -169,7 +192,7 @@ let [@warning "-32"] refresh_goals t =
     t.state_changed <- true
   | Interface.Fail (_, _, msg) ->
     process_feedback t;
-    t.msgs <- t.msgs @ [Pp.string_of_ppcmds msg];
+    t.msgs <- t.msgs @ [msg];
     t.goals_cache <- None;
     t.state_changed <- true
 
@@ -244,7 +267,7 @@ let submit_next_sentence t =
                (match t.sentences with
                 | hd :: rest when hd == s -> t.sentences <- rest
                 | _ -> ());
-               t.msgs <- t.msgs @ [Pp.string_of_ppcmds msg];
+               t.msgs <- t.msgs @ [msg];
                t.err_range <- Some (vend, end_off);
                t.target_end <- verified_end t;
                t.state_changed <- true;
@@ -278,7 +301,7 @@ let rewind_to_target t =
          t.tip <- target_id;
          t.state_changed <- true
        | Interface.Fail (safe_id, _, msg) ->
-         t.msgs <- t.msgs @ ["Undo failed: " ^ Pp.string_of_ppcmds msg];
+         t.msgs <- t.msgs @ [Pp.(str "Undo failed: " ++ msg)];
          if not (Stateid.equal safe_id t.tip
                  || Stateid.equal safe_id Stateid.dummy) then
            rewind_to_state t safe_id;
@@ -338,7 +361,7 @@ let poll t =
                    | Interface.Good None ->
                      t.goals_cache <- None
                    | Interface.Fail (_, _, msg) ->
-                     t.msgs <- t.msgs @ [Pp.string_of_ppcmds msg];
+                     t.msgs <- t.msgs @ [msg];
                      t.goals_cache <- None);
                   t.state_changed <- true))
       end
@@ -364,7 +387,7 @@ let step_forward t =
   let text = Buffer.text t.buf in
   let cur_target = t.target_end in
   match Sentence.find_end text ~start:cur_target with
-  | None -> t.msgs <- ["No more sentences."]
+  | None -> t.msgs <- [Pp.str "No more sentences."]
   | Some end_off ->
     let cursor_off = cursor_byte_offset t in
     t.target_end <- end_off;
@@ -377,7 +400,7 @@ let step_backward t =
   t.msgs <- [];
   t.err_range <- None;
   if t.target_end = 0 then
-    t.msgs <- ["Already at the beginning."]
+    t.msgs <- [Pp.str "Already at the beginning."]
   else begin
     (* Find the sentence boundary before current target *)
     let old_target = t.target_end in
@@ -449,13 +472,18 @@ let sentence_ranges t =
 let pending_end t = t.target_end
 let error_range t = t.err_range
 let clear_error t = t.err_range <- None
-let goals_text ?(all_hyps=true) t =
+let goals_text ?(all_hyps=true) ?(width=default_width) t =
   match t.goals_cache with
   | None -> None
-  | Some gs -> Some (format_goals ~all_hyps gs)
-let messages t = t.msgs
+  | Some gs -> Some (format_goals ~all_hyps ~width gs)
+
+let messages ?(width=default_width) t =
+  List.map (string_of_pp ~width) t.msgs
+
 let clear_messages t = t.msgs <- []
-let set_messages t msgs = t.msgs <- msgs
+
+let set_messages t msgs =
+  t.msgs <- List.map Pp.str msgs
 
 let is_busy t =
   Rocq_protocol.is_busy t.rocq || verified_end t < t.target_end
@@ -507,14 +535,14 @@ let query ?(extra_opts=[]) t phrase =
   t.msgs <- query_msgs
 
 (* Synchronously fetch goals and format them *)
-let fetch_goals_text ?(all_hyps=true) ?(extra_opts=[]) t =
+let fetch_goals_text ?(all_hyps=true) ?(width=default_width) ?(extra_opts=[]) t =
   let opts = Printopts.to_set_options_with extra_opts in
   ignore (Rocq_protocol.set_options t.rocq opts);
   process_feedback t;
   match Rocq_protocol.goals t.rocq with
   | Interface.Good (Some gs) ->
     process_feedback t;
-    Some (format_goals ~all_hyps gs)
+    Some (format_goals ~all_hyps ~width gs)
   | Interface.Good None ->
     process_feedback t; None
   | Interface.Fail _ ->

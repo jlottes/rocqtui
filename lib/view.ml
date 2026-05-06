@@ -235,6 +235,14 @@ let render_text_pane ?(sel : Tab.pane_selection option) ?set_cache
      done
    | _ -> ())
 
+(* Pp pretty-printing target width for a pane. Subtracts the two-space
+   indent that format_goals prefixes onto the rendered hyps/goals so
+   the output fits within the visible width. Lower bound at 20 keeps
+   formatting sane even in tiny panes. *)
+let pp_width_for_pane r pane =
+  let rect = Render.pane_rect r pane in
+  max 20 (rect.Render.width - 2)
+
 let render_goals (ctx : Editor_context.t) r (tab : Tab.t) =
   let session = tab.session in
   let lines = match session with
@@ -243,7 +251,8 @@ let render_goals (ctx : Editor_context.t) r (tab : Tab.t) =
                 else "No Rocq session." in
       String.split_on_char '\n' msg
     | Some sess ->
-      match Session.goals_text ~all_hyps:tab.show_all_hyps sess with
+      let width = pp_width_for_pane r Render.PGoals in
+      match Session.goals_text ~all_hyps:tab.show_all_hyps ~width sess with
       | None -> ["No proof in progress."]
       | Some text -> String.split_on_char '\n' text
   in
@@ -254,16 +263,17 @@ let render_goals (ctx : Editor_context.t) r (tab : Tab.t) =
   tab.goals_scroll <- !gs
 
 (* Update messages sub-tab contents. Call before rendering. *)
-let update_msg_tabs (tab : Tab.t) =
+let update_msg_tabs r (tab : Tab.t) =
   let session = tab.session in
   (* Update Rocq tab *)
   let rocq = Tab.ensure_msg_tab tab.msg "Rocq" in
   let rocq_lines = match session with
     | None -> []
     | Some sess ->
+      let width = pp_width_for_pane r Render.PMessages in
       List.concat_map (fun msg ->
         String.split_on_char '\n' msg
-      ) (Session.messages sess)
+      ) (Session.messages ~width sess)
   in
   (* Don't auto-switch away from a terminal sub-tab *)
   let active_is_terminal =
@@ -289,7 +299,7 @@ let update_msg_tabs (tab : Tab.t) =
   end
 
 let render_messages r (tab : Tab.t) =
-  update_msg_tabs tab;
+  update_msg_tabs r tab;
   Tab.sync_terminals tab.msg;
   (* Resize all terminals to current messages pane dims. No-op if
      unchanged, so safe to call every frame. *)

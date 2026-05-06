@@ -41,8 +41,13 @@ val pending_end : t -> int
 
 val error_range : t -> (int * int) option
 val clear_error : t -> unit
-val goals_text : ?all_hyps:bool -> t -> string option
-val messages : t -> string list
+
+(** [width] is the target line width for Pp pretty-printing. Defaults
+    to ~78 (matching {!Pp.string_of_ppcmds}). The View should pass the
+    current goals/messages pane width so output reflows on resize. *)
+val goals_text : ?all_hyps:bool -> ?width:int -> t -> string option
+
+val messages : ?width:int -> t -> string list
 val clear_messages : t -> unit
 val set_messages : t -> string list -> unit
 val sentence_ranges : t -> sentence_display list
@@ -63,6 +68,7 @@ val query :
 
 val fetch_goals_text :
   ?all_hyps:bool ->
+  ?width:int ->
   ?extra_opts:(string list * Interface.option_value) list ->
   t -> string option
 val sync_options_and_refresh : t -> unit
