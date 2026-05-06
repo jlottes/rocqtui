@@ -12,7 +12,8 @@
 - [x] Sync stepping in bridge (step_forward/backward/go_to_end block, return goals+errors)
 - [x] go_to_offset tool (set target to byte offset without moving cursor)
 - [x] async flag for stepping tools
-- [ ] Wire up Claude Code as an actual MCP client and test end-to-end
+- [x] Wire up Claude Code as an actual MCP client and test end-to-end
+      (test/e2e/: headless rocqtui + bridge subprocess driven over JSON-RPC)
 - [ ] Handle concurrency: Claude editing while user is typing
 - [x] Line/offset conversion: `offset_of_line` tool + `line_offsets` resource
 - [x] Undo/redo tools
@@ -96,7 +97,14 @@ or hand-written).
 
 ## Async / Performance
 
-- [ ] Make `query` and `with_options` non-blocking (currently sync eval_call)
+- [ ] Make `query` non-blocking. Currently sync — and now does ~15
+      Add round-trips (the EditAt dance for printing-option overrides),
+      so the latency cost is multiplied. `with_options` no longer exists.
+- [ ] Skip `Session.query`'s Add+EditAt dance when the persistent
+      Printopts already match `tip`'s snapshot. Rocq has no API to read
+      a snapshot's options, so we'd need to track "last setup baked
+      into tip" and invalidate on stepping. Cheap when it applies
+      (zero round-trips for queries against an unchanged tip).
 - [ ] Make `edit_at` (backward stepping) non-blocking
 - [ ] Syntax highlighting caching (don't re-highlight unchanged lines)
 - [ ] Incremental re-rendering (only redraw changed regions)
@@ -107,7 +115,10 @@ or hand-written).
 - [ ] Handle rocqtop crash gracefully (show error, allow restart)
 - [ ] Handle broken pipe on rocqtop fd
 - [ ] Recover from MCP client sending malformed JSON
-- [ ] Session tests (test async stepping, error recovery, rewind)
+- [x] Session tests (test async stepping, error recovery, rewind)
+      (covered by test/e2e/: smoke, error_recovery, buffer_mutation,
+      open_file, save, bridge_validation, display_options,
+      query_display, display_keys)
 
 ## Git Integration (stretch goal)
 
@@ -121,4 +132,7 @@ or hand-written).
 - [x] README with usage instructions, keybindings summary
 - [ ] man page or --help output
 - [x] MCP API documentation for Claude Code integration (CLAUDE_MCP.md)
+- [ ] Document `--headless` / `--socket-path` flags (currently only used
+      by the e2e harness, but useful for any external MCP client that
+      doesn't want a TUI)
 - [ ] Contributing guide
