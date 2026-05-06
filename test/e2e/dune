@@ -1,5 +1,44 @@
+; End-to-end tests — opt in via `dune build @e2e`. Each test spawns
+; its own headless rocqtui + bridge subprocess and runs in its own
+; temp dir, so they can fan out in parallel. Wall time for all nine
+; is ~0.5s with a warm Rocq install.
+;
+; Kept off the default `runtest` alias — `dune runtest` only runs
+; the unit tests in test/.
 (executables
  (names test_smoke test_display_options test_query_display test_display_keys
         test_error_recovery test_buffer_mutation test_save test_open_file
         test_bridge_validation)
  (libraries rocqtui_lib unix yojson str))
+
+; The harness locates rocqtui and the bridge by walking up from cwd
+; looking for _build/default/bin/main.exe and
+; _build/default/bridge/rocqtui_mcp.exe — these deps make sure both
+; are built before the tests run.
+(rule (alias e2e)
+ (deps %{exe:../../bin/main.exe} %{exe:../../bridge/rocqtui_mcp.exe})
+ (action (run %{dep:test_smoke.exe})))
+(rule (alias e2e)
+ (deps %{exe:../../bin/main.exe} %{exe:../../bridge/rocqtui_mcp.exe})
+ (action (run %{dep:test_display_options.exe})))
+(rule (alias e2e)
+ (deps %{exe:../../bin/main.exe} %{exe:../../bridge/rocqtui_mcp.exe})
+ (action (run %{dep:test_query_display.exe})))
+(rule (alias e2e)
+ (deps %{exe:../../bin/main.exe} %{exe:../../bridge/rocqtui_mcp.exe})
+ (action (run %{dep:test_display_keys.exe})))
+(rule (alias e2e)
+ (deps %{exe:../../bin/main.exe} %{exe:../../bridge/rocqtui_mcp.exe})
+ (action (run %{dep:test_error_recovery.exe})))
+(rule (alias e2e)
+ (deps %{exe:../../bin/main.exe} %{exe:../../bridge/rocqtui_mcp.exe})
+ (action (run %{dep:test_buffer_mutation.exe})))
+(rule (alias e2e)
+ (deps %{exe:../../bin/main.exe} %{exe:../../bridge/rocqtui_mcp.exe})
+ (action (run %{dep:test_save.exe})))
+(rule (alias e2e)
+ (deps %{exe:../../bin/main.exe} %{exe:../../bridge/rocqtui_mcp.exe})
+ (action (run %{dep:test_open_file.exe})))
+(rule (alias e2e)
+ (deps %{exe:../../bin/main.exe} %{exe:../../bridge/rocqtui_mcp.exe})
+ (action (run %{dep:test_bridge_validation.exe})))

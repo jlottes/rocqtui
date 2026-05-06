@@ -1,3 +1,7 @@
-(executables
- (names test_highlight test_protocol test_sentence test_project test_compose test_wrap test_width test_tab_names test_locate test_grid test_qualid test_search)
+; Unit tests — run via `dune runtest`. dune treats exit code 0 as pass;
+; we don't use .expected files, so stdout output isn't diffed.
+(tests
+ (names test_highlight test_protocol test_sentence test_project test_compose
+        test_wrap test_width test_tab_names test_locate test_grid test_qualid
+        test_search)
  (libraries rocqtui_lib))

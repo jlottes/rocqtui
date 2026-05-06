@@ -9,18 +9,23 @@ dune build
 dune exec bin/main.exe -- -theme solarized-dark <path-to-file>.v
 ```
 
-Tests are runnable but not automatic:
+Tests:
 
 ```bash
-# Unit tests
-dune exec test/test_grid.exe
-dune exec test/test_tab_names.exe
-dune exec test/test_locate.exe
+dune runtest          # all unit tests in test/
+dune build @e2e       # e2e suite in test/e2e/ (kept off runtest)
+```
 
-# E2E tests — spawn headless rocqtui + bridge subprocess, drive the
-# whole stack over JSON-RPC. Run any when touching MCP/bridge/Session/
-# Printopts. ROCQTUI_E2E_TRACE=1 prints the JSON-RPC traffic.
-for t in test/e2e/test_*.exe; do dune exec "$t"; done
+`dune runtest` is fast (subsecond once compiled). `@e2e` spawns
+headless rocqtui + bridge subprocess per test and runs them in
+parallel — wall time ~0.5s with a warm Rocq install. Run `@e2e`
+whenever touching MCP/bridge/Session/Printopts. Set
+`ROCQTUI_E2E_TRACE=1` to dump the JSON-RPC traffic.
+
+Single tests still work directly:
+
+```bash
+dune exec test/e2e/test_smoke.exe
 ```
 
 The headless rocqtui used by the e2e harness is also accessible
