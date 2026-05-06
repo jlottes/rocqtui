@@ -12,9 +12,22 @@ dune exec bin/main.exe -- -theme solarized-dark <path-to-file>.v
 Tests are runnable but not automatic:
 
 ```bash
+# Unit tests
 dune exec test/test_grid.exe
 dune exec test/test_tab_names.exe
 dune exec test/test_locate.exe
+
+# E2E tests — spawn headless rocqtui + bridge subprocess, drive the
+# whole stack over JSON-RPC. Run any when touching MCP/bridge/Session/
+# Printopts. ROCQTUI_E2E_TRACE=1 prints the JSON-RPC traffic.
+for t in test/e2e/test_*.exe; do dune exec "$t"; done
+```
+
+The headless rocqtui used by the e2e harness is also accessible
+manually:
+
+```bash
+dune exec bin/main.exe -- --headless --socket-path /tmp/x.sock file.v
 ```
 
 Standalone tools:
