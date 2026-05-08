@@ -336,9 +336,7 @@ let handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r =
       let text = match ev with Input.Paste t -> Script.normalize_newlines t | _ -> "" in
       if text <> "" && not (Region_buffer.locked tab.rb) then begin
         match Region_buffer.try_replace_selection tab.rb text with
-        | Region_buffer.Applied ->
-          (match session with Some s -> Session.clear_error s | None -> ());
-          ctx.clipboard <- text
+        | Region_buffer.Applied -> ctx.clipboard <- text
         | Region_buffer.Rejected _ -> ()
       end;
       Some Continue

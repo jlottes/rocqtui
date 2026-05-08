@@ -616,14 +616,6 @@ let edit_context buf pos len =
   let snippet = String.sub text s (e - s) in
   Printf.sprintf "OK. Context:\n...%s..." snippet
 
-(* Called before any buffer-mutating tool. Clears the session error
-   (stored as a byte range that becomes stale after any edit) —
-   mirrors what the interactive editor does on every keystroke. *)
-let edit_prologue (tab : Tab.t) =
-  match tab.session with
-  | Some s -> Session.clear_error s
-  | None -> ()
-
 (* Convert a Region_buffer rejection into a structured tool error.
    The [rejection_reason] field is part of the public MCP contract so
    downstream bridges can switch on it without parsing the message. *)
@@ -699,7 +691,6 @@ let handle_tool t client name args mgr =
   | "insert_text" ->
     let offset = args |> Yojson.Safe.Util.member "offset" |> to_int_lenient in
     let text = args |> Yojson.Safe.Util.member "text" |> Yojson.Safe.Util.to_string in
-    edit_prologue tab;
     (match Region_buffer.try_replace
              tab.Tab.rb ~start:offset ~old_end:offset text with
      | Region_buffer.Applied ->
@@ -712,7 +703,6 @@ let handle_tool t client name args mgr =
     let s = args |> Yojson.Safe.Util.member "start" |> to_int_lenient in
     let e = args |> Yojson.Safe.Util.member "end" |> to_int_lenient in
     let text = args |> Yojson.Safe.Util.member "text" |> Yojson.Safe.Util.to_string in
-    edit_prologue tab;
     (match Region_buffer.try_replace
              tab.Tab.rb ~start:s ~old_end:e text with
      | Region_buffer.Applied ->
@@ -786,7 +776,6 @@ let handle_tool t client name args mgr =
   | "delete_range" ->
     let s = args |> Yojson.Safe.Util.member "start" |> to_int_lenient in
     let e = args |> Yojson.Safe.Util.member "end" |> to_int_lenient in
-    edit_prologue tab;
     (match Region_buffer.try_replace
              tab.Tab.rb ~start:s ~old_end:e "" with
      | Region_buffer.Applied ->
@@ -891,7 +880,6 @@ let handle_tool t client name args mgr =
     ) edits in
     (* Sort by start offset descending so earlier offsets stay valid *)
     let sorted = List.sort (fun (a, _, _) (b, _, _) -> compare b a) parsed in
-    edit_prologue tab;
     (* Apply each edit; stop on first rejection. Earlier edits remain
        applied — caller sees partial state plus the rejection reason. *)
     let rec apply_all = function
@@ -954,7 +942,6 @@ let handle_tool t client name args mgr =
         else begin
           (* Apply replacements in reverse order so offsets stay valid *)
           let sorted = List.sort (fun a b -> compare b a) to_replace in
-          edit_prologue tab;
           let rejection = ref None in
           let rec apply = function
             | [] -> ()

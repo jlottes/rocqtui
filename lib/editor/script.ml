@@ -26,7 +26,6 @@ let insert_string (tab : Tab.t) s =
 
 let handle (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r =
   let buf = tab.buf in
-  let session = tab.session in
   match ev with
   (* Navigation with selection (shift+arrows) *)
   | Input.Special (Input.Left, m) when m.shift ->
@@ -100,44 +99,30 @@ let handle (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r =
     in
     (match result with
      | Region_buffer.Applied ->
-       (match session with Some s -> Session.clear_error s | None -> ());
        (match captured with
         | Some t -> ctx.clipboard <- t; Clipboard.copy_to_system t
         | None -> ctx.clipboard <- "")
      | Region_buffer.Rejected _ -> ());
     Some Continue
   | _ when Keymatch.match_binding ev Keys.paste ->
-    let result =
+    let _ : Region_buffer.result =
       if ctx.clipboard <> "" then
         Region_buffer.try_replace_selection tab.rb ctx.clipboard
       else
         Region_buffer.try_paste tab.rb
     in
-    (match result with
-     | Region_buffer.Applied ->
-       (match session with Some s -> Session.clear_error s | None -> ())
-     | Region_buffer.Rejected _ -> ());
     Some Continue
   (* Delete *)
   | Input.Special (Input.Delete, _) ->
-    (match Region_buffer.try_delete_forward tab.rb with
-     | Region_buffer.Applied ->
-       (match session with Some s -> Session.clear_error s | None -> ())
-     | Region_buffer.Rejected _ -> ());
+    ignore (Region_buffer.try_delete_forward tab.rb);
     Some Continue
   (* Backspace *)
   | Input.Special (Input.Backspace, _) ->
-    (match Region_buffer.try_delete_backward tab.rb with
-     | Region_buffer.Applied ->
-       (match session with Some s -> Session.clear_error s | None -> ())
-     | Region_buffer.Rejected _ -> ());
+    ignore (Region_buffer.try_delete_backward tab.rb);
     Some Continue
   (* Enter *)
   | Input.Special (Input.Enter, _) ->
-    (match Region_buffer.try_enter tab.rb with
-     | Region_buffer.Applied ->
-       (match session with Some s -> Session.clear_error s | None -> ())
-     | Region_buffer.Rejected _ -> ());
+    ignore (Region_buffer.try_enter tab.rb);
     Some Continue
   (* Tab / Shift+Tab: indent or unindent. With a multi-line selection,
      always indents/unindents the covered lines. With no selection or a
@@ -153,15 +138,11 @@ let handle (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r =
         | Some s -> String.contains s '\n'
         | None -> false
     in
-    let result =
+    let _ : Region_buffer.result =
       if m.shift then Region_buffer.try_unindent_lines tab.rb width
       else if multiline_sel then Region_buffer.try_indent_lines tab.rb width
       else Region_buffer.try_replace_selection tab.rb (String.make width ' ')
     in
-    (match result with
-     | Region_buffer.Applied ->
-       (match session with Some s -> Session.clear_error s | None -> ())
-     | Region_buffer.Rejected _ -> ());
     Some Continue
   (* Printable character *)
   | Input.Key (cp, mods) when cp >= 32 && not mods.ctrl && not mods.alt ->
@@ -169,9 +150,6 @@ let handle (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r =
       if cp < 128 then String.make 1 (Char.chr cp)
       else Utf8.encode cp
     in
-    (match Region_buffer.try_replace_selection tab.rb inserted_text with
-     | Region_buffer.Applied ->
-       (match session with Some s -> Session.clear_error s | None -> ())
-     | Region_buffer.Rejected _ -> ());
+    ignore (Region_buffer.try_replace_selection tab.rb inserted_text);
     Some Continue
   | _ -> None
