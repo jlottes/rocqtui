@@ -65,21 +65,22 @@ let handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r =
                  ignore (Region_buffer.try_replace_selection tab.rb text)
                end)
           | Compose.NoMatch ->
-            if term_focused then begin
-              (* Double-ESC: send ESC to terminal *)
-              match ev with
-              | Input.Special (Input.Escape, _) ->
-                Pty.send_escape tab
-              | _ -> ()
-            end else begin
-              (* If the key that broke compose was Escape, restart compose *)
-              (match ev with
-               | Input.Special (Input.Escape, _) ->
-                 Compose.start cs;
-                 Render.set_status r (View.format_compose_status r cs);
-                 Render.present r
-               | _ -> ())
-            end);
+            (* ESC ESC = "logical ESC": cancel the search prompt (restoring
+               cursor) or clear an active search; otherwise fall back to
+               the legacy terminal-ESC / restart-compose handling. Other
+               keys silently abort compose. *)
+            (match ev with
+             | Input.Special (Input.Escape, _) ->
+               if not (Modals.logical_escape ctx tab) then begin
+                 if term_focused then
+                   Pty.send_escape tab
+                 else begin
+                   Compose.start cs;
+                   Render.set_status r (View.format_compose_status r cs);
+                   Render.present r
+                 end
+               end
+             | _ -> ()));
          true
        | None ->
          (* Non-character event in compose mode -- feed 0 to abort *)
@@ -222,9 +223,11 @@ let handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r =
       Some Continue
     end
     else if Keymatch.match_binding ev Keys.search then begin
+      (* Re-save the cursor on every prompt-open so cancel restores to the
+         pre-prompt position, not the position before search first opened. *)
       (match Tab.search_state tab with
        | None -> Tab.set_search tab (Some (Search.create tab.buf))
-       | Some _ -> ());
+       | Some s -> Tab.set_search tab (Some (Search.resave_cursor s tab.buf)));
       Modal.push ctx.modal Modal.SearchPrompt;
       Some Continue
     end
@@ -272,13 +275,16 @@ let handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r =
       end else begin
         match ctx.compose with
         | Some cs ->
-          (* Plain Escape -- start compose *)
+          (* Plain Escape -- start compose. Cancelling search needs ESC ESC,
+             handled in the compose-NoMatch branch above. *)
           Compose.start cs;
           Render.set_status r (View.format_compose_status r cs);
           Render.present r
         | None ->
-          (* Compose disabled: forward Escape to terminal if focused *)
-          if term_focused then Pty.send_escape tab
+          (* Compose disabled: ESC is the logical-cancel key. *)
+          if not (Modals.logical_escape ctx tab) then begin
+            if term_focused then Pty.send_escape tab
+          end
       end;
       Some Continue
     end

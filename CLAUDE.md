@@ -116,4 +116,4 @@ See `lib/keys.ml` for the source of truth. Summary:
 | F6 | Open Claude (in project dir) |
 | F12 | Force redraw |
 | ESC | Start XCompose (only if launched with `--xcompose`); otherwise sent to terminal when focused |
-| ESC ESC | Send ESC to terminal (when compose is active and focused) |
+| ESC | Cancel search (prompt: restores cursor; outside prompt: clears highlights). Under `--xcompose`, ESC starts compose so the user-visible cancel is ESC ESC; the second ESC also doubles as "send ESC to terminal" when one is focused and no search is in flight. |

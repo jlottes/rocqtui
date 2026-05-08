@@ -43,9 +43,8 @@ val handle_help :
   Editor_context.t -> Input.event -> Render.t -> Action.action option
 
 (** While SearchPrompt is open: edit the query, navigate matches, toggle
-    flags. ESC starts compose (handled at the editor's compose layer);
-    [^G] cancels and restores the saved cursor. The prompt absorbs every
-    event — caller never needs to fall through. *)
+    flags. ESC (or ESC ESC under compose) cancels via [logical_escape].
+    The prompt absorbs every event — caller never needs to fall through. *)
 val handle_search_prompt :
   Editor_context.t -> Input.event -> Tab.t -> Action.action option
 
@@ -53,3 +52,10 @@ val handle_search_prompt :
     buffer cursor to it. No-op if search is inactive on this tab. Used
     by both the search prompt and the global F3 / Shift+F3 bindings. *)
 val search_advance : Tab.t -> [ `Next | `Prev ] -> unit
+
+(** Logical-ESC handler. If the search prompt is open, restores the cursor
+    to the position saved when the prompt opened, drops search state, and
+    pops the prompt. If a search is active without the prompt, drops state
+    without moving the cursor. Returns [true] if either path consumed the
+    event. *)
+val logical_escape : Editor_context.t -> Tab.t -> bool

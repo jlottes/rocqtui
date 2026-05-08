@@ -31,6 +31,12 @@ val empty_flags : flags
 (** Empty state anchored at the buffer's current cursor. *)
 val create : Buffer.t -> state
 
+(** Refresh [saved_cursor] from the buffer's current cursor. Called when
+    the prompt is (re-)opened so cancel restores to the position before
+    *this* prompt session, not the position before search first became
+    active. *)
+val resave_cursor : state -> Buffer.t -> state
+
 (** Compute matches for [query] against the full buffer text. Returns an
     empty array for an empty query or an invalid regex. *)
 val recompute : Buffer.t -> string -> flags -> match_ array

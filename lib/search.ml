@@ -113,6 +113,10 @@ let create (buf : Buffer.t) : state =
     saved_cursor = { line; col };
   }
 
+let resave_cursor s (buf : Buffer.t) =
+  let (line, col) = Buffer.cursor buf in
+  { s with saved_cursor = { line; col } }
+
 let update_query s buf new_query =
   let matches = recompute buf new_query s.flags in
   let current = first_match_at_or_after matches s.saved_cursor in

@@ -236,6 +236,21 @@ let search_advance (tab : Tab.t) dir =
     move_cursor_to_current tab
   | None -> ()
 
+let logical_escape (ctx : Editor_context.t) (tab : Tab.t) =
+  match Modal.top ctx.modal with
+  | Some Modal.SearchPrompt ->
+    (match Tab.search_state tab with
+     | Some s ->
+       Buffer.move_to tab.buf s.saved_cursor.line s.saved_cursor.col
+     | None -> ());
+    Tab.set_search tab None;
+    Modal.pop ctx.modal;
+    true
+  | _ ->
+    (match Tab.search_state tab with
+     | Some _ -> Tab.set_search tab None; true
+     | None -> false)
+
 let handle_search_prompt (ctx : Editor_context.t) ev (tab : Tab.t) =
   let buf = tab.buf in
   let with_state f =
@@ -251,12 +266,12 @@ let handle_search_prompt (ctx : Editor_context.t) ev (tab : Tab.t) =
     Some Continue
 
   | Input.Special (Input.Escape, _) ->
-    (* Start compose; subsequent keys feed the compose layer until it
-       resolves. The editor's compose handler routes the composed text
-       back into the query when SearchPrompt is on top. *)
+    (* Compose mode: ESC starts compose; ESC ESC drops to the editor's
+       compose-NoMatch path which calls [logical_escape]. Without compose:
+       ESC cancels here directly. *)
     (match ctx.compose with
      | Some cs -> Compose.start cs
-     | None -> ());
+     | None -> ignore (logical_escape ctx tab));
     Some Continue
 
   | Input.Special (Input.Backspace, _) ->
@@ -266,15 +281,6 @@ let handle_search_prompt (ctx : Editor_context.t) ev (tab : Tab.t) =
         let len = String.length s.query in
         let prev_off = Utf8.prev s.query len in
         Search.update_query s buf (String.sub s.query 0 prev_off))
-
-  (* ^G cancels the prompt: restore cursor, drop search state. *)
-  | Input.Key (cp, m) when m.ctrl && cp = Char.code 'g' ->
-    (match Tab.search_state tab with
-     | Some s -> Buffer.move_to buf s.saved_cursor.line s.saved_cursor.col
-     | None -> ());
-    Tab.set_search tab None;
-    Modal.pop ctx.modal;
-    Some Continue
 
   | Input.Key (cp, m) when m.alt && cp = Char.code 'c' ->
     with_state Search.toggle_case

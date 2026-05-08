@@ -30,26 +30,31 @@ Two top-level states:
 | From | Key | To | Effect |
 |------|-----|-----|--------|
 | Inactive | `^F` | Active, prompt open | Empty query; save cursor for cancel-restore. |
-| Active, prompt closed | `^F` | Active, prompt open | Pre-fill query, select-all so typing replaces. |
+| Active, prompt closed | `^F` | Active, prompt open | Pre-fill query; **re-save cursor** so cancel restores to the pre-prompt position, not the position before search first opened. |
 | Prompt open | Enter | Active, prompt closed | Keep current match position. |
-| Prompt open | `^G` | Inactive | Cancel — restore cursor to pre-search position, clear highlights. |
+| Prompt open | ESC | Inactive | Cancel — restore cursor to the cursor saved when this prompt opened, clear highlights. |
+| Active, prompt closed | ESC | Inactive | Clear highlights; cursor stays where the user navigated to. |
 | Active, prompt closed | F3 | Active, prompt closed | Jump to next match. |
 | Active, prompt closed | Shift+F3 | Active, prompt closed | Jump to previous match. |
 
-ESC is reserved for xcompose and is not used here.
+ESC is the single cancel key. In compose mode (`--xcompose`), ESC starts
+the compose layer; the *second* ESC of `ESC ESC` reaches the cancel logic
+via the compose-NoMatch path, so `ESC ESC` is the user-visible cancel
+binding under compose. The behavior is otherwise identical.
 
-`^G` is bound globally to "toggle hypotheses" in `lib/keys.ml`, but inside
-the prompt the modal handler intercepts input before global dispatch, so
-`^G` can serve as the prompt's cancel key without conflict. There is no
-dedicated outside-prompt key to clear an active search — to clear, press
-`^F` to re-open the prompt and `^G` to cancel. Two keystrokes for an
-infrequent operation; not worth shifting another binding to make it one.
+`saved_cursor` is refreshed every time the prompt opens (`Search.resave_cursor`).
+This means the workflow "find text → Enter → navigate further → ^F to
+re-open prompt → cancel" restores to the position right before the
+re-open, not back to where the user originally started searching.
+
+Outside the prompt, ESC simply drops the search state without moving the
+cursor — supporting "find text, accept, clear highlights, stay put."
 
 ## Keybindings
 
-- `^F` — open or re-open search prompt.
-- `^G` — cancel inside the prompt only (modal-local; the global
-  `toggle_hyps` binding is unaffected when the prompt isn't open).
+- `^F` — open or re-open search prompt (re-saves cursor on each open).
+- ESC (or ESC ESC under `--xcompose`) — cancel: restores cursor when the
+  prompt is open, clears the search otherwise.
 - F3 / Shift+F3 — next / previous match (only meaningful when search is
   active).
 - F7 — theme picker (moved from F3 to free up F3 for search navigation).

@@ -351,8 +351,8 @@ let generate_help () =
                  description="Close prompt, keep search active" } in b)
       with name = "search_accept" };
     { (let b = { name="search_cancel"; codes=[]; kitty_codes=[];
-                 display="^G"; context=Global;
-                 description="Cancel search (in prompt; restores cursor)" } in b)
+                 display="ESC"; context=Global;
+                 description="Cancel: in prompt restores cursor; otherwise clears search (ESC ESC in compose mode)" } in b)
       with name = "search_cancel" };
   ];
   Stdlib.Buffer.add_string buf "\n  ─── Compose (ESC) ";
