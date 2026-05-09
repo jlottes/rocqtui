@@ -304,7 +304,9 @@ let highlight_buffer buf =
     let prev_comment_tok = ref "" in
     (try
        while true do
-         let tok = Gramlib.LStream.next kw_state tok_stream in
+         match Gramlib.LStream.next kw_state tok_stream with
+         | None -> raise Exit
+         | Some tok ->
          let loc = Gramlib.LStream.current_loc tok_stream in
          let bp = loc.Loc.bp in
          let ep = loc.Loc.ep in
@@ -354,7 +356,6 @@ let highlight_buffer buf =
        done
      with
      | Exit -> ()
-     | Gramlib.Stream.Failure -> ()
      | CLexer.Error.E _ -> ()
     );
     CLexer.LexerDiff.State.drop ();
@@ -397,7 +398,9 @@ let collect_ident_spans text =
     let tok_stream = CLexer.LexerDiff.tok_func char_stream in
     (try
        while true do
-         let tok = Gramlib.LStream.next kw_state tok_stream in
+         match Gramlib.LStream.next kw_state tok_stream with
+         | None -> raise Exit
+         | Some tok ->
          let loc = Gramlib.LStream.current_loc tok_stream in
          (match tok with
           | Tok.IDENT s | Tok.FIELD s when is_real_ident_text s ->
@@ -407,7 +410,6 @@ let collect_ident_spans text =
        done
      with
      | Exit -> ()
-     | Gramlib.Stream.Failure -> ()
      | CLexer.Error.E _ -> ());
     CLexer.LexerDiff.State.drop ();
     List.rev !acc
