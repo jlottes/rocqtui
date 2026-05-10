@@ -212,13 +212,12 @@ let glyph_of sev = match sev with
   | Warning -> "\xe2\x9a\xa0"  (* ⚠ *)
 
 let render_errors_tab ~project_dir =
-  let lines = Stdlib.Buffer.create 256 in
   let rows = ref [] in
   let map = ref [] in
   let active_header_row = ref None in
   let row_count = ref 0 in
-  let emit_line idx s =
-    rows := s :: !rows;
+  let emit_line idx (line : Styled.line) =
+    rows := line :: !rows;
     map := idx :: !map;
     incr row_count
   in
@@ -231,14 +230,13 @@ let render_errors_tab ~project_dir =
     let header = Printf.sprintf "%s%s %s:%d:%d  %s"
       header_mark (glyph_of e.severity) relp e.line e.col_start first in
     if is_active then active_header_row := Some !row_count;
-    emit_line i header;
+    emit_line i (Styled.plain header);
     if is_active then
       List.iteri (fun k l ->
         if k > 0 && l <> "" then
-          emit_line i ("      " ^ l)
+          emit_line i (Styled.plain ("      " ^ l))
       ) msg_lines
   ) !entries;
-  ignore lines;
   let body = List.rev !rows in
   let map_arr = Array.of_list (List.rev !map) in
   errors_tab_row_to_idx := map_arr;

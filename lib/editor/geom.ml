@@ -39,7 +39,7 @@ let screen_to_pane_pos (tab : Tab.t) r ~x ~y pane_id =
     let n = List.length lines_cache in
     if line_idx >= n then None
     else begin
-      let line = List.nth lines_cache line_idx in
+      let line = (List.nth lines_cache line_idx : Styled.line).text in
       let byte_col = Utf8.col_to_byte line (max 0 col) in
       Some (line_idx, byte_col)
     end

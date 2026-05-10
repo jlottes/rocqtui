@@ -13,7 +13,7 @@ val set_help_scroll : Editor_context.t -> int -> unit
 
 (** Pane selection helpers. *)
 val clear_pane_selection : Tab.pane_selection -> unit
-val pane_selection_text : Tab.pane_selection -> string list -> string option
+val pane_selection_text : Tab.pane_selection -> Styled.line list -> string option
 
 (** Format a key code as a readable character. *)
 val key_to_string : int -> string

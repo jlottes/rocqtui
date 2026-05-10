@@ -48,7 +48,7 @@ val clear : unit -> unit
     [row → entry] map used by [lookup_errors_tab_row]. Also returns the
     body row of the active entry's header (for auto-scroll), if any. *)
 val render_errors_tab :
-  project_dir:string -> string list * int option
+  project_dir:string -> Styled.line list * int option
 
 (** Entry that occupies [row] (0-based) in the body returned by
     [render_errors_tab]. Returns None for a row outside the rendered

@@ -35,7 +35,7 @@ let pane_selection_text (ps : Tab.pane_selection) lines_cache =
     in
     let buf = Stdlib.Buffer.create 128 in
     for i = sl to min el (n - 1) do
-      let line = List.nth lines i in
+      let line = (List.nth lines i : Styled.line).text in
       let len = String.length line in
       let s = if i = sl then min sc len else 0 in
       let e = if i = el then min ec len else len in
@@ -190,58 +190,31 @@ let render_sentence_regions r buf session spans =
     end
 
 (* Wrap lines to fit a given width, returning a flat list of screen lines *)
-let wrap_lines ?(hanging=0) width lines_list =
-  let avail = max 1 (width - 2) in
-  let pad = String.make (max 0 hanging) ' ' in
-  let result = ref [] in
-  List.iter (fun line ->
-    let line_w = Utf8.string_width line in
-    if line_w <= avail then
-      result := line :: !result
-    else begin
-      let len = String.length line in
-      let i = ref 0 in
-      let segment_idx = ref 0 in
-      while !i < len do
-        let start = !i in
-        let prefix = if !segment_idx = 0 then "" else pad in
-        let prefix_w = String.length prefix in
-        let cap = max 1 (avail - prefix_w) in
-        let col = ref 0 in
-        let stop = ref false in
-        while !i < len && not !stop do
-          let (cp, n) = Utf8.decode line !i in
-          let w = Utf8.codepoint_width cp in
-          if !col + w > cap then
-            stop := true
-          else begin
-            col := !col + w;
-            i := !i + n
-          end
-        done;
-        if !i = start then
-          i := Utf8.next line !i;
-        let segment = String.sub line start (!i - start) in
-        result := (prefix ^ segment) :: !result;
-        incr segment_idx
-      done
-    end
-  ) lines_list;
-  List.rev !result
-
 (* Render a scrollable text pane with optional selection highlight *)
 let render_text_pane ?(sel : Tab.pane_selection option) ?set_cache
     ?(hanging=0) r pane scroll_ref lines_list =
   Render.clear_pane r pane;
   let (rows, cols) = Render.pane_dims r pane in
-  let wrapped = wrap_lines ~hanging cols lines_list in
+  let wrapped = Styled.wrap ~hanging cols lines_list in
   (match set_cache with Some f -> f wrapped | None -> ());
   let n = List.length wrapped in
   scroll_ref := max 0 (min !scroll_ref (max 0 (n - rows)));
-  List.iteri (fun i line ->
+  let default_attr = (Theme.attrs ()).ga_default in
+  List.iteri (fun i (line : Styled.line) ->
     let row = i - !scroll_ref in
-    if row >= 0 && row < rows then
-      ignore (Render.put_str r pane ~row ~col:1 line (Theme.attrs ()).ga_default)
+    if row >= 0 && row < rows then begin
+      ignore (Render.put_str r pane ~row ~col:1 line.text default_attr);
+      (* Apply spans (in list order, so later spans overlay earlier). *)
+      List.iter (fun (sp : Styled.span) ->
+        let s_col = Utf8.byte_to_col line.text sp.start + 1 in
+        let e_col = Utf8.byte_to_col line.text (sp.start + sp.len) + 1 in
+        let s_col = max 1 s_col in
+        let e_col = min cols e_col in
+        let w = e_col - s_col in
+        if w > 0 then
+          Render.chgat r pane ~row ~col:s_col ~width:w sp.attr
+      ) line.spans
+    end
   ) wrapped;
   (* Highlight selection if any *)
   (match sel with
@@ -259,7 +232,7 @@ let render_text_pane ?(sel : Tab.pane_selection option) ?set_cache
      for i = sl to min el (n - 1) do
        let row = i - scroll in
        if row >= 0 && row < rows then begin
-         let line = List.nth wrapped i in
+         let line = (List.nth wrapped i).text in
          let len = String.length line in
          let s = if i = sl then min sc len else 0 in
          let e = if i = el then min ec len else len in
@@ -283,16 +256,16 @@ let pp_width_for_pane r pane =
 
 let render_goals (ctx : Editor_context.t) r (tab : Tab.t) =
   let session = tab.session in
-  let lines = match session with
+  let lines : Styled.line list = match session with
     | None ->
       let msg = if ctx.init_error <> "" then ctx.init_error
                 else "No Rocq session." in
-      String.split_on_char '\n' msg
+      Styled.of_strings (String.split_on_char '\n' msg)
     | Some sess ->
       let width = pp_width_for_pane r Render.PGoals in
       match Session.goals_text ~all_hyps:tab.show_all_hyps ~width sess with
-      | None -> ["No proof in progress."]
-      | Some text -> String.split_on_char '\n' text
+      | None -> [Styled.plain "No proof in progress."]
+      | Some text -> Styled.of_strings (String.split_on_char '\n' text)
   in
   let gs = ref tab.goals_scroll in
   render_text_pane ~sel:tab.goals_sel
@@ -310,12 +283,12 @@ let update_msg_tabs r (tab : Tab.t) =
   let session = tab.session in
   (* Update Rocq tab *)
   let rocq = Tab.ensure_msg_tab tab.msg "Rocq" in
-  let rocq_lines = match session with
+  let rocq_lines : Styled.line list = match session with
     | None -> []
     | Some sess ->
       let width = pp_width_for_pane r Render.PMessages in
       List.concat_map (fun msg ->
-        String.split_on_char '\n' msg
+        List.map Styled.plain (String.split_on_char '\n' msg)
       ) (Session.messages ~width sess)
   in
   (* Don't auto-switch away from a terminal sub-tab *)
@@ -331,7 +304,7 @@ let update_msg_tabs r (tab : Tab.t) =
   end else
     rocq.mt_lines <- rocq_lines;
   (* Update Build tab *)
-  let build_lines = Build.output () in
+  let build_lines = Styled.of_strings (Build.output ()) in
   if build_lines <> [] || Build.is_running () then begin
     let build = Tab.ensure_msg_tab tab.msg "Build" in
     if build_lines <> build.mt_lines then begin

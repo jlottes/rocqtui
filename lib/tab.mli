@@ -11,10 +11,10 @@ type pane_selection = {
 (** A sub-tab in the messages pane (e.g. "Rocq", "Build", or a terminal). *)
 type msg_tab = {
   mt_name : string;
-  mutable mt_lines : string list;
+  mutable mt_lines : Styled.line list;
   mutable mt_scroll : int;
   mt_sel : pane_selection;
-  mutable mt_lines_cache : string list;
+  mutable mt_lines_cache : Styled.line list;
   mt_terminal : Terminal.t option;  (** Some = terminal sub-tab *)
 }
 
@@ -36,7 +36,7 @@ type t = {
   mutable mouse_selecting : bool;
   mutable last_ensured_cur : (int * int) option;
   goals_sel : pane_selection;
-  mutable goals_lines_cache : string list;
+  mutable goals_lines_cache : Styled.line list;
   msg : msg_tabs;
   mutable search : Search.state option;
   mutable search_revision : int;
