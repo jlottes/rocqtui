@@ -4,8 +4,9 @@ let query_subject (tab : Tab.t) =
   match tab.focused_pane with
   | `Goals -> View.pane_selection_text tab.goals_sel tab.goals_lines_cache
   | `Messages ->
-    let mt = Tab.active_msg_tab tab.msg in
-    View.pane_selection_text mt.mt_sel mt.mt_lines_cache
+    (match Geom.active_msg_pane_state tab with
+     | `Text (sel, cache, _) -> View.pane_selection_text sel cache
+     | `Terminal -> None)
   | `Script ->
     match Buffer.selected_text tab.buf with
     | Some text -> Some text
@@ -16,7 +17,7 @@ let query_subject (tab : Tab.t) =
 
 let run_query session phrase =
   match session with
-  | Some s -> Session.query s phrase
+  | Some s -> Session.query s phrase; Msg_pane.activate Msg_pane.Rocq
   | None -> ()
 
 let handle_prompt (ctx : Editor_context.t) handler ev =
@@ -105,6 +106,10 @@ let project_dir_of_buf buf =
 let handle_build (ctx : Editor_context.t) ev (tab : Tab.t) r =
   let buf = tab.buf in
   Modal.pop ctx.modal;
+  let on_build_started () =
+    ignore (Msg_pane.ensure Msg_pane.Build);
+    Msg_pane.activate_unless_terminal Msg_pane.Build
+  in
   match Keymatch.codepoint_of_event ev with
   | None -> Some Continue
   | Some ch ->
@@ -114,7 +119,7 @@ let handle_build (ctx : Editor_context.t) ev (tab : Tab.t) r =
     else if c = 'f' then begin
       (match Buffer.filename buf, project_dir_of_buf buf with
        | Some f, Some pd ->
-         if Build.build_file ~project_dir:pd f then ()
+         if Build.build_file ~project_dir:pd f then on_build_started ()
          else Render.set_status r "Build already running."
        | _, None -> Render.set_status r "No project found."
        | None, _ -> Render.set_status r "No filename.");
@@ -123,7 +128,7 @@ let handle_build (ctx : Editor_context.t) ev (tab : Tab.t) r =
     else if c = 'd' then begin
       (match Buffer.filename buf, project_dir_of_buf buf with
        | Some f, Some pd ->
-         if Build.build_deps ~project_dir:pd f then ()
+         if Build.build_deps ~project_dir:pd f then on_build_started ()
          else Render.set_status r "Build already running."
        | _, None -> Render.set_status r "No project found."
        | None, _ -> Render.set_status r "No filename.");
@@ -132,7 +137,7 @@ let handle_build (ctx : Editor_context.t) ev (tab : Tab.t) r =
     else if c = 'a' then begin
       (match project_dir_of_buf buf with
        | Some pd ->
-         if Build.build_all ~project_dir:pd then ()
+         if Build.build_all ~project_dir:pd then on_build_started ()
          else Render.set_status r "Build already running."
        | None -> Render.set_status r "No project found.");
       Some Continue
@@ -140,7 +145,7 @@ let handle_build (ctx : Editor_context.t) ev (tab : Tab.t) r =
     else if c = 'x' then begin
       (match project_dir_of_buf buf with
        | Some pd ->
-         if Build.build_clean ~project_dir:pd then ()
+         if Build.build_clean ~project_dir:pd then on_build_started ()
          else Render.set_status r "Build already running."
        | None -> Render.set_status r "No project found.");
       Some Continue
@@ -173,7 +178,8 @@ let coercion_filter session word =
   if filtered = [] then
     Session.set_messages session ["No coercions found for " ^ word ^ "."]
   else
-    Session.set_messages session filtered
+    Session.set_messages session filtered;
+  Msg_pane.activate Msg_pane.Rocq
 
 let handle_query (ctx : Editor_context.t) ev (tab : Tab.t) =
   let session = tab.session in

@@ -38,125 +38,14 @@ let fresh_pane_sel () =
   { ps_anchor_line = 0; ps_anchor_col = 0;
     ps_cursor_line = 0; ps_cursor_col = 0; ps_active = false }
 
-type msg_tab = {
-  mt_name : string;
-  mutable mt_lines : Styled.line list;
-  mutable mt_scroll : int;
-  mt_sel : pane_selection;
-  mutable mt_lines_cache : Styled.line list;
-  mt_terminal : Terminal.t option;
+type rocq_msg_state = {
+  mutable rms_scroll : int;
+  rms_sel : pane_selection;
+  mutable rms_lines_cache : Styled.line list;
 }
 
-type msg_tabs = {
-  mutable mt_tabs : msg_tab list;
-  mutable mt_active : int;
-}
-
-let fresh_msg_tab name =
-  { mt_name = name; mt_lines = []; mt_scroll = 0;
-    mt_sel = fresh_pane_sel (); mt_lines_cache = [];
-    mt_terminal = None }
-
-let fresh_msg_tabs () =
-  { mt_tabs = [fresh_msg_tab "Rocq"]; mt_active = 0 }
-
-let active_msg_tab mt =
-  if mt.mt_active >= 0 && mt.mt_active < List.length mt.mt_tabs then
-    List.nth mt.mt_tabs mt.mt_active
-  else
-    List.hd mt.mt_tabs  (* fallback to first *)
-
-let find_msg_tab mt name =
-  let rec find i = function
-    | [] -> None
-    | t :: _ when t.mt_name = name -> Some (i, t)
-    | _ :: rest -> find (i + 1) rest
-  in
-  find 0 mt.mt_tabs
-
-let ensure_msg_tab mt name =
-  match find_msg_tab mt name with
-  | Some (_, t) -> t
-  | None ->
-    let t = fresh_msg_tab name in
-    mt.mt_tabs <- mt.mt_tabs @ [t];
-    t
-
-let activate_msg_tab mt name =
-  match find_msg_tab mt name with
-  | Some (i, _) -> mt.mt_active <- i
-  | None -> ()
-
-let remove_msg_tab mt name =
-  match find_msg_tab mt name with
-  | None -> ()
-  | Some (i, _) ->
-    mt.mt_tabs <- List.filteri (fun j _ -> j <> i) mt.mt_tabs;
-    if mt.mt_active >= List.length mt.mt_tabs then
-      mt.mt_active <- max 0 (List.length mt.mt_tabs - 1)
-    else if mt.mt_active > i then
-      mt.mt_active <- mt.mt_active - 1
-
-(* Get the display name for a msg_tab. Terminal tabs use their
-   dynamic title; text tabs use mt_name. *)
-let msg_tab_display_name (tab : msg_tab) =
-  match tab.mt_terminal with
-  | Some term -> Terminal.title term
-  | None -> tab.mt_name
-
-(* Sticky terminal: when set, sync_terminals will activate this
-   terminal across file tab switches. *)
-let sticky_terminal : Terminal.t option ref = ref None
-
-let set_sticky_terminal term = sticky_terminal := term
-let get_sticky_terminal () = !sticky_terminal
-
-(* Sync global terminals into msg_tabs. Adds/removes terminal sub-tabs
-   to match Terminal.all(). Called before rendering. *)
-let sync_terminals mt =
-  let live = Terminal.all () in
-  (* Remember the currently active terminal (if any) *)
-  let cur_active = active_msg_tab mt in
-  (match cur_active.mt_terminal with
-   | Some _ as t -> sticky_terminal := t
-   | None -> ());
-  (* Remove stale terminal tabs *)
-  mt.mt_tabs <- List.filter (fun tab ->
-    match tab.mt_terminal with
-    | None -> true
-    | Some term -> List.exists (fun t -> t == term) live
-  ) mt.mt_tabs;
-  (* Add new terminals *)
-  List.iter (fun term ->
-    let exists = List.exists (fun tab ->
-      match tab.mt_terminal with
-      | Some t -> t == term
-      | None -> false
-    ) mt.mt_tabs in
-    if not exists then begin
-      let tab = { mt_name = "Terminal";
-                  mt_lines = []; mt_scroll = 0;
-                  mt_sel = fresh_pane_sel ();
-                  mt_lines_cache = [];
-                  mt_terminal = Some term } in
-      mt.mt_tabs <- mt.mt_tabs @ [tab]
-    end
-  ) live;
-  (* Clamp active index *)
-  let n = List.length mt.mt_tabs in
-  if mt.mt_active >= n then mt.mt_active <- max 0 (n - 1);
-  (* Restore sticky terminal if set *)
-  (match !sticky_terminal with
-   | Some term ->
-     let rec find i = function
-       | [] -> ()
-       | tab :: _ when tab.mt_terminal <> None &&
-           (match tab.mt_terminal with Some t -> t == term | None -> false) ->
-         mt.mt_active <- i
-       | _ :: rest -> find (i + 1) rest
-     in
-     find 0 mt.mt_tabs
-   | None -> ())
+let fresh_rocq_msg_state () =
+  { rms_scroll = 0; rms_sel = fresh_pane_sel (); rms_lines_cache = [] }
 
 type t = {
   id : int;
@@ -171,7 +60,7 @@ type t = {
   mutable last_ensured_cur : (int * int) option;
   goals_sel : pane_selection;
   mutable goals_lines_cache : Styled.line list;
-  msg : msg_tabs;
+  rocq_msg : rocq_msg_state;
   mutable search : Search.state option;
   (* [Buffer.revision buf] when [search] was last refreshed; only
      meaningful when [search <> None]. *)
@@ -200,7 +89,7 @@ let make_tab ?(args=[]) buf session =
     last_ensured_cur = None;
     goals_sel = fresh_pane_sel ();
     goals_lines_cache = [];
-    msg = fresh_msg_tabs ();
+    rocq_msg = fresh_rocq_msg_state ();
     search = None;
     search_revision = 0 }
 

@@ -278,54 +278,33 @@ let render_goals (ctx : Editor_context.t) r (tab : Tab.t) =
    every frame. *)
 let errors_last_active : int option ref = ref None
 
-(* Update messages sub-tab contents. Call before rendering. *)
+(* Sync the global Msg_pane sub-tab list with current global state.
+   Purely passive — never changes which sub-tab is active. Auto-switch
+   is handled at action-handler call sites. *)
 let update_msg_tabs r (tab : Tab.t) =
-  let session = tab.session in
-  (* Update Rocq tab *)
-  let rocq = Tab.ensure_msg_tab tab.msg "Rocq" in
-  let rocq_lines : Styled.line list = match session with
-    | None -> []
-    | Some sess ->
-      let width = pp_width_for_pane r Render.PMessages in
-      List.concat_map (fun msg ->
-        List.map Styled.plain (String.split_on_char '\n' msg)
-      ) (Session.messages ~width sess)
-  in
-  (* Don't auto-switch away from a terminal sub-tab *)
-  let active_is_terminal =
-    let mt = Tab.active_msg_tab tab.msg in
-    mt.mt_terminal <> None
-  in
-  (* Auto-activate Rocq tab if content changed *)
-  if rocq_lines <> rocq.mt_lines && rocq_lines <> [] then begin
-    rocq.mt_lines <- rocq_lines;
-    if not active_is_terminal then
-      Tab.activate_msg_tab tab.msg "Rocq"
-  end else
-    rocq.mt_lines <- rocq_lines;
-  (* Update Build tab *)
-  let build_lines = Styled.of_strings (Build.output ()) in
+  (* Rocq tab is always present. Its content (and scroll/sel) is
+     pulled at render time from the active file. *)
+  ignore (Msg_pane.ensure Msg_pane.Rocq);
+  let _ = r in
+  (* Build tab: ensured when there is build output or a running build. *)
+  let build_output = Build.output () in
+  let build_lines = Styled.of_strings build_output in
   if build_lines <> [] || Build.is_running () then begin
-    let build = Tab.ensure_msg_tab tab.msg "Build" in
-    if build_lines <> build.mt_lines then begin
-      build.mt_lines <- build_lines;
-      if Build.is_running () && not active_is_terminal then
-        Tab.activate_msg_tab tab.msg "Build"
-    end
+    let bt = Msg_pane.ensure Msg_pane.Build in
+    if build_lines <> bt.lines then bt.lines <- build_lines
   end;
-  (* Update Errors tab from already-refreshed Build_errors. *)
+  (* Errors tab: ensure when entries exist; remove when empty. *)
   let project_dir = match Build.project_dir () with
     | Some d -> d
     | None -> Sys.getcwd () in
   let entries = Build_errors.all () in
-  if entries = [] then
-    Tab.remove_msg_tab tab.msg "Errors"
-  else begin
-    let errors_tab = Tab.ensure_msg_tab tab.msg "Errors" in
+  if entries = [] then begin
+    if !errors_last_active <> None then errors_last_active := None;
+    Msg_pane.remove Msg_pane.Errors
+  end else begin
+    let et = Msg_pane.ensure Msg_pane.Errors in
     let (lines, active_row) = Build_errors.render_errors_tab ~project_dir in
-    if lines <> errors_tab.mt_lines then errors_tab.mt_lines <- lines;
-    (* Snap scroll only when the active entry just changed (F9 or click);
-       leave the user's manual scroll alone otherwise. *)
+    if lines <> et.lines then et.lines <- lines;
     let cur = Build_errors.current_index () in
     if cur <> !errors_last_active && cur <> None then begin
       errors_last_active := cur;
@@ -333,36 +312,53 @@ let update_msg_tabs r (tab : Tab.t) =
       | None -> ()
       | Some ar ->
         let (rows, _) = Render.pane_dims r Render.PMessages in
-        let scroll = errors_tab.mt_scroll in
-        if ar < scroll then errors_tab.mt_scroll <- ar
+        let scroll = et.scroll in
+        if ar < scroll then et.scroll <- ar
         else if ar >= scroll + rows then
-          errors_tab.mt_scroll <- max 0 (ar - rows + 1)
+          et.scroll <- max 0 (ar - rows + 1)
     end else if cur = None then
       errors_last_active := None
-  end
+  end;
+  ignore tab
 
 let render_messages r (tab : Tab.t) =
   update_msg_tabs r tab;
-  Tab.sync_terminals tab.msg;
+  Msg_pane.sync_terminals ();
   (* Resize all terminals to current messages pane dims. No-op if
      unchanged, so safe to call every frame. *)
   let mrect = Render.pane_rect r Render.PMessages in
   List.iter (fun t -> Terminal.resize t ~w:mrect.width ~h:mrect.height)
     (Terminal.all ());
-  let mt = Tab.active_msg_tab tab.msg in
-  match mt.mt_terminal with
-  | Some term ->
+  let active = Msg_pane.active_tab () in
+  match active.kind with
+  | Msg_pane.Terminal term ->
     let rect = Render.pane_rect r Render.PMessages in
     Terminal.render term (Render.curr r) ~row:rect.row ~col:rect.col
       ~width:rect.width ~height:rect.height
-  | None ->
-    let ms = ref mt.mt_scroll in
-    let hanging = if mt.mt_name = "Errors" then 6 else 0 in
-    render_text_pane ~sel:mt.mt_sel
-      ~set_cache:(fun l -> mt.mt_lines_cache <- l)
+  | Msg_pane.Rocq ->
+    (* Per-file content: pull lines from active session each frame.
+       Scroll/sel/cache live on tab.rocq_msg. *)
+    let lines : Styled.line list = match tab.session with
+      | None -> []
+      | Some sess ->
+        let width = pp_width_for_pane r Render.PMessages in
+        List.concat_map (fun msg ->
+          List.map Styled.plain (String.split_on_char '\n' msg)
+        ) (Session.messages ~width sess)
+    in
+    let ms = ref tab.rocq_msg.rms_scroll in
+    render_text_pane ~sel:tab.rocq_msg.rms_sel
+      ~set_cache:(fun l -> tab.rocq_msg.rms_lines_cache <- l)
+      r Render.PMessages ms lines;
+    tab.rocq_msg.rms_scroll <- !ms
+  | Msg_pane.Build | Msg_pane.Errors ->
+    let ms = ref active.scroll in
+    let hanging = match active.kind with Msg_pane.Errors -> 6 | _ -> 0 in
+    render_text_pane ~sel:active.sel
+      ~set_cache:(fun l -> active.lines_cache <- l)
       ~hanging
-      r Render.PMessages ms mt.mt_lines;
-    mt.mt_scroll <- !ms
+      r Render.PMessages ms active.lines;
+    active.scroll <- !ms
 
 (* Extract the visible substring of a line given horizontal scroll.
    Returns (display_string, byte_offset_of_first_visible_char). *)
@@ -692,9 +688,8 @@ let update_status (ctx : Editor_context.t) r (tab : Tab.t) =
           Keys.cycle_pane.display Keys.query_menu.display
           Keys.help.display reload_hint
       | `Messages ->
-        let active_mt = Tab.active_msg_tab tab.msg in
-        (match active_mt.mt_terminal with
-         | Some term ->
+        (match Msg_pane.active_kind () with
+         | Msg_pane.Terminal term ->
            let vt = Terminal.vterm term in
            let scroll_info = match Vterm_lib.Vterm_api.scroll_info vt with
              | Some s -> " [" ^ s ^ "]"
@@ -702,7 +697,7 @@ let update_status (ctx : Editor_context.t) r (tab : Tab.t) =
            Printf.sprintf "  %s%s  %s:editor %s:close"
              (Terminal.title term) scroll_info
              Keys.cycle_pane.display Keys.close_tab.display
-         | None ->
+         | _ ->
            Printf.sprintf "  [Messages] %s:Pane %s:Query %s:Help%s"
              Keys.cycle_pane.display Keys.query_menu.display
              Keys.help.display reload_hint)
@@ -757,25 +752,28 @@ let render_all (ctx : Editor_context.t) r (tab : Tab.t) =
   Render.clear_pane r Render.PStatus;
   if Render.minimap_width r > 0 then
     Render.clear_pane r Render.PMinimap;
-  let msg_tab_names = List.map Tab.msg_tab_display_name tab.msg.mt_tabs in
+  let mp = Msg_pane.state () in
+  let msg_tab_names = List.map Msg_pane.display_name mp.tabs in
   Render.draw_chrome r
     ~goals_focused:(tab.focused_pane = `Goals)
     ~messages_focused:(tab.focused_pane = `Messages)
     ~msg_tab_names
-    ~msg_tab_active:tab.msg.mt_active
+    ~msg_tab_active:mp.active
     ();
   render_script ctx r tab;
   render_goals ctx r tab;
   render_messages r tab;
   update_status ctx r tab;
   (* Cursor visibility and positioning *)
-  let active_mt = Tab.active_msg_tab tab.msg in
-  let term_focused = tab.focused_pane = `Messages
-    && active_mt.mt_terminal <> None in
+  let active_term = match Msg_pane.active_kind () with
+    | Msg_pane.Terminal t -> Some t
+    | _ -> None
+  in
+  let term_focused = tab.focused_pane = `Messages && active_term <> None in
   let cursor_visible =
     if term_focused then begin
       (* Position hardware cursor at vterm cursor location, if visible *)
-      match active_mt.mt_terminal with
+      match active_term with
       | Some term ->
         let vt = Terminal.vterm term in
         let mode = Vterm_lib.Vterm_api.term_mode vt in

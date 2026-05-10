@@ -8,20 +8,15 @@ type pane_selection = {
   mutable ps_active : bool;
 }
 
-(** A sub-tab in the messages pane (e.g. "Rocq", "Build", or a terminal). *)
-type msg_tab = {
-  mt_name : string;
-  mutable mt_lines : Styled.line list;
-  mutable mt_scroll : int;
-  mt_sel : pane_selection;
-  mutable mt_lines_cache : Styled.line list;
-  mt_terminal : Terminal.t option;  (** Some = terminal sub-tab *)
-}
-
-(** Messages pane tab manager. *)
-type msg_tabs = {
-  mutable mt_tabs : msg_tab list;
-  mutable mt_active : int;
+(** Per-file state for the global Rocq sub-tab. The Rocq tab itself
+    is a fixed entry on the global {!Msg_pane}; its content is
+    pulled from each file's [Session.messages] each frame, but
+    scroll position, pane-selection, and cached wrapped lines are
+    per-file. *)
+type rocq_msg_state = {
+  mutable rms_scroll : int;
+  rms_sel : pane_selection;
+  mutable rms_lines_cache : Styled.line list;
 }
 
 type t = {
@@ -37,7 +32,7 @@ type t = {
   mutable last_ensured_cur : (int * int) option;
   goals_sel : pane_selection;
   mutable goals_lines_cache : Styled.line list;
-  msg : msg_tabs;
+  rocq_msg : rocq_msg_state;
   mutable search : Search.state option;
   mutable search_revision : int;
 }
@@ -89,14 +84,5 @@ val tab_at_x : manager -> int -> int option
 val display_names : manager -> (int * string) list
 val project_relative_path : string option -> string
 
-(** Messages pane sub-tab helpers. *)
 val fresh_pane_sel : unit -> pane_selection
-val active_msg_tab : msg_tabs -> msg_tab
-val find_msg_tab : msg_tabs -> string -> (int * msg_tab) option
-val ensure_msg_tab : msg_tabs -> string -> msg_tab
-val activate_msg_tab : msg_tabs -> string -> unit
-val remove_msg_tab : msg_tabs -> string -> unit
-val msg_tab_display_name : msg_tab -> string
-val sync_terminals : msg_tabs -> unit
-val set_sticky_terminal : Terminal.t option -> unit
-val get_sticky_terminal : unit -> Terminal.t option
+val fresh_rocq_msg_state : unit -> rocq_msg_state

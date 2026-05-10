@@ -339,6 +339,16 @@ let () =
       Render_need.request ();
       Mcp_server.poll_notifications mcp mgr
     end;
+    (* User step settled? Activate Rocq sub-tab on error (unless on
+       Terminal). Run every frame regardless of poll_all return so we
+       catch the transition even when other state didn't change. *)
+    (match (Tab.active_tab mgr).session with
+     | Some s ->
+       (match Session.consume_user_step_result s with
+        | Some `Error ->
+          Msg_pane.activate_unless_terminal Msg_pane.Rocq
+        | Some `Ok | None -> ())
+     | None -> ());
     (* Check for terminal resize (SIGWINCH may have fired during select).
        Embedded terminals get resized on next render. *)
     if Term.check_resize () then begin

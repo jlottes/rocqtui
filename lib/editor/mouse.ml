@@ -14,8 +14,11 @@ let handle (ctx : Editor_context.t) (mev : Input.mouse_event) (tab : Tab.t) r
   let result : Action.action option ref = ref None in
   (* Terminal mouse: handle release and drag for reported buttons *)
   let term_mouse_handled = ref false in
-  let active_mt = Tab.active_msg_tab tab.msg in
-  (match active_mt.mt_terminal with
+  let active_term () = match Msg_pane.active_kind () with
+    | Msg_pane.Terminal t -> Some t
+    | _ -> None
+  in
+  (match active_term () with
    | Some term when Terminal.reported_buttons term <> 0 ->
      let vt = Terminal.vterm term in
      let mm = Vterm_lib.Vterm_api.mouse_mode vt in
@@ -74,9 +77,8 @@ let handle (ctx : Editor_context.t) (mev : Input.mouse_event) (tab : Tab.t) r
   else if tab.mouse_selecting then begin
     (* Active text selection drag *)
     let pane = Render.pane_at r ~x ~y in
-    let term_in_msgs = if pane = Render.PMessages then
-      (Tab.active_msg_tab tab.msg).mt_terminal
-    else None in
+    let term_in_msgs = if pane = Render.PMessages then active_term ()
+      else None in
     (match term_in_msgs with
      | Some term ->
        let vt = Terminal.vterm term in
@@ -93,7 +95,7 @@ let handle (ctx : Editor_context.t) (mev : Input.mouse_event) (tab : Tab.t) r
        end else if pane = Render.PGoals || pane = Render.PMessages then begin
          let (ps, pane_id) =
            if pane = Render.PGoals then (tab.goals_sel, `Goals)
-           else ((Tab.active_msg_tab tab.msg).mt_sel, `Messages)
+           else (Geom.active_msg_pane_sel tab, `Messages)
          in
          (match Geom.screen_to_pane_pos tab r ~x ~y pane_id with
           | Some (row, byte_col) ->
@@ -119,9 +121,8 @@ let handle (ctx : Editor_context.t) (mev : Input.mouse_event) (tab : Tab.t) r
       | Render.PGoals ->
         tab.goals_scroll <- max 0 (tab.goals_scroll + delta)
       | Render.PMessages ->
-        let active_mt = Tab.active_msg_tab tab.msg in
-        (match active_mt.mt_terminal with
-         | Some term ->
+        (match Msg_pane.active_kind () with
+         | Msg_pane.Terminal term ->
            let vt = Terminal.vterm term in
            let mm = Vterm_lib.Vterm_api.mouse_mode vt in
            let mf = Vterm_lib.Vterm_api.mouse_flags vt in
@@ -157,24 +158,24 @@ let handle (ctx : Editor_context.t) (mev : Input.mouse_event) (tab : Tab.t) r
                ~cx ~cy ~ev:Vterm_lib.Vterm_api.mouse_ev_press ~mode:mm ~flags:mf in
              Terminal.send term seq
            end
-         | None ->
-           active_mt.mt_scroll <- max 0 (active_mt.mt_scroll + delta))
+         | Msg_pane.Rocq ->
+           tab.rocq_msg.rms_scroll <-
+             max 0 (tab.rocq_msg.rms_scroll + delta)
+         | Msg_pane.Build | Msg_pane.Errors ->
+           let mt = Msg_pane.active_tab () in
+           mt.scroll <- max 0 (mt.scroll + delta))
       | _ -> ()
     end
     else if pane = Render.PTabBar && is_left then begin
       ctx.switch_tab x
     end
     else if pane = Render.PBorderH && is_left then begin
-      let tab_names = List.map Tab.msg_tab_display_name
-                        tab.msg.mt_tabs in
+      let mp = Msg_pane.state () in
+      let tab_names = List.map Msg_pane.display_name mp.tabs in
       match Render.msg_tab_at_x r ~x ~tab_names with
       | Some i ->
-        tab.msg.mt_active <- i;
-        let clicked = Tab.active_msg_tab tab.msg in
-        if clicked.mt_terminal = None then
-          Tab.set_sticky_terminal None
-        else
-          Tab.set_sticky_terminal clicked.mt_terminal
+        if i >= 0 && i < List.length mp.tabs then
+          Msg_pane.activate (List.nth mp.tabs i).kind
       | None ->
         ctx.dragging <- Editor_context.DragH
     end
@@ -191,35 +192,32 @@ let handle (ctx : Editor_context.t) (mev : Input.mouse_event) (tab : Tab.t) r
       (* Build / Errors tab click → jump to error *)
       let jumped_to_error =
         if pane = Render.PMessages then begin
-          let active_mt = Tab.active_msg_tab tab.msg in
-          if active_mt.mt_terminal <> None then false
-          else
-            match Geom.screen_to_pane_pos tab r ~x ~y `Messages with
-            | None -> false
-            | Some (row, _col) ->
-              let entry_opt =
-                if active_mt.mt_name = "Build" then
-                  Build_errors.lookup_by_output_row row
-                else if active_mt.mt_name = "Errors" then
-                  Build_errors.lookup_errors_tab_row row
-                else None
-              in
-              (match entry_opt with
-               | None -> false
-               | Some (e : Build_errors.entry) ->
-                 Build_errors.set_current e;
-                 Jump.push ctx tab;
-                 ctx.jump_target <- Some (e.line - 1, e.col_start);
-                 result := Some (Action.Open_file e.file);
-                 true)
+          match Msg_pane.active_kind () with
+          | Msg_pane.Terminal _ | Msg_pane.Rocq -> false
+          | Msg_pane.Build | Msg_pane.Errors as ak ->
+            (match Geom.screen_to_pane_pos tab r ~x ~y `Messages with
+             | None -> false
+             | Some (row, _col) ->
+               let entry_opt = match ak with
+                 | Msg_pane.Build -> Build_errors.lookup_by_output_row row
+                 | Msg_pane.Errors -> Build_errors.lookup_errors_tab_row row
+                 | _ -> None
+               in
+               (match entry_opt with
+                | None -> false
+                | Some (e : Build_errors.entry) ->
+                  Build_errors.set_current e;
+                  Jump.push ctx tab;
+                  ctx.jump_target <- Some (e.line - 1, e.col_start);
+                  result := Some (Action.Open_file e.file);
+                  true))
         end else false
       in
       if jumped_to_error then ()
       else
       (* Check if we should forward to terminal *)
       let forwarded = if pane = Render.PMessages then
-        let active_mt = Tab.active_msg_tab tab.msg in
-        match active_mt.mt_terminal with
+        match active_term () with
         | Some term ->
           let vt = Terminal.vterm term in
           let mm = Vterm_lib.Vterm_api.mouse_mode vt in
@@ -243,10 +241,8 @@ let handle (ctx : Editor_context.t) (mev : Input.mouse_event) (tab : Tab.t) r
       if not forwarded then begin
         (* If terminal is active but not forwarding (mouse off or
            shift held), use vterm's local selection. *)
-        let term_sel = if pane = Render.PMessages then
-          let active_mt = Tab.active_msg_tab tab.msg in
-          active_mt.mt_terminal
-        else None in
+        let term_sel = if pane = Render.PMessages then active_term ()
+          else None in
         match term_sel with
         | Some term ->
           let vt = Terminal.vterm term in
@@ -260,11 +256,11 @@ let handle (ctx : Editor_context.t) (mev : Input.mouse_event) (tab : Tab.t) r
             Vterm_lib.Vterm_api.sel_start vt ~line ~col;
           tab.mouse_selecting <- true
         | None ->
-          let (ps, lines_cache, _scroll_ref, pane_id) =
+          let (ps, pane_id) =
             if pane = Render.PGoals then
-              (tab.goals_sel, tab.goals_lines_cache, tab.goals_scroll, `Goals)
+              (tab.goals_sel, `Goals)
             else
-              ((Tab.active_msg_tab tab.msg).mt_sel, (Tab.active_msg_tab tab.msg).mt_lines_cache, (Tab.active_msg_tab tab.msg).mt_scroll, `Messages)
+              (Geom.active_msg_pane_sel tab, `Messages)
           in
           match Geom.screen_to_pane_pos tab r ~x ~y pane_id with
           | Some (row, byte_col) ->
@@ -274,15 +270,13 @@ let handle (ctx : Editor_context.t) (mev : Input.mouse_event) (tab : Tab.t) r
             ps.ps_cursor_line <- row;
             ps.ps_cursor_col <- byte_col;
             ps.ps_active <- true;
-            tab.mouse_selecting <- true;
-            ignore lines_cache
+            tab.mouse_selecting <- true
           | None -> ()
       end
     end
     else if pane = Render.PMessages && is_middle then begin
       (* Middle click: paste clipboard to terminal *)
-      let active_mt = Tab.active_msg_tab tab.msg in
-      (match active_mt.mt_terminal with
+      (match active_term () with
        | Some term when ctx.clipboard <> "" ->
          let vt = Terminal.vterm term in
          if Vterm_lib.Vterm_api.bracketed_paste vt then
@@ -309,13 +303,14 @@ let handle (ctx : Editor_context.t) (mev : Input.mouse_event) (tab : Tab.t) r
     else if pane = Render.PScript && is_left then begin
       tab.focused_pane <- `Script;
       View.clear_pane_selection tab.goals_sel;
-      View.clear_pane_selection (Tab.active_msg_tab tab.msg).mt_sel;
+      View.clear_pane_selection (Geom.active_msg_pane_sel tab);
       if has_cmd then begin
         match Geom.screen_to_buffer_pos r buf ~x ~y with
         | Some (line, byte_col) ->
           Buffer.move_to buf line byte_col;
           (match session with
            | Some s when not (Region_buffer.locked tab.rb) ->
+             Session.set_user_step_pending s;
              Session.go_to_cursor s
            | _ -> ())
         | None -> ()

@@ -18,6 +18,26 @@ let screen_to_buffer_pos r buf ~x ~y =
     end
   end
 
+(* Pane-selection / cache / scroll for the active messages sub-tab.
+   Rocq's are per-file (on tab.rocq_msg); Build/Errors live on the
+   global Msg_pane tab. Terminal sub-tabs aren't text panes — callers
+   should check {!active_msg_kind} first. *)
+let active_msg_pane_state (tab : Tab.t) =
+  match Msg_pane.active_kind () with
+  | Msg_pane.Rocq ->
+    `Text (tab.rocq_msg.rms_sel,
+           tab.rocq_msg.rms_lines_cache,
+           tab.rocq_msg.rms_scroll)
+  | Msg_pane.Build | Msg_pane.Errors ->
+    let t = Msg_pane.active_tab () in
+    `Text (t.sel, t.lines_cache, t.scroll)
+  | Msg_pane.Terminal _ -> `Terminal
+
+let active_msg_pane_sel (tab : Tab.t) =
+  match active_msg_pane_state tab with
+  | `Text (sel, _, _) -> sel
+  | `Terminal -> tab.rocq_msg.rms_sel  (* defensive; callers shouldn't ask *)
+
 let screen_to_pane_pos (tab : Tab.t) r ~x ~y pane_id =
   let pane = match pane_id with
     | `Goals -> Render.PGoals
@@ -32,8 +52,9 @@ let screen_to_pane_pos (tab : Tab.t) r ~x ~y pane_id =
     let scroll, lines_cache = match pane_id with
       | `Goals -> (tab.goals_scroll, tab.goals_lines_cache)
       | `Messages ->
-        let mt = Tab.active_msg_tab tab.msg in
-        (mt.mt_scroll, mt.mt_lines_cache)
+        (match active_msg_pane_state tab with
+         | `Text (_, cache, scr) -> (scr, cache)
+         | `Terminal -> (0, []))
     in
     let line_idx = scroll + row in
     let n = List.length lines_cache in

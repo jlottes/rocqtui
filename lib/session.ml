@@ -38,6 +38,12 @@ type t = {
   mutable goals_dirty : bool;  (* goals need refresh when idle *)
   mutable needs_rewind : Stateid.t option;  (* deferred rewind from callback *)
   mutable state_changed : bool;
+  (* Set true when a user-initiated step is in flight (set at the
+     editor handler before [step_forward]/[step_backward]/
+     [go_to_offset]). Cleared by [consume_user_step_result] once the
+     session settles. MCP-initiated steps don't set this, so they
+     never trigger the post-step auto-switch. *)
+  mutable user_step_pending : bool;
 }
 
 let create ?(prog="coqidetop") ?(args=[]) buf =
@@ -46,7 +52,8 @@ let create ?(prog="coqidetop") ?(args=[]) buf =
   { rocq; buf; tip = init_id; sentences = [];
     next_edit_id = -1; goals_cache = None; msgs = [];
     err_range = None; target_end = 0;
-    goals_dirty = false; needs_rewind = None; state_changed = false }
+    goals_dirty = false; needs_rewind = None; state_changed = false;
+    user_step_pending = false }
 
 (* Find a sentence by state_id *)
 let find_sentence t sid =
@@ -488,6 +495,14 @@ let set_messages t msgs =
 let is_busy t =
   Rocq_protocol.is_busy t.rocq || verified_end t < t.target_end
   || t.goals_dirty || t.needs_rewind <> None
+
+let set_user_step_pending t = t.user_step_pending <- true
+
+let consume_user_step_result t =
+  if t.user_step_pending && not (is_busy t) then begin
+    t.user_step_pending <- false;
+    if t.err_range <> None then Some `Error else Some `Ok
+  end else None
 
 let is_busy_opt = function
   | Some t -> is_busy t

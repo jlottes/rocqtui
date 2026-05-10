@@ -55,6 +55,19 @@ val is_busy : t -> bool
 val is_busy_opt : t option -> bool
 val pid : t -> int
 
+(** Mark this session as having a user-initiated step in flight.
+    Call before {!step_forward}/{!step_backward}/{!go_to_offset}/
+    {!go_to_cursor} when the step originates from a user action
+    (key binding, mouse click). MCP/internal callers don't tag, so
+    {!consume_user_step_result} never fires for them. *)
+val set_user_step_pending : t -> unit
+
+(** Once per poll cycle, consume the result of a settled user step.
+    Returns [Some `Ok] / [Some `Error] when a user step has just
+    completed (clears the pending flag), [None] otherwise. The
+    editor uses [`Error] to auto-switch to the Rocq sub-tab. *)
+val consume_user_step_result : t -> [`Ok | `Error] option
+
 (** Run a query (e.g. [About foo.]) at the current tip with the
     current Printopts baked in. Per-call [extra_opts] override
     persistent options for this query only. Implementation: Add one

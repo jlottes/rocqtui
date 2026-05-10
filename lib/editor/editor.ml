@@ -28,7 +28,13 @@ let handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r =
   (* Is a terminal sub-tab currently focused? *)
   let term_focused =
     tab.focused_pane = `Messages &&
-    (Tab.active_msg_tab tab.msg).mt_terminal <> None
+    (match Msg_pane.active_kind () with
+     | Msg_pane.Terminal _ -> true
+     | _ -> false)
+  in
+  let active_term () = match Msg_pane.active_kind () with
+    | Msg_pane.Terminal t -> Some t
+    | _ -> None
   in
   (* Handle compose mode first *)
   let compose_handled = match ctx.compose with
@@ -57,8 +63,7 @@ let handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r =
                  (Some (Search.update_query s tab.buf (s.query ^ text)))
              | _ ->
                if term_focused then begin
-                 let active_mt = Tab.active_msg_tab tab.msg in
-                 (match active_mt.mt_terminal with
+                 (match active_term () with
                   | Some term -> Terminal.send term text
                   | None -> ())
                end else if not (Region_buffer.locked tab.rb) then begin
@@ -128,7 +133,7 @@ let handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r =
              (if m.ctrl then "C" else "")
          | Input.Paste _ -> "Paste"
          | _ -> "other" in
-       let kf = match (Tab.active_msg_tab tab.msg).mt_terminal with
+       let kf = match active_term () with
          | Some term -> Vterm_lib.Vterm_api.kitty_flags (Terminal.vterm term)
          | None -> -1 in
        Printf.eprintf "[%s %s kf=%d] %s\n%!" fp tf kf desc);
@@ -140,17 +145,12 @@ let handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r =
     if term_focused && not is_mouse_event then begin
       if Keymatch.match_binding ev Keys.quit then Some Quit
       else if Keymatch.match_binding ev Keys.close_tab then begin
-        (* Ctrl+W on a focused terminal: destroy the terminal *)
-        let active_mt = Tab.active_msg_tab tab.msg in
-        (match active_mt.mt_terminal with
+        (* Ctrl+W on a focused terminal: destroy the terminal and
+           pop to the most-recently-used sub-tab. *)
+        (match active_term () with
          | Some term ->
            Terminal.destroy term;
-           Tab.set_sticky_terminal None;
-           (* Clean up stale terminal sub-tab from msg_tabs and
-              reset active index to Rocq. *)
-           tab.msg.mt_active <- 0;
-           Tab.sync_terminals tab.msg;
-           Tab.activate_msg_tab tab.msg "Rocq";
+           Msg_pane.sync_terminals ();
            (* Switch back to script pane so the user isn't stranded *)
            tab.focused_pane <- `Script
          | None -> ());
@@ -167,8 +167,7 @@ let handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r =
               && not (match ev with Input.Key (3, _) -> true
                 | Input.Key (99, m) when m.ctrl -> true | _ -> false) then begin
         (* Copy terminal selection (^Y only; ^C goes to terminal) *)
-        let active_mt = Tab.active_msg_tab tab.msg in
-        (match active_mt.mt_terminal with
+        (match active_term () with
          | Some term ->
            let vt = Terminal.vterm term in
            if Vterm_lib.Vterm_api.has_selection vt then
@@ -245,22 +244,34 @@ let handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r =
     end
     else if Keymatch.match_binding ev Keys.step_forward then begin
       if not (Region_buffer.locked tab.rb) then begin
-        tab.goals_scroll <- 0; (Tab.ensure_msg_tab tab.msg "Rocq").mt_scroll <- 0;
-        (match session with Some s -> Session.step_forward s | None -> ())
+        tab.goals_scroll <- 0; tab.rocq_msg.rms_scroll <- 0;
+        (match session with
+         | Some s ->
+           Session.set_user_step_pending s;
+           Session.step_forward s
+         | None -> ())
       end;
       Some Continue
     end
     else if Keymatch.match_binding ev Keys.step_backward then begin
       if not (Region_buffer.locked tab.rb) then begin
-        tab.goals_scroll <- 0; (Tab.ensure_msg_tab tab.msg "Rocq").mt_scroll <- 0;
-        (match session with Some s -> Session.step_backward s | None -> ())
+        tab.goals_scroll <- 0; tab.rocq_msg.rms_scroll <- 0;
+        (match session with
+         | Some s ->
+           Session.set_user_step_pending s;
+           Session.step_backward s
+         | None -> ())
       end;
       Some Continue
     end
     else if Keymatch.match_binding ev Keys.go_to_cursor then begin
       if not (Region_buffer.locked tab.rb) then begin
-        tab.goals_scroll <- 0; (Tab.ensure_msg_tab tab.msg "Rocq").mt_scroll <- 0;
-        (match session with Some s -> Session.go_to_cursor s | None -> ())
+        tab.goals_scroll <- 0; tab.rocq_msg.rms_scroll <- 0;
+        (match session with
+         | Some s ->
+           Session.set_user_step_pending s;
+           Session.go_to_cursor s
+         | None -> ())
       end;
       Some Continue
     end
@@ -461,7 +472,8 @@ let handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r =
         Render.set_status r "No build errors.";
         Some Continue
       | Some (e : Build_errors.entry) ->
-        Tab.activate_msg_tab tab.msg "Errors";
+        ignore (Msg_pane.ensure Msg_pane.Errors);
+        Msg_pane.activate Msg_pane.Errors;
         Jump.push ctx tab;
         ctx.jump_target <- Some (e.line - 1, e.col_start);
         Some (Open_file e.file)
@@ -483,20 +495,27 @@ let handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r =
     end
     else if Keymatch.match_binding ev Keys.about then begin
       (match Modals.query_subject tab, session with
-       | Some word, Some s -> Session.query s ("About " ^ word ^ ".")
+       | Some word, Some s ->
+         Session.query s ("About " ^ word ^ ".");
+         Msg_pane.activate Msg_pane.Rocq
        | _ -> ());
       Some Continue
     end
     else if Keymatch.match_binding ev Keys.print_query then begin
       (match Modals.query_subject tab, session with
-       | Some word, Some s -> Session.query s ("Print " ^ word ^ ".")
+       | Some word, Some s ->
+         Session.query s ("Print " ^ word ^ ".");
+         Msg_pane.activate Msg_pane.Rocq
        | _ -> ());
       Some Continue
     end
     else if Keymatch.match_binding ev Keys.copy then begin
       let text = match tab.focused_pane with
         | `Goals -> View.pane_selection_text tab.goals_sel tab.goals_lines_cache
-        | `Messages -> View.pane_selection_text (Tab.active_msg_tab tab.msg).mt_sel (Tab.active_msg_tab tab.msg).mt_lines_cache
+        | `Messages ->
+          (match Geom.active_msg_pane_state tab with
+           | `Text (sel, cache, _) -> View.pane_selection_text sel cache
+           | `Terminal -> None)
         | `Script -> Buffer.selected_text buf
       in
       (match text with
@@ -544,15 +563,20 @@ let handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r =
         tab.goals_scroll <- !scroll_r;
         (match result with Some a -> a | None -> Continue)
       | `Messages ->
-        let active_mt = Tab.active_msg_tab tab.msg in
-        (match active_mt.mt_terminal with
-         | Some term ->
+        (match Msg_pane.active_kind () with
+         | Msg_pane.Terminal term ->
            Pty.forward_event term ev;
            Continue
-         | None ->
-           let scroll_r = ref active_mt.mt_scroll in
+         | Msg_pane.Rocq ->
+           let scroll_r = ref tab.rocq_msg.rms_scroll in
            let result = handle_pane_scroll scroll_r Render.PMessages in
-           active_mt.mt_scroll <- !scroll_r;
+           tab.rocq_msg.rms_scroll <- !scroll_r;
+           (match result with Some a -> a | None -> Continue)
+         | Msg_pane.Build | Msg_pane.Errors ->
+           let mt = Msg_pane.active_tab () in
+           let scroll_r = ref mt.scroll in
+           let result = handle_pane_scroll scroll_r Render.PMessages in
+           mt.scroll <- !scroll_r;
            (match result with Some a -> a | None -> Continue))
       | `Script ->
         (match Script.handle ctx ev tab r with

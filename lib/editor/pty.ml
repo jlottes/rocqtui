@@ -5,19 +5,17 @@ let open_tab ?cmd (tab : Tab.t) r =
     | Some f -> (match Project.find_project_file (Filename.dirname f) with
       | Some (pd, _) -> pd | None -> Filename.dirname f)
     | None -> Sys.getcwd () in
-  let _term = match cmd with
+  let term = match cmd with
     | Some c -> Terminal.create ~cmd:c ~cwd ~w ~h ()
     | None -> Terminal.create ~cwd ~w ~h ()
   in
-  Tab.sync_terminals tab.msg;
-  tab.msg.mt_active <- List.length tab.msg.mt_tabs - 1;
+  Msg_pane.sync_terminals ();
+  Msg_pane.activate (Msg_pane.Terminal term);
   tab.focused_pane <- `Messages
 
-let send_escape (tab : Tab.t) =
-  let active_mt = Tab.active_msg_tab tab.msg in
-  match active_mt.mt_terminal with
-  | None -> ()
-  | Some term ->
+let send_escape (_tab : Tab.t) =
+  match Msg_pane.active_kind () with
+  | Msg_pane.Terminal term ->
     let vt = Terminal.vterm term in
     let mode = Vterm_lib.Vterm_api.term_mode vt
       land (Vterm_lib.Vterm_api.mode_app_keypad
@@ -28,9 +26,10 @@ let send_escape (tab : Tab.t) =
       ~shifted_key:0 ~modifiers:0 ~mode
       ~kitty_flags:(Vterm_lib.Vterm_api.kitty_flags vt)
       ~event_type:1 ~text:"" in
-    match seq with
-    | Some s -> Terminal.send term s
-    | None -> Terminal.send term "\x1b"
+    (match seq with
+     | Some s -> Terminal.send term s
+     | None -> Terminal.send term "\x1b")
+  | _ -> ()
 
 let encode_utf8 buf cp =
   if cp < 0x80 then

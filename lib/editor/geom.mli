@@ -10,3 +10,16 @@ val screen_to_buffer_pos :
 val screen_to_pane_pos :
   Tab.t -> Render.t ->
   x:int -> y:int -> [`Goals | `Messages] -> (int * int) option
+
+(** State driving message-pane click/selection: the pane-selection,
+    cached wrapped lines, and current scroll for the active sub-tab.
+    Rocq state is per-file (from [tab.rocq_msg]); Build/Errors live
+    on the global {!Msg_pane}. Terminal sub-tabs aren't text panes. *)
+val active_msg_pane_state :
+  Tab.t ->
+  [ `Text of Tab.pane_selection * Styled.line list * int
+  | `Terminal ]
+
+(** Convenience: pane-selection only, used by callers that need to
+    update or clear the selection without inspecting cache/scroll. *)
+val active_msg_pane_sel : Tab.t -> Tab.pane_selection
