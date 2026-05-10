@@ -52,6 +52,8 @@ val next_tab : binding
 val search : binding
 val search_next : binding
 val search_prev : binding
+val next_error : binding
+val prev_error : binding
 val cut : binding
 val paste : binding
 val help : binding

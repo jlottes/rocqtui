@@ -1,4 +1,5 @@
-let handle (ctx : Editor_context.t) (mev : Input.mouse_event) (tab : Tab.t) r =
+let handle (ctx : Editor_context.t) (mev : Input.mouse_event) (tab : Tab.t) r
+  : Action.action option =
   let buf = tab.buf in
   let session = tab.session in
   let x = mev.x in
@@ -10,6 +11,7 @@ let handle (ctx : Editor_context.t) (mev : Input.mouse_event) (tab : Tab.t) r =
   let is_scroll_down = mev.button = Input.ScrollDown in
   let has_shift = mev.mods.shift in
   let has_cmd = mev.mods.ctrl in  (* Ctrl acts as Cmd on most terminals *)
+  let result : Action.action option ref = ref None in
   (* Terminal mouse: handle release and drag for reported buttons *)
   let term_mouse_handled = ref false in
   let active_mt = Tab.active_msg_tab tab.msg in
@@ -186,6 +188,34 @@ let handle (ctx : Editor_context.t) (mev : Input.mouse_event) (tab : Tab.t) r =
     else if (pane = Render.PGoals || pane = Render.PMessages)
             && is_left then begin
       tab.focused_pane <- (if pane = Render.PGoals then `Goals else `Messages);
+      (* Build / Errors tab click → jump to error *)
+      let jumped_to_error =
+        if pane = Render.PMessages then begin
+          let active_mt = Tab.active_msg_tab tab.msg in
+          if active_mt.mt_terminal <> None then false
+          else
+            match Geom.screen_to_pane_pos tab r ~x ~y `Messages with
+            | None -> false
+            | Some (row, _col) ->
+              let entry_opt =
+                if active_mt.mt_name = "Build" then
+                  Build_errors.lookup_by_output_row row
+                else if active_mt.mt_name = "Errors" then
+                  Build_errors.lookup_errors_tab_row row
+                else None
+              in
+              (match entry_opt with
+               | None -> false
+               | Some (e : Build_errors.entry) ->
+                 Build_errors.set_current e;
+                 Jump.push ctx tab;
+                 ctx.jump_target <- Some (e.line - 1, e.col_start);
+                 result := Some (Action.Open_file e.file);
+                 true)
+        end else false
+      in
+      if jumped_to_error then ()
+      else
       (* Check if we should forward to terminal *)
       let forwarded = if pane = Render.PMessages then
         let active_mt = Tab.active_msg_tab tab.msg in
@@ -309,4 +339,5 @@ let handle (ctx : Editor_context.t) (mev : Input.mouse_event) (tab : Tab.t) r =
         | None -> ()
       end
     end
-  end
+  end;
+  !result

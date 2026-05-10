@@ -99,6 +99,7 @@ See `lib/keys.ml` for the source of truth. Summary:
 | ^N | New tab |
 | ^F | Find / re-open search prompt |
 | F3 / Shift+F3 | Next / previous match (with active search) |
+| F9 / Shift+F9 | Next / previous build error / warning |
 | ^B | Jump back |
 | ^L | Jump to definition |
 | ^E | Go to cursor (set target) |

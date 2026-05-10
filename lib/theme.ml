@@ -235,6 +235,8 @@ type grid_attrs = {
   ga_tab_active : Grid.attr;
   ga_tab_inactive : Grid.attr;
   ga_gutter : Grid.attr;
+  ga_marker_error : Grid.attr;
+  ga_marker_warning : Grid.attr;
 }
 
 let make_attr ?(bold=false) ?(dim=false) (fg : color) (bg : color) : Grid.attr =
@@ -276,6 +278,8 @@ let grid_attrs_of_theme (theme : t) : grid_attrs =
     ga_tab_active = ab theme.status_fg theme.status_bg;
     ga_tab_inactive = a theme.border_fg theme.status_bg;
     ga_gutter = make_attr theme.border_fg theme.bg;
+    ga_marker_error = make_attr ~bold:true theme.error_bg theme.bg;
+    ga_marker_warning = make_attr ~bold:true theme.string_fg theme.bg;
   }
 
 let current_attrs : grid_attrs ref = ref (grid_attrs_of_theme default)

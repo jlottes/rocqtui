@@ -48,6 +48,11 @@ type manager = {
   mutable tab_scroll : int;
 }
 
+(** Canonicalize a path: make absolute (relative to cwd) and collapse
+    `.`, `..`, redundant `/`. Used to dedupe tabs and to compare buffer
+    filenames against build-error entries. *)
+val canonical_path : string -> string
+
 val create_blank : ?args:string list -> unit -> t
 val create_from_file : ?args:string list -> string -> t
 
@@ -90,6 +95,7 @@ val active_msg_tab : msg_tabs -> msg_tab
 val find_msg_tab : msg_tabs -> string -> (int * msg_tab) option
 val ensure_msg_tab : msg_tabs -> string -> msg_tab
 val activate_msg_tab : msg_tabs -> string -> unit
+val remove_msg_tab : msg_tabs -> string -> unit
 val msg_tab_display_name : msg_tab -> string
 val sync_terminals : msg_tabs -> unit
 val set_sticky_terminal : Terminal.t option -> unit

@@ -337,8 +337,9 @@ let handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r =
     else if View.is_help ctx then Modals.handle_help ctx ev r
     else if (match ev with Input.Mouse _ -> true | _ -> false) then begin
       let mev = match ev with Input.Mouse m -> m | _ -> assert false in
-      Mouse.handle ctx mev tab r;
-      Some Continue
+      (match Mouse.handle ctx mev tab r with
+       | Some action -> Some action
+       | None -> Some Continue)
     end
     (* Paste event *)
     else if (match ev with Input.Paste _ -> true | _ -> false) then begin
@@ -451,6 +452,19 @@ let handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r =
           | None -> ctx.jump_target <- None);
          Some (Open_file path)
        | None -> Some Continue)
+    end
+    else if Keymatch.match_binding ev Keys.next_error
+         || Keymatch.match_binding ev Keys.prev_error then begin
+      let forward = Keymatch.match_binding ev Keys.next_error in
+      match Build_errors.advance ~forward with
+      | None ->
+        Render.set_status r "No build errors.";
+        Some Continue
+      | Some (e : Build_errors.entry) ->
+        Tab.activate_msg_tab tab.msg "Errors";
+        Jump.push ctx tab;
+        ctx.jump_target <- Some (e.line - 1, e.col_start);
+        Some (Open_file e.file)
     end
     else if Keymatch.match_binding ev Keys.help then begin
       if View.is_help ctx then begin

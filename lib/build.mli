@@ -6,6 +6,9 @@ val is_running : unit -> bool
 (** Description of the current build (e.g. "make theory/groups.vo"). *)
 val description : unit -> string option
 
+(** Project dir of the current build (the CWD of the make subprocess). *)
+val project_dir : unit -> string option
+
 (** Get the fd to watch in select, or None. *)
 val watch_fd : unit -> Unix.file_descr option
 

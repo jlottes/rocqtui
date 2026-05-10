@@ -72,8 +72,11 @@ or hand-written).
 - [x] Cancel build (F5 → c while running)
 - [x] Async subprocess with output streaming to messages pane
 - [x] Messages pane tabs: Rocq + Build, auto-activation, click to switch
-- [ ] Jump to error: parse compiler output for "File X, line N" errors,
-      open the file and jump to the error line
+- [x] Jump to error: parse compiler output for `File "X", line N`
+      headers; click in Build/Errors tab or F9 / Shift+F9 jumps to the
+      offending line. Errors sub-tab in messages pane lists entries
+      (active one expanded). Gutter ✘ / ⚠ markers in the script pane.
+      Shares jump stack with ^L. (`docs/BUILD_ERRORS_PLAN.md`)
 - [x] Build status in status bar (spinner, "building...", exit code)
 
 ## File Management

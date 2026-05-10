@@ -139,6 +139,14 @@ let search_prev = {
   name = "search_prev"; codes = []; kitty_codes = [(267, 2)];
   display = "Shift+F3"; context = Global; description = "Find previous" }
 
+let next_error = {
+  name = "next_error"; codes = [273]; kitty_codes = [];
+  display = "F9"; context = Global; description = "Next build error" }
+
+let prev_error = {
+  name = "prev_error"; codes = []; kitty_codes = [(273, 2)];
+  display = "Shift+F9"; context = Global; description = "Previous build error" }
+
 let prev_tab = {
   name = "prev_tab"; codes = [552]; kitty_codes = []; display = "Alt+Left";
   context = Global; description = "Prev tab" }
@@ -338,6 +346,13 @@ let generate_help () =
     new_tab;
     { close_tab with description = "Close tab (exit if last)" };
     prev_tab; next_tab;
+  ];
+  section "Build errors" [
+    { next_error with description = "Next build error / warning" };
+    { prev_error with description = "Previous build error / warning" };
+    { (let b = { name="click_error"; codes=[]; kitty_codes=[]; display="Click";
+                 context=Global; description="Jump to error in Build / Errors tab" } in b)
+      with name = "click_error" };
   ];
   section "Search" [
     { search with description = "Open / re-open search prompt" };

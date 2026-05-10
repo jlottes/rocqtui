@@ -91,6 +91,8 @@ type grid_attrs = {
   ga_tab_active : Grid.attr;
   ga_tab_inactive : Grid.attr;
   ga_gutter : Grid.attr;
+  ga_marker_error : Grid.attr;
+  ga_marker_warning : Grid.attr;
 }
 
 (** Get the current theme's Grid.attr values. *)

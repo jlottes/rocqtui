@@ -1,5 +1,31 @@
 let next_id = ref 0
 
+(* Canonicalize a path: make it absolute (relative to cwd) and collapse
+   `.`, `..`, and consecutive `/`. Used to dedupe tabs and to match
+   buffer filenames against build-error entries. *)
+let canonical_path p =
+  let abs =
+    if Filename.is_relative p then Filename.concat (Sys.getcwd ()) p
+    else p in
+  let absolute = String.length abs > 0 && abs.[0] = '/' in
+  let raw = String.split_on_char '/' abs in
+  let segs = List.filter (fun s -> s <> "" && s <> ".") raw in
+  let rec collapse acc = function
+    | [] -> List.rev acc
+    | ".." :: rest ->
+      (match acc with
+       | [] when absolute -> collapse [] rest
+       | _ :: tail when (match acc with ".." :: _ -> false | _ -> true) ->
+         collapse tail rest
+       | _ -> collapse (".." :: acc) rest)
+    | s :: rest -> collapse (s :: acc) rest
+  in
+  match collapse [] segs with
+  | [] -> if absolute then "/" else "."
+  | parts ->
+    let joined = String.concat "/" parts in
+    if absolute then "/" ^ joined else joined
+
 type pane_selection = {
   mutable ps_anchor_line : int;
   mutable ps_anchor_col : int;
@@ -60,6 +86,16 @@ let activate_msg_tab mt name =
   match find_msg_tab mt name with
   | Some (i, _) -> mt.mt_active <- i
   | None -> ()
+
+let remove_msg_tab mt name =
+  match find_msg_tab mt name with
+  | None -> ()
+  | Some (i, _) ->
+    mt.mt_tabs <- List.filteri (fun j _ -> j <> i) mt.mt_tabs;
+    if mt.mt_active >= List.length mt.mt_tabs then
+      mt.mt_active <- max 0 (List.length mt.mt_tabs - 1)
+    else if mt.mt_active > i then
+      mt.mt_active <- mt.mt_active - 1
 
 (* Get the display name for a msg_tab. Terminal tabs use their
    dynamic title; text tabs use mt_name. *)
@@ -177,6 +213,7 @@ let create_blank ?(args=[]) () =
   make_tab ~args buf session
 
 let create_from_file ?(args=[]) filename =
+  let filename = canonical_path filename in
   let buf = Buffer.create () in
   Buffer.set_filename buf filename;
   let session =
@@ -244,6 +281,7 @@ let switch_to_id mgr id =
 (* Open a file in a new tab, or switch to it if already open.
    Returns (tab, created) where created=true if a new tab was made. *)
 let open_or_switch mgr ?(extra_args=[]) path =
+  let path = canonical_path path in
   let existing = List.find_opt (fun t ->
     Buffer.filename t.buf = Some path
   ) mgr.tabs in

@@ -10,6 +10,7 @@ type t = {
   mutable exit_code : int option;
   mutable finished_at : float option;
   description : string;            (* e.g. "make theory/groups.vo" *)
+  project_dir : string;            (* CWD of the build subprocess *)
 }
 
 let active : t option ref = ref None
@@ -36,6 +37,10 @@ let description () = match !active with
   | Some b -> Some b.description
   | None -> None
 
+let project_dir () = match !active with
+  | Some b -> Some b.project_dir
+  | None -> None
+
 (* Start a build. Returns false if one is already running. *)
 let start ~project_dir ~cmd ~args ~desc =
   if is_running () then false
@@ -49,13 +54,13 @@ let start ~project_dir ~cmd ~args ~desc =
       Unix.stdin write_fd write_fd in
     Unix.close write_fd;
     Unix.set_nonblock read_fd;
-    ignore project_dir;
     active := Some {
       pid; fd = read_fd;
       output = []; buf = "";
       finished = false; exit_code = None;
       finished_at = None;
       description = desc;
+      project_dir;
     };
     true
   end
@@ -227,6 +232,7 @@ let build_deps ~project_dir v_path =
       buf = ""; finished = true; exit_code = Some 0;
       finished_at = Some (Unix.gettimeofday ());
       description = "deps (none)";
+      project_dir;
     };
     true
   end else

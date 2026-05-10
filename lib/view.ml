@@ -190,8 +190,9 @@ let render_sentence_regions r buf session spans =
     end
 
 (* Wrap lines to fit a given width, returning a flat list of screen lines *)
-let wrap_lines width lines_list =
+let wrap_lines ?(hanging=0) width lines_list =
   let avail = max 1 (width - 2) in
+  let pad = String.make (max 0 hanging) ' ' in
   let result = ref [] in
   List.iter (fun line ->
     let line_w = Utf8.string_width line in
@@ -200,24 +201,29 @@ let wrap_lines width lines_list =
     else begin
       let len = String.length line in
       let i = ref 0 in
+      let segment_idx = ref 0 in
       while !i < len do
         let start = !i in
+        let prefix = if !segment_idx = 0 then "" else pad in
+        let prefix_w = String.length prefix in
+        let cap = max 1 (avail - prefix_w) in
         let col = ref 0 in
         let stop = ref false in
         while !i < len && not !stop do
           let (cp, n) = Utf8.decode line !i in
           let w = Utf8.codepoint_width cp in
-          if !col + w > avail then
+          if !col + w > cap then
             stop := true
           else begin
             col := !col + w;
             i := !i + n
           end
         done;
-        (* Safety: always advance at least one codepoint *)
         if !i = start then
           i := Utf8.next line !i;
-        result := String.sub line start (!i - start) :: !result
+        let segment = String.sub line start (!i - start) in
+        result := (prefix ^ segment) :: !result;
+        incr segment_idx
       done
     end
   ) lines_list;
@@ -225,10 +231,10 @@ let wrap_lines width lines_list =
 
 (* Render a scrollable text pane with optional selection highlight *)
 let render_text_pane ?(sel : Tab.pane_selection option) ?set_cache
-    r pane scroll_ref lines_list =
+    ?(hanging=0) r pane scroll_ref lines_list =
   Render.clear_pane r pane;
   let (rows, cols) = Render.pane_dims r pane in
-  let wrapped = wrap_lines cols lines_list in
+  let wrapped = wrap_lines ~hanging cols lines_list in
   (match set_cache with Some f -> f wrapped | None -> ());
   let n = List.length wrapped in
   scroll_ref := max 0 (min !scroll_ref (max 0 (n - rows)));
@@ -294,6 +300,11 @@ let render_goals (ctx : Editor_context.t) r (tab : Tab.t) =
     r Render.PGoals gs lines;
   tab.goals_scroll <- !gs
 
+(* Tracks the last-rendered active index so we only auto-scroll the
+   Errors tab when the cursor actually changes (F9 or click), not on
+   every frame. *)
+let errors_last_active : int option ref = ref None
+
 (* Update messages sub-tab contents. Call before rendering. *)
 let update_msg_tabs r (tab : Tab.t) =
   let session = tab.session in
@@ -328,6 +339,33 @@ let update_msg_tabs r (tab : Tab.t) =
       if Build.is_running () && not active_is_terminal then
         Tab.activate_msg_tab tab.msg "Build"
     end
+  end;
+  (* Update Errors tab from already-refreshed Build_errors. *)
+  let project_dir = match Build.project_dir () with
+    | Some d -> d
+    | None -> Sys.getcwd () in
+  let entries = Build_errors.all () in
+  if entries = [] then
+    Tab.remove_msg_tab tab.msg "Errors"
+  else begin
+    let errors_tab = Tab.ensure_msg_tab tab.msg "Errors" in
+    let (lines, active_row) = Build_errors.render_errors_tab ~project_dir in
+    if lines <> errors_tab.mt_lines then errors_tab.mt_lines <- lines;
+    (* Snap scroll only when the active entry just changed (F9 or click);
+       leave the user's manual scroll alone otherwise. *)
+    let cur = Build_errors.current_index () in
+    if cur <> !errors_last_active && cur <> None then begin
+      errors_last_active := cur;
+      match active_row with
+      | None -> ()
+      | Some ar ->
+        let (rows, _) = Render.pane_dims r Render.PMessages in
+        let scroll = errors_tab.mt_scroll in
+        if ar < scroll then errors_tab.mt_scroll <- ar
+        else if ar >= scroll + rows then
+          errors_tab.mt_scroll <- max 0 (ar - rows + 1)
+    end else if cur = None then
+      errors_last_active := None
   end
 
 let render_messages r (tab : Tab.t) =
@@ -346,8 +384,10 @@ let render_messages r (tab : Tab.t) =
       ~width:rect.width ~height:rect.height
   | None ->
     let ms = ref mt.mt_scroll in
+    let hanging = if mt.mt_name = "Errors" then 6 else 0 in
     render_text_pane ~sel:mt.mt_sel
       ~set_cache:(fun l -> mt.mt_lines_cache <- l)
+      ~hanging
       r Render.PMessages ms mt.mt_lines;
     mt.mt_scroll <- !ms
 
@@ -400,6 +440,7 @@ let render_script (ctx : Editor_context.t) r (tab : Tab.t) =
   let default_attr = a_attrs.ga_default in
   let gutter_attr = a_attrs.ga_gutter in
   let line_count = Buffer.line_count buf in
+  let buf_filename = Buffer.filename buf in
   for row = 0 to rows - 1 do
     let line_idx = scroll + row in
     (* Paint the gutter area (always — including past EOF) *)
@@ -411,7 +452,19 @@ let render_script (ctx : Editor_context.t) r (tab : Tab.t) =
         let digit_col = gw - 1 - n_digits in
         let digits = superscript_of_int line_no in
         ignore (Render.put_str r Render.PScript ~row ~col:digit_col
-                  digits gutter_attr)
+                  digits gutter_attr);
+        (* Build-error marker in column 0 *)
+        (match buf_filename with
+         | None -> ()
+         | Some f ->
+           match Build_errors.severity_for_line ~file:f ~line:line_no with
+           | None -> ()
+           | Some sev ->
+             let glyph, attr = match sev with
+               | Build_errors.Error -> "\xe2\x9c\x98", a_attrs.ga_marker_error
+               | Build_errors.Warning -> "\xe2\x9a\xa0", a_attrs.ga_marker_warning
+             in
+             ignore (Render.put_str r Render.PScript ~row ~col:0 glyph attr))
       end
     end;
     if line_idx < line_count then begin
@@ -717,6 +770,13 @@ let update_status (ctx : Editor_context.t) r (tab : Tab.t) =
   end
 
 let render_all (ctx : Editor_context.t) r (tab : Tab.t) =
+  (* Refresh parsed build errors before any pane renders so the script
+     gutter sees the current set on the same frame the build output
+     arrived. *)
+  let project_dir = match Build.project_dir () with
+    | Some d -> d
+    | None -> Sys.getcwd () in
+  Build_errors.refresh ~project_dir (Build.output ());
   (* Clear content panes — not the tab bar or other UI chrome *)
   Render.clear_pane r Render.PScript;
   Render.clear_pane r Render.PGoals;
