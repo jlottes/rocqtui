@@ -90,15 +90,45 @@ let format_compose_status r cs =
   ) completions;
   Stdlib.Buffer.contents buf
 
-(* Apply a chgat to a byte range within a line, adjusting for hscroll *)
-let chgat_byte_range r pane line row hscroll cols byte_start byte_end grid_attr =
+(* Width of the script-pane gutter (line numbers + reserved marker
+   column) for a given buffer. Returns 0 when disabled. *)
+let gutter_width buf =
+  if not !Config.show_line_numbers then 0
+  else begin
+    let n = max 1 (Buffer.line_count buf) in
+    let rec count k = if k = 0 then 0 else 1 + count (k / 10) in
+    let digits = max 1 (count n) in
+    1 + max 4 digits + 1
+  end
+
+(* UTF-8 superscript digits ⁰¹²³⁴⁵⁶⁷⁸⁹ for line numbers. *)
+let superscript_digits =
+  [| "\xe2\x81\xb0"; "\xc2\xb9"; "\xc2\xb2"; "\xc2\xb3";
+     "\xe2\x81\xb4"; "\xe2\x81\xb5"; "\xe2\x81\xb6";
+     "\xe2\x81\xb7"; "\xe2\x81\xb8"; "\xe2\x81\xb9" |]
+
+let superscript_of_int n =
+  let buf = Stdlib.Buffer.create 8 in
+  let rec emit k =
+    if k >= 10 then emit (k / 10);
+    Stdlib.Buffer.add_string buf superscript_digits.(k mod 10)
+  in
+  emit (max 0 n);
+  Stdlib.Buffer.contents buf
+
+(* Apply a chgat to a byte range within a line, adjusting for hscroll
+   and the gutter offset. [content_cols] is the visible content width
+   (pane cols minus gutter). [col_offset] is added to the resulting
+   column when emitting (typically the gutter width). *)
+let chgat_byte_range r pane line row hscroll content_cols col_offset
+    byte_start byte_end grid_attr =
   let scol = Utf8.byte_to_col line byte_start - hscroll in
   let ecol = Utf8.byte_to_col line byte_end - hscroll in
   let scol = max 0 scol in
-  let ecol = min cols ecol in
+  let ecol = min content_cols ecol in
   let w = ecol - scol in
-  if w > 0 && scol < cols then
-    Render.chgat r pane ~row ~col:scol ~width:w grid_attr
+  if w > 0 && scol < content_cols then
+    Render.chgat r pane ~row ~col:(col_offset + scol) ~width:w grid_attr
 
 (* Apply sentence status coloring with syntax colors preserved *)
 let render_sentence_regions r buf session spans =
@@ -109,6 +139,8 @@ let render_sentence_regions r buf session spans =
     if ranges = [] then ()
     else begin
       let (rows, cols) = Render.pane_dims r Render.PScript in
+      let gw = gutter_width buf in
+      let content_cols = max 0 (cols - gw) in
       let scroll = Buffer.scroll_top buf in
       let hscroll = Buffer.hscroll buf in
       let a = Theme.attrs () in
@@ -137,7 +169,7 @@ let render_sentence_regions r buf session spans =
             let s = max 0 (sd.sd_start - line_start) in
             let e = min line_len (sd.sd_end - line_start) in
             (* Default background for the status region *)
-            chgat_byte_range r Render.PScript line row hscroll cols s e default_attr;
+            chgat_byte_range r Render.PScript line row hscroll content_cols gw s e default_attr;
             (* Re-apply syntax spans with status-colored background *)
             if i < Array.length spans then
               List.iter (fun (span : Highlight.span) ->
@@ -147,7 +179,7 @@ let render_sentence_regions r buf session spans =
                   let cs = max s span.start_col in
                   let ce = min e (span.start_col + span.length) in
                   if ce > cs then
-                    chgat_byte_range r Render.PScript line row hscroll cols cs ce
+                    chgat_byte_range r Render.PScript line row hscroll content_cols gw cs ce
                       (attr_fn span)
                 end
               ) spans.(i)
@@ -353,32 +385,49 @@ let render_script (ctx : Editor_context.t) r (tab : Tab.t) =
     render_help_screen ctx r
   else begin
   let (rows, cols) = Render.pane_dims r Render.PScript in
+  let gw = gutter_width buf in
+  let content_cols = max 1 (cols - gw) in
   let cur = Buffer.cursor buf in
   if tab.last_ensured_cur <> Some cur then begin
-    Buffer.ensure_visible_h buf rows cols;
+    Buffer.ensure_visible_h buf rows content_cols;
     tab.last_ensured_cur <- Some cur
   end;
   let scroll = Buffer.scroll_top buf in
   let hscroll = Buffer.hscroll buf in
   Render.clear_pane r Render.PScript;
   let spans = Highlight.highlight_buffer buf in
-  let default_attr = (Theme.attrs ()).ga_default in
+  let a_attrs = Theme.attrs () in
+  let default_attr = a_attrs.ga_default in
+  let gutter_attr = a_attrs.ga_gutter in
+  let line_count = Buffer.line_count buf in
   for row = 0 to rows - 1 do
     let line_idx = scroll + row in
-    if line_idx < Buffer.line_count buf then begin
+    (* Paint the gutter area (always — including past EOF) *)
+    if gw > 0 then begin
+      Render.fill r Render.PScript ~row ~col:0 ~width:gw ' ' gutter_attr;
+      if line_idx < line_count then begin
+        let line_no = line_idx + 1 in
+        let n_digits = String.length (string_of_int line_no) in
+        let digit_col = gw - 1 - n_digits in
+        let digits = superscript_of_int line_no in
+        ignore (Render.put_str r Render.PScript ~row ~col:digit_col
+                  digits gutter_attr)
+      end
+    end;
+    if line_idx < line_count then begin
       let line = Buffer.get_line buf line_idx in
-      let (visible, _vstart_byte) = visible_portion line hscroll cols in
-      ignore (Render.put_str r Render.PScript ~row ~col:0 visible default_attr);
+      let (visible, _vstart_byte) = visible_portion line hscroll content_cols in
+      ignore (Render.put_str r Render.PScript ~row ~col:gw visible default_attr);
       (* Apply highlighting -- adjust for horizontal scroll *)
       if line_idx < Array.length spans then
         List.iter (fun (span : Highlight.span) ->
           let scol = Utf8.byte_to_col line span.start_col - hscroll in
           let ecol = Utf8.byte_to_col line (span.start_col + span.length) - hscroll in
           let scol = max 0 scol in
-          let ecol = min cols ecol in
+          let ecol = min content_cols ecol in
           let width = ecol - scol in
-          if scol < cols && width > 0 then
-            Render.chgat r Render.PScript ~row ~col:scol ~width span.grid_attr
+          if scol < content_cols && width > 0 then
+            Render.chgat r Render.PScript ~row ~col:(gw + scol) ~width span.grid_attr
         ) spans.(line_idx)
     end
   done;
@@ -401,7 +450,7 @@ let render_script (ctx : Editor_context.t) r (tab : Tab.t) =
             && line_end > vend && line_start < pend then begin
            let s = max 0 (vend - line_start) in
            let e = min line_len (pend - line_start) in
-           chgat_byte_range r Render.PScript line row hscroll cols s e
+           chgat_byte_range r Render.PScript line row hscroll content_cols gw s e
              a.ga_default_p
          end;
          byte_off := line_end + 1
@@ -421,7 +470,7 @@ let render_script (ctx : Editor_context.t) r (tab : Tab.t) =
          && line_end > range_start && line_start < range_end then begin
         let s = max 0 (range_start - line_start) in
         let e = min line_len (range_end - line_start) in
-        chgat_byte_range r Render.PScript line row hscroll cols s e grid_attr
+        chgat_byte_range r Render.PScript line row hscroll content_cols gw s e grid_attr
       end;
       byte_off := line_end + 1
     done
@@ -450,7 +499,7 @@ let render_script (ctx : Editor_context.t) r (tab : Tab.t) =
           && m.start_.line < Buffer.line_count buf then
          chgat_byte_range r Render.PScript
            (Buffer.get_line buf m.start_.line)
-           row hscroll cols m.start_.col m.end_.col attr
+           row hscroll content_cols gw m.start_.col m.end_.col attr
      in
      Array.iter (fun m -> overlay_match m a.ga_search_match) s.matches;
      (match Search.current_match s with
@@ -485,10 +534,10 @@ let render_script (ctx : Editor_context.t) r (tab : Tab.t) =
   let script_rect = Render.pane_rect r Render.PScript in
   if cursor_row >= 0 && cursor_row < rows then begin
     let line = Buffer.get_line buf cl in
-    let cursor_col = min (Utf8.byte_to_col line cc - hscroll) (cols - 1) in
+    let cursor_col = min (Utf8.byte_to_col line cc - hscroll) (content_cols - 1) in
     let cursor_col = max 0 cursor_col in
     Render.place_cursor r ~row:(script_rect.row + cursor_row)
-      ~col:(script_rect.col + cursor_col)
+      ~col:(script_rect.col + gw + cursor_col)
   end else
     Render.place_cursor r ~row:script_rect.row ~col:script_rect.col
   end (* if not in_help_mode *)

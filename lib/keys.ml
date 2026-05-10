@@ -83,6 +83,10 @@ let toggle_hyps = {
   name = "toggle_hyps"; codes = [ctrl 'g']; kitty_codes = []; display = "^G";
   context = Global; description = "Toggle hypotheses" }
 
+let toggle_gutter = {
+  name = "toggle_gutter"; codes = []; kitty_codes = [(108, 3)];
+  display = "Alt+L"; context = Global; description = "Toggle line numbers" }
+
 let options_menu = {
   name = "options_menu"; codes = [266]; kitty_codes = []; display = "F2";
   context = Global; description = "Print options" }
@@ -248,7 +252,7 @@ let open_claude = {
 let navigation_bindings = [step_forward; step_backward; go_to_cursor; cycle_pane]
 let editing_bindings = [open_file; save; close_tab; quit; cut; paste; copy; undo; redo]
 let query_bindings = [about; print_query; jump_to_def; jump_back; query_menu]
-let display_bindings = [toggle_hyps; options_menu; help; minimap; theme_menu; reload; build_menu; open_terminal; open_claude; refresh_screen]
+let display_bindings = [toggle_hyps; toggle_gutter; options_menu; help; minimap; theme_menu; reload; build_menu; open_terminal; open_claude; refresh_screen]
 let tab_bindings = [new_tab; prev_tab; next_tab]
 
 (* Generate a hint string from a list of bindings: "^S:Save ^W:Close ..." *)
@@ -313,6 +317,7 @@ let generate_help () =
   ];
   section "Display" [
     toggle_hyps;
+    toggle_gutter;
     options_menu;
     help;
     minimap;

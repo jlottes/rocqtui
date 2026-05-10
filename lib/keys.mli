@@ -36,6 +36,7 @@ val step_forward : binding
 val step_backward : binding
 val go_to_cursor : binding
 val toggle_hyps : binding
+val toggle_gutter : binding
 val options_menu : binding
 val query_menu : binding
 val cycle_pane : binding

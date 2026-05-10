@@ -290,6 +290,9 @@ let handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r =
     end
     else if Keymatch.match_binding ev Keys.toggle_hyps then begin
       tab.show_all_hyps <- not tab.show_all_hyps; Some Continue end
+    else if Keymatch.match_binding ev Keys.toggle_gutter then begin
+      Config.show_line_numbers := not !Config.show_line_numbers;
+      Some Continue end
     else if Keymatch.match_binding ev Keys.options_menu then begin
       if View.is_options ctx then begin
         Modal.pop ctx.modal;

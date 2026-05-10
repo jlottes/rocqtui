@@ -234,10 +234,11 @@ type grid_attrs = {
   ga_search_current : Grid.attr;
   ga_tab_active : Grid.attr;
   ga_tab_inactive : Grid.attr;
+  ga_gutter : Grid.attr;
 }
 
-let make_attr ?(bold=false) (fg : color) (bg : color) : Grid.attr =
-  { Grid.fg = fg; bg; bold; dim = false;
+let make_attr ?(bold=false) ?(dim=false) (fg : color) (bg : color) : Grid.attr =
+  { Grid.fg = fg; bg; bold; dim;
     reverse = false; underline = false }
 
 let grid_attrs_of_theme (theme : t) : grid_attrs =
@@ -274,6 +275,7 @@ let grid_attrs_of_theme (theme : t) : grid_attrs =
     ga_search_current = ab theme.search_current_fg theme.search_current_bg;
     ga_tab_active = ab theme.status_fg theme.status_bg;
     ga_tab_inactive = a theme.border_fg theme.status_bg;
+    ga_gutter = make_attr theme.border_fg theme.bg;
   }
 
 let current_attrs : grid_attrs ref = ref (grid_attrs_of_theme default)

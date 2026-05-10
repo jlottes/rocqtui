@@ -41,7 +41,8 @@
 - [x] Search (^F) — incremental find with match highlighting,
       F3/Shift+F3 to step, scroll wheel passes through prompt
 - [ ] Search and replace
-- [ ] Line numbers gutter in the script pane
+- [x] Line numbers gutter in the script pane (Alt+L to toggle;
+      reserved marker column for upcoming error/warning/git markers)
 - [x] Tab/indent support (Tab key inserts spaces or tab character)
 - [x] Auto-indent on newline (match previous line's indentation)
 - [ ] Matching bracket/paren highlighting

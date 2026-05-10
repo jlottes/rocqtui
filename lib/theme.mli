@@ -90,6 +90,7 @@ type grid_attrs = {
   ga_search_current : Grid.attr;
   ga_tab_active : Grid.attr;
   ga_tab_inactive : Grid.attr;
+  ga_gutter : Grid.attr;
 }
 
 (** Get the current theme's Grid.attr values. *)

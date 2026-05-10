@@ -24,5 +24,9 @@ val format_compose_status : Render.t -> Compose.t -> string
 (** Help screen lines (precomputed). *)
 val help_lines : string list
 
+(** Width of the script-pane line-number gutter for a given buffer.
+    Returns 0 when [Config.show_line_numbers] is false. *)
+val gutter_width : Buffer.t -> int
+
 (** Render the active tab (main entry point). *)
 val render_all : Editor_context.t -> Render.t -> Tab.t -> unit

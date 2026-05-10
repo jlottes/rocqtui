@@ -4,8 +4,9 @@ let screen_to_buffer_pos r buf ~x ~y =
   let hscroll = Buffer.hscroll buf in
   let script_rect = Render.pane_rect r Render.PScript in
   let row = y - script_rect.row in
-  let col = x - script_rect.col in
-  if row < 0 || row >= rows || col < 0 || col >= cols then None
+  let gw = View.gutter_width buf in
+  let col = x - script_rect.col - gw in
+  if row < 0 || row >= rows || col < 0 || col >= cols - gw then None
   else begin
     let line_idx = scroll + row in
     if line_idx >= Buffer.line_count buf then None
