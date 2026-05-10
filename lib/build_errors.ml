@@ -221,16 +221,32 @@ let render_errors_tab ~project_dir =
     map := idx :: !map;
     incr row_count
   in
+  let attrs = Theme.attrs () in
   List.iteri (fun i (e : entry) ->
     let is_active = !current_idx = i in
-    let header_mark = if is_active then "\xe2\x96\xbe " else "  " in (* ▾  *)
+    let glyph = glyph_of e.severity in
+    let glyph_attr = match e.severity with
+      | Error -> attrs.ga_marker_error
+      | Warning -> attrs.ga_marker_warning
+    in
     let relp = format_relpath ~project_dir e.file in
     let msg_lines = String.split_on_char '\n' e.message in
     let first = match msg_lines with [] -> "" | l :: _ -> l in
-    let header = Printf.sprintf "%s%s %s:%d:%d  %s"
-      header_mark (glyph_of e.severity) relp e.line e.col_start first in
+    let header_mark =
+      if is_active then Styled.style "\xe2\x96\xbe " glyph_attr  (* ▾  *)
+      else Styled.plain "  "
+    in
+    let location = Printf.sprintf "%s:%d:%d" relp e.line e.col_start in
+    let header = Styled.concat [
+      header_mark;
+      Styled.style glyph glyph_attr;
+      Styled.plain " ";
+      Styled.style location attrs.ga_comment;
+      Styled.plain "  ";
+      Styled.plain first;
+    ] in
     if is_active then active_header_row := Some !row_count;
-    emit_line i (Styled.plain header);
+    emit_line i header;
     if is_active then
       List.iteri (fun k l ->
         if k > 0 && l <> "" then
