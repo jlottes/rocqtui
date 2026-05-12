@@ -76,8 +76,20 @@ let step_backward = {
   display = "Alt+Up"; context = Global; description = "Step backward" }
 
 let go_to_cursor = {
-  name = "go_to_cursor"; codes = [ctrl 'e']; kitty_codes = []; display = "^E";
-  context = Global; description = "Go to cursor" }
+  name = "go_to_cursor"; codes = [ctrl 'e']; kitty_codes = [(101, 3)];
+  display = "^E/Alt+E"; context = Global; description = "Go to cursor" }
+
+let step_to_start = {
+  name = "step_to_start"; codes = [];
+  kitty_codes = [(262, 3); (114, 3)];  (* Alt+Home, Alt+R *)
+  display = "Alt+Home/Alt+R"; context = Global;
+  description = "Rewind to start" }
+
+let step_to_end = {
+  name = "step_to_end"; codes = [];
+  kitty_codes = [(360, 3)];  (* Alt+End *)
+  display = "Alt+End"; context = Global;
+  description = "Verify to end" }
 
 let toggle_hyps = {
   name = "toggle_hyps"; codes = [ctrl 'g']; kitty_codes = []; display = "^G";
@@ -138,6 +150,16 @@ let search_next = {
 let search_prev = {
   name = "search_prev"; codes = []; kitty_codes = [(267, 2)];
   display = "Shift+F3"; context = Global; description = "Find previous" }
+
+let search_toggle_case = {
+  name = "search_toggle_case"; codes = []; kitty_codes = [(99, 3)];
+  display = "Alt+C"; context = Global;
+  description = "Toggle case (in prompt; smart-case otherwise)" }
+
+let search_toggle_regex = {
+  name = "search_toggle_regex"; codes = []; kitty_codes = [(114, 3)];
+  display = "Alt+R"; context = Global;
+  description = "Toggle regex (in prompt)" }
 
 let next_error = {
   name = "next_error"; codes = [273]; kitty_codes = [];
@@ -257,7 +279,7 @@ let open_claude = {
 
 (* --- Grouped for help/status generation --- *)
 
-let navigation_bindings = [step_forward; step_backward; go_to_cursor; cycle_pane]
+let navigation_bindings = [step_forward; step_backward; go_to_cursor; step_to_start; step_to_end; cycle_pane]
 let editing_bindings = [open_file; save; close_tab; quit; cut; paste; copy; undo; redo]
 let query_bindings = [about; print_query; jump_to_def; jump_back; query_menu]
 let display_bindings = [toggle_hyps; toggle_gutter; options_menu; help; minimap; theme_menu; reload; build_menu; open_terminal; open_claude; refresh_screen]
@@ -287,6 +309,8 @@ let generate_help () =
     { step_forward with description = "Step forward (advance target)" };
     { step_backward with description = "Step backward (retract target)" };
     { go_to_cursor with description = "Go to cursor (set target to cursor)" };
+    { step_to_start with description = "Rewind to start of buffer" };
+    { step_to_end with description = "Verify to end of buffer" };
     cycle_pane;
     { (let b = { name="click"; codes=[]; kitty_codes=[]; display="Click";
                  context=Global; description="Position cursor / focus pane" } in b)
@@ -314,6 +338,8 @@ let generate_help () =
     { step_forward with description = "Step forward (advance target)" };
     { step_backward with description = "Step backward (retract target)" };
     go_to_cursor;
+    { step_to_start with description = "Rewind to start of buffer" };
+    { step_to_end with description = "Verify to end of buffer" };
     { interrupt with description = "Interrupt rocqtop" };
   ];
   section "Queries" [
@@ -358,14 +384,8 @@ let generate_help () =
     { search with description = "Open / re-open search prompt" };
     { search_next with description = "Next match (also in prompt)" };
     { search_prev with description = "Previous match (also in prompt)" };
-    { (let b = { name="search_toggle_case"; codes=[]; kitty_codes=[];
-                 display="Alt+C"; context=Global;
-                 description="Toggle case (in prompt; smart-case otherwise)" } in b)
-      with name = "search_toggle_case" };
-    { (let b = { name="search_toggle_regex"; codes=[]; kitty_codes=[];
-                 display="Alt+R"; context=Global;
-                 description="Toggle regex (in prompt)" } in b)
-      with name = "search_toggle_regex" };
+    search_toggle_case;
+    search_toggle_regex;
     { (let b = { name="search_accept"; codes=[]; kitty_codes=[];
                  display="Enter"; context=Global;
                  description="Close prompt, keep search active" } in b)

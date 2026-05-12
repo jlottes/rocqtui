@@ -103,8 +103,10 @@ See `lib/keys.ml` for the source of truth. Summary:
 | F9 / Shift+F9 | Next / previous build error / warning |
 | ^B | Jump back |
 | ^L | Jump to definition |
-| ^E | Go to cursor (set target) |
+| ^E / Alt+E | Go to cursor (set target) |
 | Alt+Down/Up | Step forward/backward |
+| Alt+Home / Alt+R | Rewind to start of buffer |
+| Alt+End | Verify to end of buffer |
 | Alt+. | Interrupt Rocq |
 | ^P | Cycle pane focus |
 | ^T | Open terminal (in project dir) |

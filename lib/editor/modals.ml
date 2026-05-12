@@ -288,10 +288,10 @@ let handle_search_prompt (ctx : Editor_context.t) ev (tab : Tab.t) =
         let prev_off = Utf8.prev s.query len in
         Search.update_query s buf (String.sub s.query 0 prev_off))
 
-  | Input.Key (cp, m) when m.alt && cp = Char.code 'c' ->
+  | ev when Keymatch.match_binding ev Keys.search_toggle_case ->
     with_state Search.toggle_case
 
-  | Input.Key (cp, m) when m.alt && cp = Char.code 'r' ->
+  | ev when Keymatch.match_binding ev Keys.search_toggle_regex ->
     with_state Search.toggle_regex
 
   | ev when Keymatch.match_binding ev Keys.search_next ->

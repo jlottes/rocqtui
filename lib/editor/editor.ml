@@ -275,6 +275,28 @@ let handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r =
       end;
       Some Continue
     end
+    else if Keymatch.match_binding ev Keys.step_to_start then begin
+      if not (Region_buffer.locked tab.rb) then begin
+        tab.goals_scroll <- 0; tab.rocq_msg.rms_scroll <- 0;
+        (match session with
+         | Some s ->
+           Session.set_user_step_pending s;
+           Session.go_to_offset s 0
+         | None -> ())
+      end;
+      Some Continue
+    end
+    else if Keymatch.match_binding ev Keys.step_to_end then begin
+      if not (Region_buffer.locked tab.rb) then begin
+        tab.goals_scroll <- 0; tab.rocq_msg.rms_scroll <- 0;
+        (match session with
+         | Some s ->
+           Session.set_user_step_pending s;
+           Session.go_to_offset s (String.length (Buffer.text tab.buf))
+         | None -> ())
+      end;
+      Some Continue
+    end
     else if (match ev with Input.Special (Input.Escape, _) -> true | _ -> false) then begin
       if View.is_build ctx then
         Modal.pop ctx.modal

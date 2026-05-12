@@ -35,6 +35,8 @@ val interrupt : binding
 val step_forward : binding
 val step_backward : binding
 val go_to_cursor : binding
+val step_to_start : binding
+val step_to_end : binding
 val toggle_hyps : binding
 val toggle_gutter : binding
 val options_menu : binding
@@ -52,6 +54,8 @@ val next_tab : binding
 val search : binding
 val search_next : binding
 val search_prev : binding
+val search_toggle_case : binding
+val search_toggle_regex : binding
 val next_error : binding
 val prev_error : binding
 val cut : binding

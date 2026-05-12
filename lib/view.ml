@@ -621,8 +621,11 @@ let render_search_bar (ctx : Editor_context.t) (tab : Tab.t) r =
     | _ -> ""
   in
   Render.set_status r
-    (Printf.sprintf "Search: %s%s  %s %s%s"
-       query counter case_ind regex_ind compose_ind)
+    (Printf.sprintf "Search: %s%s  %s %s  %s %s%s"
+       query counter
+       Keys.search_toggle_case.display case_ind
+       Keys.search_toggle_regex.display regex_ind
+       compose_ind)
 
 let render_options_bar r =
   let parts = List.map (fun (e : Printopts.entry) ->
