@@ -23,6 +23,7 @@ and an MCP server for Claude Code integration.")
   (ocaml (>= 4.14))
   (dune (>= 3.7))
   yojson
+  re
   (rocq-runtime (>= 9.0))
   (coqide-server (>= 9.0)))
  (depopts))
