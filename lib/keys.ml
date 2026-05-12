@@ -44,7 +44,7 @@ let ctrl c = Char.code c - Char.code 'a' + 1
 (* --- Global bindings --- *)
 
 let quit = {
-  name = "quit"; codes = [ctrl 'x']; kitty_codes = []; display = "^X";
+  name = "quit"; codes = [ctrl 'q']; kitty_codes = []; display = "^Q";
   context = Global; description = "Exit" }
 
 let close_tab = {
@@ -92,7 +92,7 @@ let options_menu = {
   context = Global; description = "Print options" }
 
 let query_menu = {
-  name = "query_menu"; codes = [ctrl 'q']; kitty_codes = []; display = "^Q";
+  name = "query_menu"; codes = []; kitty_codes = [(113, 3)]; display = "Alt+Q";
   context = Global; description = "Query menu" }
 
 let cycle_pane = {
@@ -158,7 +158,7 @@ let next_tab = {
 (* --- Script-only bindings --- *)
 
 let cut = {
-  name = "cut"; codes = [ctrl 'k']; kitty_codes = []; display = "^K";
+  name = "cut"; codes = [ctrl 'x'; ctrl 'k']; kitty_codes = []; display = "^X/^K";
   context = Script; description = "Cut line" }
 
 let paste = {

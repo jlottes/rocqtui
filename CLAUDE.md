@@ -94,7 +94,8 @@ See `lib/keys.ml` for the source of truth. Summary:
 | ^S | Save |
 | ^O | Open file picker |
 | ^W | Close tab / close terminal (when focused) |
-| ^X | Exit all |
+| ^X / ^K | Cut line / selection (script pane) |
+| ^Q | Exit all |
 | ^C | Copy (also to system clipboard) |
 | ^N | New tab |
 | ^F | Find / re-open search prompt |
@@ -107,7 +108,7 @@ See `lib/keys.ml` for the source of truth. Summary:
 | Alt+. | Interrupt Rocq |
 | ^P | Cycle pane focus |
 | ^T | Open terminal (in project dir) |
-| ^Q | Query menu |
+| Alt+Q | Query menu |
 | ^M | Minimap (Kitty protocol only) |
 | F1 | Help (scrollable) |
 | F2 | Print options |
