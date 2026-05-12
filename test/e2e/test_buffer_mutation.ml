@@ -79,29 +79,52 @@ let () =
       ]) in
 
     let after_rewind_buf = read_buffer s in
-    if try ignore (Str.search_forward
-                     (Str.regexp_string "reflexivity") after_rewind_buf 0); true
-       with Not_found -> false
-    then
+    (* Strict check: rewind+delete must consume the whitespace that
+       separated the rewound sentences from the kept ones. Otherwise
+       repeated insert/rewind cycles leak whitespace into the buffer.
+       Buffer.text always ends in "\n", so include that in the
+       expected value. *)
+    if after_rewind_buf <> "Lemma plus_oneone : 1 + 1 = 2.\n" then
       E2e_harness.fail
-        (Printf.sprintf "rewound text leaked: %S" after_rewind_buf);
-    E2e_harness.assert_contains ~haystack:after_rewind_buf
-      ~needle:"plus_oneone";
-    Printf.printf "  buffer after rewind+delete: %S\n"
-      (String.trim after_rewind_buf);
+        (Printf.sprintf "rewind+delete left stray content: %S"
+           after_rewind_buf);
+    Printf.printf "  buffer after rewind+delete: %S\n" after_rewind_buf;
 
     (* Rewind further — remove the lemma statement too — and confirm
-       the buffer is back to its starting (empty) state. *)
+       the buffer is back to its starting (empty) state, exactly. *)
     let _ = E2e_harness.call_tool s "proof_rewind"
       ~args:(`Assoc [
         "sentences", `String "Lemma plus_oneone : 1 + 1 = 2.";
         "delete", `Bool true;
       ]) in
     let final_buf = read_buffer s in
-    let trimmed = String.trim final_buf in
-    if trimmed <> "" then
+    if final_buf <> starting_buf then
       E2e_harness.fail
-        (Printf.sprintf "buffer not empty after full rewind: %S" final_buf);
+        (Printf.sprintf "buffer not back to start after full rewind: \
+                         %S (expected %S)" final_buf starting_buf);
+
+    (* Exercise the leak path directly: insert text whose leading
+       whitespace is supplied by the caller (not auto-prepended), then
+       rewind. Without the walkback in proof_rewind, the leading
+       whitespace would be left behind and accumulate across cycles. *)
+    let _ = E2e_harness.call_tool s "proof_insert"
+      ~args:(`Assoc ["text", `String "Definition anchor := 0."]) in
+    let expected = "Definition anchor := 0.\n" in
+    for i = 1 to 3 do
+      let body = Printf.sprintf "Definition leak_%d := %d." i i in
+      let _ = E2e_harness.call_tool s "proof_insert"
+        ~args:(`Assoc ["text", `String ("\n\n" ^ body)]) in
+      let _ = E2e_harness.call_tool s "proof_rewind"
+        ~args:(`Assoc [
+          "sentences", `String body;
+          "delete", `Bool true;
+        ]) in
+      let buf = read_buffer s in
+      if buf <> expected then
+        E2e_harness.fail
+          (Printf.sprintf "whitespace leak after cycle %d: %S \
+                           (expected %S)" i buf expected)
+    done;
 
     print_endline "OK: proof_insert + proof_rewind delete:true keep \
                    buffer and verified region in sync";

@@ -478,14 +478,23 @@ let handle_proof_rewind conn args state =
     let rewound_text = String.sub text match_start (vend - match_start) in
     let sents = Sentence.split rewound_text in
     let count = List.length sents in
-    (* Rewind *)
+    (* When deleting, also consume any whitespace immediately preceding
+       the match. This mirrors proof_insert (which writes [separator +
+       content]); without it, each insert+rewind cycle leaks the
+       separator into the buffer. *)
+    let effective_start =
+      if not delete then match_start
+      else
+        let i = ref match_start in
+        while !i > 0 && Sentence.is_space text.[!i - 1] do decr i done;
+        !i
+    in
     ignore (call_tool conn "go_to_offset"
-      (`Assoc ["offset", `Int match_start]));
+      (`Assoc ["offset", `Int effective_start]));
     ignore (poll_until_idle conn ?tab ());
-    (* Delete if requested *)
     if delete then begin
       ignore (call_tool_or_reject conn "delete_range"
-        (`Assoc ["start", `Int match_start; "end", `Int vend]));
+        (`Assoc ["start", `Int effective_start; "end", `Int vend]));
       ignore (poll_until_idle conn ?tab ())
     end;
     let final = get_state conn ?tab () in
@@ -649,7 +658,10 @@ let tool_defs = [
        "sentences", `Assoc ["type", `String "string";
          "description", `String "Text matching tail of verified region"];
        "delete", `Assoc ["type", `String "boolean";
-         "description", `String "Delete the rewound text (default true)"];
+         "description", `String "Delete the rewound text (default true). \
+           When true, whitespace immediately preceding the matched \
+           sentences is also removed, so insert/rewind cycles do not \
+           accumulate stray whitespace in the buffer."];
        "display", `Assoc ["type", `String "object"];
        "tab", `Assoc ["type", `String "integer"];
      ];
