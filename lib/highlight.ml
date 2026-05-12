@@ -304,7 +304,7 @@ let highlight_buffer buf =
     let prev_comment_tok = ref "" in
     (try
        while true do
-         match Gramlib.LStream.next kw_state tok_stream with
+         match Rocq_compat.lstream_next kw_state tok_stream with
          | None -> raise Exit
          | Some tok ->
          let loc = Gramlib.LStream.current_loc tok_stream in
@@ -398,7 +398,7 @@ let collect_ident_spans text =
     let tok_stream = CLexer.LexerDiff.tok_func char_stream in
     (try
        while true do
-         match Gramlib.LStream.next kw_state tok_stream with
+         match Rocq_compat.lstream_next kw_state tok_stream with
          | None -> raise Exit
          | Some tok ->
          let loc = Gramlib.LStream.current_loc tok_stream in

@@ -4,5 +4,5 @@
  (name rocqtui_lib)
  (libraries unix yojson re rocq-runtime.parsing rocq-runtime.clib rocq-runtime.gramlib
             rocq-runtime.lib coqide-server.protocol coqide-server.core
-            vterm_lib)
+            rocq_compat vterm_lib)
  (foreign_stubs (language c) (names locale_stubs inotify_stubs term_stubs)))

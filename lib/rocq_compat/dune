@@ -1,0 +1,16 @@
+(include_subdirs no)
+
+(executable
+ (name discover)
+ (modules discover)
+ (libraries unix))
+
+(rule
+ (target rocq_compat.ml)
+ (deps (:exe discover.exe) (env_var OPAM_SWITCH_PREFIX))
+ (action (run %{exe} %{target})))
+
+(library
+ (name rocq_compat)
+ (modules rocq_compat)
+ (libraries rocq-runtime.gramlib))
