@@ -731,8 +731,15 @@ let update_status (ctx : Editor_context.t) r (tab : Tab.t) =
       else ""
     in
     let extra = if ctx.status_extra <> "" then "  " ^ ctx.status_extra else "" in
-    let status = Printf.sprintf "%s%s  Ln %d, Col %d%s%s%s%s"
-      fname mod_flag (cl + 1) (vcol + 1) rocq_status extra hscroll_ind focus_info
+    let search_info = match Tab.search_state tab with
+      | None -> ""
+      | Some s ->
+        let count = Array.length s.matches in
+        let idx = if s.current >= 0 then s.current + 1 else 0 in
+        Printf.sprintf "  Search: %s %d/%d" s.query idx count
+    in
+    let status = Printf.sprintf "%s%s  Ln %d, Col %d%s%s%s%s%s"
+      fname mod_flag (cl + 1) (vcol + 1) rocq_status search_info extra hscroll_ind focus_info
     in
     Render.set_status r status
   end
