@@ -137,7 +137,7 @@ let vernac_keywords = List.fold_left (fun s x -> SS.add x s) SS.empty [
   "Bind"; "Delimit"; "Hint"; "Resolve"; "Immediate"; "Constructors";
   "Unfold"; "Extern"; "Rewrite"; "Save"; "Remark"; "Property";
   "Axiom"; "Axioms"; "Parameter"; "Parameters"; "SubClass";
-  "Variant"; "Chapter"; "Include"; "Reserved"; "Tactic";
+  "Variant"; "Chapter"; "Include"; "Reserved"; "Tactic"; "Abbreviation";
 ]
 
 (* Gallina / term keywords *)
