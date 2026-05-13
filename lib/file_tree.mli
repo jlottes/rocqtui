@@ -16,6 +16,15 @@ val project_file : t -> string
 (** Re-enumerate files from disk and rebuild visible lines. *)
 val refresh : t -> unit
 
+(** True when filter mode is active (a `/`-input row is visible). *)
+val in_filter : t -> bool
+
+(** Snap the selection to the entry for [path]. Expands all ancestor
+    directories so the file is visible, clears any active filter, and
+    rebuilds the visible lines. Silently no-ops if [path] is not under
+    the project root or has no matching entry. *)
+val reveal : t -> path:string -> unit
+
 type action =
   | TreeContinue         (** key consumed by the panel, no further action *)
   | TreeOpen of string   (** absolute file path to open *)

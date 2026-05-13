@@ -115,6 +115,42 @@ let refresh t =
   rebuild_tree t;
   rebuild_lines t
 
+let in_filter t = t.filter <> None
+
+(* Snap the selection to the entry for [path]. Expands all ancestor
+   directories, clears any active filter, and rebuilds the visible
+   lines. Silently no-ops when [path] is not under the project root or
+   no matching entry is in the tree. *)
+let reveal t ~path =
+  if t.project_dir = "" then ()
+  else
+    let prefix = t.project_dir ^ "/" in
+    let plen = String.length prefix in
+    if String.length path <= plen
+       || String.sub path 0 plen <> prefix then ()
+    else
+      let rel = String.sub path plen (String.length path - plen) in
+      let parts = String.split_on_char '/' rel in
+      let rec mark_ancestors prefix = function
+        | [] | [_] -> ()
+        | dir :: rest ->
+          let dir_rel = prefix ^ dir ^ "/" in
+          Hashtbl.replace t.expanded dir_rel ();
+          mark_ancestors dir_rel rest
+      in
+      mark_ancestors "" parts;
+      t.filter <- None;
+      rebuild_lines t;
+      let n = Array.length t.lines in
+      let i = ref 0 in
+      let found = ref false in
+      while not !found && !i < n do
+        if t.lines.(!i).entry.rel_path = rel then begin
+          t.selected <- !i;
+          found := true
+        end else incr i
+      done
+
 (* --- Selection movement --- *)
 
 let move_selection t delta =

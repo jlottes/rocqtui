@@ -366,10 +366,23 @@ let handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r =
          end;
          let was_visible = Render.file_tree_visible r in
          if not was_visible then begin
-           (* Refresh from disk on each show so newly-created files appear. *)
+           (* Refresh from disk on each show so newly-created files
+              appear; then reveal the active tab's file as the initial
+              selection ("where am I?"). Both are skipped on a brand-new
+              widget — create already enumerates and the selection
+              defaults to the root. *)
            (match ctx.file_tree with
-            | Some ft when not need_new -> File_tree.refresh ft
-            | _ -> ());
+            | Some ft when not need_new ->
+              File_tree.refresh ft;
+              (match Buffer.filename buf with
+               | Some path -> File_tree.reveal ft ~path
+               | None -> ())
+            | Some ft ->
+              (* First-time create on this project — reveal too. *)
+              (match Buffer.filename buf with
+               | Some path -> File_tree.reveal ft ~path
+               | None -> ())
+            | None -> ());
            Render.set_file_tree_visible r true;
            ctx.file_tree_focused <- true
          end
@@ -636,12 +649,28 @@ let handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r =
   (* Panel-focused dispatch: the panel sees keys first (so ^T toggles
      project/all mode instead of opening a terminal, etc.). Returns
      None for keys the panel doesn't claim, letting globals like ^O /
-     ^Q / ^P / F8 fall through. *)
+     ^Q / ^P / F8 fall through.
+
+     "." is intercepted before the panel sees it (outside filter mode)
+     to snap the selection to the active tab's file — the panel itself
+     has no knowledge of tabs. *)
   let try_file_tree () =
     if not ctx.file_tree_focused then None
     else match ctx.file_tree with
     | None -> None
     | Some ft ->
+      let is_plain_period = match ev with
+        | Input.Key (46, mods) ->
+          not (mods.shift || mods.alt || mods.ctrl)
+        | _ -> false
+      in
+      if is_plain_period && not (File_tree.in_filter ft) then begin
+        (match Buffer.filename buf with
+         | Some path -> File_tree.reveal ft ~path
+         | None -> ());
+        Some Continue
+      end
+      else
       (match file_tree_event_to_key ev with
        | None -> None
        | Some ch ->
