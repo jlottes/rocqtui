@@ -130,8 +130,11 @@ let vernac_keywords = List.fold_left (fun s x -> SS.add x s) SS.empty [
   "Abort"; "Let"; "Example"; "Fact"; "Corollary"; "Proposition";
   "Variable"; "Variables"; "Hypothesis"; "Hypotheses"; "Context";
   "Existing"; "Instance"; "Class"; "Ltac"; "Ltac2";
-  "Canonical"; "Coercion"; "Universe"; "Program"; "Next"; "Obligation";
-  "Goal"; "Local"; "Global"; "Arguments"; "Implicit"; "Declare";
+  "Canonical"; "Coercion"; "Universe"; "Universes"; "Sort"; "Sorts";
+  "Program"; "Next"; "Obligation";
+  "Goal"; "Local"; "Global"; "Cumulative"; "NonCumulative";
+  "Monomorphic"; "Polymorphic"; "Fail"; "Succeed"; "Time"; "Redirect";
+  "Arguments"; "Implicit"; "Declare";
   "Typeclasses"; "Opaque"; "Transparent"; "Scheme";
   "Combined"; "Extract"; "Extraction"; "Add"; "Load"; "Comments";
   "Bind"; "Delimit"; "Hint"; "Resolve"; "Immediate"; "Constructors";
