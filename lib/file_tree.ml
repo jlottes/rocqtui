@@ -3,6 +3,11 @@
    has its own UX: expandable directories, arrow-key navigation, and
    transient `/`-to-filter mode. *)
 
+type file_status = {
+  modified : bool;
+  disk_changed : bool;
+}
+
 type line = {
   depth : int;
   entry : File_listing.entry;
@@ -434,9 +439,22 @@ let render t r ~open_files ~focused =
           if entry.is_dir then
             (if line.expanded then "\xe2\x96\xbe "  (* ▾ *)
              else "\xe2\x96\xb8 ")                  (* ▸ *)
-          else if List.mem entry.full_path open_files then
-            "\xe2\x80\xa2 "                          (* • *)
-          else "  "
+          else
+            match List.assoc_opt entry.full_path open_files with
+            | None -> "  "  (* not open *)
+            | Some { modified; disk_changed } ->
+              let m = if modified then "*" else "" in
+              let d = if disk_changed then "\xe2\x9f\xb3" else "" in
+              (* Glyph slot is 2 display cells wide.
+                 - both flags: "*⟳" (2 cells)
+                 - one flag:   "* " or "⟳ "
+                 - neither:    "• " (open with no special state) *)
+              let s =
+                if modified || disk_changed then m ^ d
+                else "\xe2\x80\xa2"  (* • *)
+              in
+              if Utf8.string_width s >= 2 then s
+              else s ^ " "
         in
         let text = indent ^ glyph ^ entry.name in
         let is_dim =

@@ -138,7 +138,15 @@ let () =
       | Some i -> mgr.active <- i; Render_need.request ()
       | None -> ())
     ~open_files:(fun () ->
-      List.filter_map (fun (t : Tab.t) -> Buffer.filename t.buf) mgr.tabs)
+      List.filter_map (fun (t : Tab.t) ->
+        match Buffer.filename t.buf with
+        | None -> None
+        | Some path ->
+          Some (path, File_tree.{
+            modified = Buffer.modified t.buf;
+            disk_changed = Buffer.disk_changed t.buf;
+          })
+      ) mgr.tabs)
     ~set_project_dir:(fun dir -> File_manager.set_project_dir fm dir)
     () in
   ctx.theme_name <- theme.Theme.name;

@@ -4,6 +4,13 @@
 
 type t
 
+(** Per-open-file status flags rendered as glyphs in the panel. Same
+    indicators the tab bar shows. *)
+type file_status = {
+  modified : bool;       (** Buffer has unsaved changes ("*") *)
+  disk_changed : bool;   (** Underlying file changed on disk ("⟳") *)
+}
+
 (** Create a new file-tree state. The widget enumerates immediately;
     state persists across editor sessions in memory only (no on-disk
     persistence in v1). *)
@@ -41,7 +48,9 @@ val handle_click : t -> Render.t -> y:int -> action
 (** Handle a mouse scroll. Direction > 0 scrolls down, < 0 up. *)
 val handle_scroll : t -> Render.t -> int -> unit
 
-(** Render into the [PFileTree] pane. [open_files] is used for the
-    open-file marker; [focused] highlights the header. *)
+(** Render into the [PFileTree] pane. [open_files] supplies per-path
+    status for open buffers; closed files (paths not present in the
+    list) show no marker. [focused] highlights the header. *)
 val render : t -> Render.t ->
-  open_files:string list -> focused:bool -> unit
+  open_files:(string * file_status) list ->
+  focused:bool -> unit

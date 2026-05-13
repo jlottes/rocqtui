@@ -16,7 +16,7 @@ type jump_point = {
 
 type t = {
   switch_tab : int -> unit;
-  open_files : unit -> string list;
+  open_files : unit -> (string * File_tree.file_status) list;
   set_project_dir : string -> unit;
   modal : Modal.t;
   mutable status_extra : string;

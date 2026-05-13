@@ -213,7 +213,7 @@ let handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r =
       (match Project.find_project_file dir with
        | Some (project_dir, project_file) ->
          let fp = File_picker.create ~project_dir ~project_file
-           ~open_files:(ctx.open_files ()) in
+           ~open_files:(List.map fst (ctx.open_files ())) in
          Modal.push ctx.modal (Modal.FilePicker fp)
        | None ->
          Render.set_status r "No _RocqProject found.");
