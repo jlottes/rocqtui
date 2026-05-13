@@ -104,6 +104,46 @@ let test_file_watch_close_write () =
   File_watch.close w;
   rm_rf dir
 
+(* Atomic-rename saves (vim, many editors) swap a tmp file onto the
+   target inode. This both kills the old file-watch (IN_DELETE_SELF)
+   and fires a dir-event (IN_MOVED_TO). Either is enough for one
+   ProjectChanged; but the file-watch's re-attach logic must work so
+   the NEXT atomic save also fires. *)
+let test_project_file_atomic_rename () =
+  let dir = mkdtemp "rocqtui_fw_atomic_" in
+  let pf = Filename.concat dir "_RocqProject" in
+  let tmp = Filename.concat dir "_RocqProject.tmp" in
+  let write_then_rename content =
+    let oc = open_out tmp in
+    output_string oc content;
+    close_out oc;
+    Sys.rename tmp pf
+  in
+  write_then_rename "-R . Foo\n";
+  let fm = File_manager.create () in
+  File_manager.set_project_dir fm dir;
+  (* First atomic rename — replaces the inode set_project_dir watched *)
+  write_then_rename "-R . Foo\n-Q theory Bar\n";
+  wait ();
+  let events1 = File_manager.poll fm [] in
+  let saw1 = any_match events1 (function
+    | File_manager.ProjectChanged -> true
+    | _ -> false)
+  in
+  check "first atomic rename of _RocqProject yields ProjectChanged" saw1;
+  (* Second atomic rename — only works if the watch was re-attached *)
+  write_then_rename "-R . Foo\n-Q theory Bar\n-Q util Baz\n";
+  wait ();
+  let events2 = File_manager.poll fm [] in
+  let saw2 = any_match events2 (function
+    | File_manager.ProjectChanged -> true
+    | _ -> false)
+  in
+  check "second atomic rename of _RocqProject also yields ProjectChanged"
+    saw2;
+  File_manager.close fm;
+  rm_rf dir
+
 (* File_manager.set_project_dir should pick up edits to _RocqProject
    and surface them as ProjectChanged events. *)
 let test_project_file_content_change () =
@@ -134,4 +174,5 @@ let () =
   test_dir_watch_delete ();
   test_dir_watch_subdir_create ();
   test_file_watch_close_write ();
-  test_project_file_content_change ()
+  test_project_file_content_change ();
+  test_project_file_atomic_rename ()
