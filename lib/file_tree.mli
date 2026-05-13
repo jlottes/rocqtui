@@ -17,8 +17,10 @@ val project_file : t -> string
 val refresh : t -> unit
 
 type action =
-  | TreeContinue
-  | TreeOpen of string  (** absolute file path to open *)
+  | TreeContinue         (** key consumed by the panel, no further action *)
+  | TreeOpen of string   (** absolute file path to open *)
+  | TreeUnhandled        (** panel did not claim this key; let global handlers
+                             (e.g. ^O, ^Q, ^P, F8) run *)
 
 (** Handle a key press. [ch] is an ncurses-style int code; visible row
     count is derived internally from [Render.pane_dims]. *)

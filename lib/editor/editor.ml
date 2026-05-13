@@ -633,22 +633,34 @@ let handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r =
        | _ -> None)
     | _ -> None
   in
-  let handle_file_tree_event () =
-    match ctx.file_tree with
-    | None -> Continue
+  (* Panel-focused dispatch: the panel sees keys first (so ^T toggles
+     project/all mode instead of opening a terminal, etc.). Returns
+     None for keys the panel doesn't claim, letting globals like ^O /
+     ^Q / ^P / F8 fall through. *)
+  let try_file_tree () =
+    if not ctx.file_tree_focused then None
+    else match ctx.file_tree with
+    | None -> None
     | Some ft ->
       (match file_tree_event_to_key ev with
-       | None -> Continue
+       | None -> None
        | Some ch ->
          (match File_tree.handle_key ft r ch with
-          | File_tree.TreeOpen path -> Open_file path
-          | File_tree.TreeContinue -> Continue))
+          | File_tree.TreeOpen path -> Some (Open_file path)
+          | File_tree.TreeContinue -> Some Continue
+          | File_tree.TreeUnhandled -> None))
   in
   let action =
+    match try_file_tree () with
+    | Some a -> a
+    | None ->
     match handle_global () with
     | Some a -> a
     | None ->
-      if ctx.file_tree_focused then handle_file_tree_event ()
+      (* Panel is focused but neither it nor any global claimed the
+         key — there's no script/goals/messages pane to fall through
+         to in that case, so just continue. *)
+      if ctx.file_tree_focused then Continue
       else
       match tab.focused_pane with
       | `Goals ->

@@ -214,6 +214,7 @@ let backspace_filter t =
 type action =
   | TreeContinue
   | TreeOpen of string  (* file path *)
+  | TreeUnhandled       (* let global key handlers run *)
 
 let activate_selected t =
   match selected_line t with
@@ -322,7 +323,7 @@ let handle_key t r ch =
     ensure_visible t visible_rows;
     TreeContinue
   end
-  else TreeContinue
+  else TreeUnhandled
 
 (* --- Mouse --- *)
 
