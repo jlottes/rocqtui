@@ -104,9 +104,34 @@ let test_file_watch_close_write () =
   File_watch.close w;
   rm_rf dir
 
+(* File_manager.set_project_dir should pick up edits to _RocqProject
+   and surface them as ProjectChanged events. *)
+let test_project_file_content_change () =
+  let dir = mkdtemp "rocqtui_fw_pf_" in
+  let pf = Filename.concat dir "_RocqProject" in
+  let oc = open_out pf in
+  output_string oc "-R . Foo\n";
+  close_out oc;
+  let fm = File_manager.create () in
+  File_manager.set_project_dir fm dir;
+  (* Edit the project file *)
+  let oc = open_out pf in
+  output_string oc "-R . Foo\n-Q theory Bar\n";
+  close_out oc;
+  wait ();
+  let events = File_manager.poll fm [] in
+  let saw = any_match events (function
+    | File_manager.ProjectChanged -> true
+    | _ -> false)
+  in
+  check "editing _RocqProject surfaces ProjectChanged" saw;
+  File_manager.close fm;
+  rm_rf dir
+
 let () =
   Random.self_init ();
   test_dir_watch_create ();
   test_dir_watch_delete ();
   test_dir_watch_subdir_create ();
-  test_file_watch_close_write ()
+  test_file_watch_close_write ();
+  test_project_file_content_change ()

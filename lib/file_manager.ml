@@ -20,13 +20,18 @@ type t = {
      subdirectories are created, and to track for set_project_dir
      reset. *)
   mutable project_subdirs : string list;
+  (* Path to the watched _RocqProject / _CoqProject file, if any.
+     FileChanged events on this path are surfaced as ProjectChanged so
+     File_tree refreshes when the project file is edited. *)
+  mutable project_file_watched : string option;
 }
 
 let create () =
   { watcher = File_watch.create ();
     deferred = [];
     project_dir = None;
-    project_subdirs = [] }
+    project_subdirs = [];
+    project_file_watched = None }
 
 let watch_fd t = File_watch.watch_fd t.watcher
 
@@ -68,13 +73,35 @@ let clear_project_watches t =
     File_watch.remove_watch t.watcher dir
   ) t.project_subdirs;
   t.project_subdirs <- [];
+  (match t.project_file_watched with
+   | Some pf -> File_watch.remove_watch t.watcher pf
+   | None -> ());
+  t.project_file_watched <- None;
   t.project_dir <- None
+
+(* Conventional project-file names, in priority order. Kept in sync with
+   [Project.project_filenames]; duplicated here to avoid an upward
+   dependency from File_manager onto Project. *)
+let project_file_candidates = ["_RocqProject"; "_CoqProject"]
+
+let find_project_file_in dir =
+  List.find_map (fun name ->
+    let path = Filename.concat dir name in
+    if Sys.file_exists path then Some path else None
+  ) project_file_candidates
 
 let set_project_dir t dir =
   if t.project_dir <> Some dir then begin
     clear_project_watches t;
     t.project_dir <- Some dir;
-    add_project_subtree t dir
+    add_project_subtree t dir;
+    (* Also watch the project file for content changes (-R / -Q
+       directives, listed-files lines). *)
+    (match find_project_file_in dir with
+     | Some pf ->
+       File_watch.add_watch t.watcher pf;
+       t.project_file_watched <- Some pf
+     | None -> ())
   end
 
 (* --- Reload helpers (unchanged) --- *)
@@ -154,15 +181,30 @@ let poll t (tabs : Tab.t list) =
   let project_touched = ref false in
   List.iter (function
     | File_watch.FileChanged p ->
-      file_paths := p :: !file_paths
+      if t.project_file_watched = Some p then
+        project_touched := true
+      else
+        file_paths := p :: !file_paths
     | File_watch.DirEntryAdded { dir; name; is_dir } ->
       project_touched := true;
       if is_dir && name <> "" && not (skip_dir name) then begin
         let path = Filename.concat dir name in
         try add_project_subtree t path with _ -> ()
       end
-    | File_watch.DirEntryRemoved _ ->
-      project_touched := true
+      else if not is_dir && t.project_file_watched = None
+              && List.mem name project_file_candidates
+              && t.project_dir = Some dir then begin
+        let path = Filename.concat dir name in
+        File_watch.add_watch t.watcher path;
+        t.project_file_watched <- Some path
+      end
+    | File_watch.DirEntryRemoved { dir; name; _ } ->
+      project_touched := true;
+      let path = Filename.concat dir name in
+      if t.project_file_watched = Some path then begin
+        File_watch.remove_watch t.watcher path;
+        t.project_file_watched <- None
+      end
   ) raw_events;
   let file_events =
     if !file_paths = [] && t.deferred = [] then []
