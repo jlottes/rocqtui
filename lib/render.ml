@@ -116,47 +116,41 @@ let pane_at t ~x ~y =
 
 (* --- Drawing into panes --- *)
 
+(* Single source of truth for pane -> rect lookup. All drawing primitives
+   and external [pane_rect] / [pane_dims] route through this. Add a new
+   pane: one variant in [pane_id], one case here, one line in
+   [compute_layout]. *)
+let rect_of_pane t = function
+  | PScript -> t.script
+  | PGoals -> t.goals
+  | PMessages -> t.messages
+  | PStatus -> t.status
+  | PMinimap -> t.minimap_rect
+  | PTabBar -> { row = 0; col = 0; height = 1; width = t.term_w }
+  | PBorderV | PBorderH | PBorderBoth | PBorderMinimap | PNone -> empty_rect
+
 (* Write a string into a pane at pane-relative (row, col) *)
 let put_str t pane ~row ~col s attr =
-  let r = match pane with
-    | PScript -> t.script | PGoals -> t.goals
-    | PMessages -> t.messages | PStatus -> t.status
-    | PMinimap -> t.minimap_rect | PTabBar -> { row = 0; col = 0; height = 1; width = t.term_w }
-    | _ -> empty_rect
-  in
+  let r = rect_of_pane t pane in
   if row >= 0 && row < r.height then
     Grid.put_str t.curr ~row:(r.row + row) ~col:(r.col + col) s attr
   else 0
 
 (* Set a single cell in a pane *)
 let set_cell t pane ~row ~col s attr =
-  let r = match pane with
-    | PScript -> t.script | PGoals -> t.goals
-    | PMessages -> t.messages | PStatus -> t.status
-    | PMinimap -> t.minimap_rect | PTabBar -> { row = 0; col = 0; height = 1; width = t.term_w }
-    | _ -> empty_rect
-  in
+  let r = rect_of_pane t pane in
   if row >= 0 && row < r.height && col >= 0 && col < r.width then
     Grid.set_cell t.curr ~row:(r.row + row) ~col:(r.col + col) s attr
 
 (* Fill a region within a pane *)
 let fill t pane ~row ~col ~width ch attr =
-  let r = match pane with
-    | PScript -> t.script | PGoals -> t.goals
-    | PMessages -> t.messages | PStatus -> t.status
-    | PMinimap -> t.minimap_rect | PTabBar -> { row = 0; col = 0; height = 1; width = t.term_w }
-    | _ -> empty_rect
-  in
+  let r = rect_of_pane t pane in
   if row >= 0 && row < r.height then
     Grid.fill t.curr ~row:(r.row + row) ~col:(r.col + col) ~width ch attr
 
 (* Change attributes of a region (like mvwchgat) *)
 let chgat t pane ~row ~col ~width attr =
-  let r = match pane with
-    | PScript -> t.script | PGoals -> t.goals
-    | PMessages -> t.messages | PStatus -> t.status
-    | _ -> empty_rect
-  in
+  let r = rect_of_pane t pane in
   let abs_row = r.row + row in
   let abs_col = r.col + col in
   if abs_row >= 0 && abs_row < t.term_h then
@@ -167,12 +161,7 @@ let chgat t pane ~row ~col ~width attr =
 
 (* Clear a pane — content panes use theme default, UI panes use their own *)
 let clear_pane t pane =
-  let r = match pane with
-    | PScript -> t.script | PGoals -> t.goals
-    | PMessages -> t.messages | PStatus -> t.status
-    | PMinimap -> t.minimap_rect | PTabBar -> { row = 0; col = 0; height = 1; width = t.term_w }
-    | _ -> empty_rect
-  in
+  let r = rect_of_pane t pane in
   let attr = match pane with
     | PScript | PGoals | PMessages -> (Theme.attrs ()).ga_default
     | PStatus -> (Theme.attrs ()).ga_status
@@ -183,22 +172,11 @@ let clear_pane t pane =
 
 (* Get pane dimensions *)
 let pane_dims t pane =
-  let r = match pane with
-    | PScript -> t.script | PGoals -> t.goals
-    | PMessages -> t.messages | PStatus -> t.status
-    | PMinimap -> t.minimap_rect
-    | _ -> empty_rect
-  in
+  let r = rect_of_pane t pane in
   (r.height, r.width)
 
 (* Get pane rect *)
-let pane_rect t pane =
-  match pane with
-  | PScript -> t.script | PGoals -> t.goals
-  | PMessages -> t.messages | PStatus -> t.status
-  | PMinimap -> t.minimap_rect
-  | PTabBar -> { row = 0; col = 0; height = 1; width = t.term_w }
-  | _ -> empty_rect
+let pane_rect t pane = rect_of_pane t pane
 
 (* Raw grid access *)
 let curr t = t.curr
