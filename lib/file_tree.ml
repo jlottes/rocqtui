@@ -354,12 +354,6 @@ let handle_scroll t r direction =
 
 (* --- Render --- *)
 
-(* Truncate a UTF-8 string to fit in [max_cols] display columns. *)
-let truncate_to_cols s max_cols =
-  if max_cols <= 0 then ""
-  else if Utf8.string_width s <= max_cols then s
-  else String.sub s 0 (Utf8.col_to_byte s max_cols)
-
 let title_of_mode = function
   | File_listing.Project -> " Files (project)"
   | File_listing.All -> " Files (all .v)"
@@ -377,9 +371,9 @@ let render t r ~open_files ~focused =
     let normal_attr = Grid.default_attr in
     let dim_attr = { normal_attr with dim = true } in
     let bold_attr = { normal_attr with bold = true } in
-    (* Header row *)
-    let header = truncate_to_cols (title_of_mode t.mode) rect.width in
-    ignore (Render.put_str r Render.PFileTree ~row:0 ~col:0 header header_attr);
+    (* Header row — Render clips to the pane width *)
+    ignore (Render.put_str r Render.PFileTree ~row:0 ~col:0
+              (title_of_mode t.mode) header_attr);
     (* Filter row (when active) takes the bottom row; reserve for it. *)
     let filter_visible = t.filter <> None in
     let content_top_row = 1 in
@@ -408,7 +402,7 @@ let render t r ~open_files ~focused =
             "\xe2\x80\xa2 "                          (* • *)
           else "  "
         in
-        let text = truncate_to_cols (indent ^ glyph ^ entry.name) rect.width in
+        let text = indent ^ glyph ^ entry.name in
         let is_dim =
           not entry.is_dir && not entry.in_project
           && t.mode = File_listing.All

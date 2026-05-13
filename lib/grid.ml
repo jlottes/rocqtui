@@ -36,6 +36,13 @@ type t = {
   mutable cols : int;
 }
 
+type rect = {
+  row : int;
+  col : int;
+  height : int;
+  width : int;
+}
+
 let create rows cols =
   let cells = Array.init rows (fun _ ->
     Array.init cols (fun _ -> empty_cell ())
@@ -196,6 +203,85 @@ let fill g ~row ~col ~width ch attr =
       cell.attr <- attr
     end
   done
+
+(* Change attributes of a row region without touching text. *)
+let chgat g ~row ~col ~width attr =
+  if row >= 0 && row < g.rows then
+    for c = max 0 col to min (col + width - 1) (g.cols - 1) do
+      g.cells.(row).(c).attr <- attr
+    done
+
+(* --- Rect-aware drawing primitives --- *)
+
+(* All [_in_rect] functions take rect-relative coordinates and clip
+   writes to [rect]. Cells outside the rect (including those past the
+   right edge of a wide character) are silently skipped. Use these
+   when the caller has a pane / panel / overlay rect and doesn't want
+   to bleed into neighbours. *)
+
+let put_str_in_rect g rect ~row ~col s attr =
+  if row < 0 || row >= rect.height then 0
+  else
+    let abs_row = rect.row + row in
+    if abs_row < 0 || abs_row >= g.rows then 0
+    else begin
+      let start = rect.col + col in
+      let stop_col = min (rect.col + rect.width) g.cols in
+      let left_bound = max 0 rect.col in
+      let len = String.length s in
+      let c = ref start in
+      let i = ref 0 in
+      while !i < len && !c < stop_col do
+        let (cp, nbytes) = decode_utf8 s !i in
+        let char_str = String.sub s !i nbytes in
+        let w = wcwidth cp in
+        if w < 0 then
+          i := !i + nbytes
+        else if w = 0 then begin
+          if !c > start && !c - 1 >= left_bound then
+            append_combining g ~row:abs_row ~col:(!c - 1) char_str
+          else if start > left_bound then
+            append_combining g ~row:abs_row ~col:(start - 1) char_str;
+          i := !i + nbytes
+        end
+        else begin
+          if !c >= left_bound && !c + w - 1 < stop_col then
+            set_cell g ~row:abs_row ~col:!c char_str attr;
+          c := !c + w;
+          i := !i + nbytes
+        end
+      done;
+      !c - start
+    end
+
+let set_cell_in_rect g rect ~row ~col text attr =
+  if row >= 0 && row < rect.height
+     && col >= 0 && col < rect.width then
+    set_cell g ~row:(rect.row + row) ~col:(rect.col + col) text attr
+
+let fill_in_rect g rect ~row ~col ~width ch attr =
+  if row >= 0 && row < rect.height then
+    let abs_row = rect.row + row in
+    let abs_col_start = max (rect.col + col) rect.col in
+    let abs_col_end =
+      min (rect.col + col + width - 1) (rect.col + rect.width - 1) in
+    if abs_col_start <= abs_col_end then
+      fill g ~row:abs_row ~col:abs_col_start
+        ~width:(abs_col_end - abs_col_start + 1) ch attr
+
+let chgat_in_rect g rect ~row ~col ~width attr =
+  if row >= 0 && row < rect.height then
+    let abs_row = rect.row + row in
+    let abs_col_start = max (rect.col + col) rect.col in
+    let abs_col_end =
+      min (rect.col + col + width - 1) (rect.col + rect.width - 1) in
+    if abs_col_start <= abs_col_end then
+      chgat g ~row:abs_row ~col:abs_col_start
+        ~width:(abs_col_end - abs_col_start + 1) attr
+
+let clear_rect g rect ~attr =
+  clear_region g ~row:rect.row ~col:rect.col
+    ~height:rect.height ~width:rect.width ~attr
 
 (* Compare two cells for equality *)
 let cell_eq a b =

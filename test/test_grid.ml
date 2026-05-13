@@ -124,4 +124,43 @@ let () =
   end else
     Printf.printf "SKIP: UTF-8 demo file not found\n";
 
+  (* --- Rect-aware drawing primitives --- *)
+  (* A grid wide enough that overrun would be visible *)
+  let big = Grid.create 5 20 in
+  let rect : Grid.rect = { row = 1; col = 5; height = 2; width = 4 } in
+
+  (* put_str_in_rect: writes "hello" into a 4-wide rect at col 5 — only
+     the first 4 cells should land; the 5th must NOT bleed into col 9. *)
+  Grid.clear big;
+  ignore (Grid.put_str big ~row:1 ~col:9 "Z" Grid.default_attr);  (* sentinel *)
+  let n = Grid.put_str_in_rect big rect ~row:0 ~col:0 "hello"
+            Grid.default_attr in
+  assert (n = 4);
+  assert (big.cells.(1).(5).text = "h");
+  assert (big.cells.(1).(8).text = "l");
+  assert (big.cells.(1).(9).text = "Z");  (* sentinel survived *)
+  Printf.printf "OK: put_str_in_rect clips at the rect's right edge\n";
+
+  (* Row out of rect range — no-op, return 0 *)
+  let n = Grid.put_str_in_rect big rect ~row:5 ~col:0 "x"
+            Grid.default_attr in
+  assert (n = 0);
+  Printf.printf "OK: put_str_in_rect ignores out-of-rect rows\n";
+
+  (* fill_in_rect: width that overflows the rect right edge gets clipped *)
+  Grid.clear big;
+  ignore (Grid.put_str big ~row:1 ~col:9 "Z" Grid.default_attr);
+  Grid.fill_in_rect big rect ~row:0 ~col:0 ~width:10 '*' Grid.default_attr;
+  assert (big.cells.(1).(5).text = "*");
+  assert (big.cells.(1).(8).text = "*");
+  assert (big.cells.(1).(9).text = "Z");
+  Printf.printf "OK: fill_in_rect clips overflow\n";
+
+  (* set_cell_in_rect: writing past the rect is a no-op *)
+  Grid.clear big;
+  ignore (Grid.put_str big ~row:1 ~col:9 "Z" Grid.default_attr);
+  Grid.set_cell_in_rect big rect ~row:0 ~col:5 "X" Grid.default_attr;
+  assert (big.cells.(1).(9).text = "Z");  (* out of rect — unchanged *)
+  Printf.printf "OK: set_cell_in_rect ignores out-of-rect col\n";
+
   Printf.printf "All grid tests passed.\n"

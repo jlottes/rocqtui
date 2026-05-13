@@ -1,7 +1,10 @@
 (* Rendering layer: pane layout on top of Grid.
    Replaces Display.t and ncurses window management. *)
 
-type rect = {
+(* The rect type lives in Grid so the rect-aware drawing primitives
+   can share it. Re-exported here so existing callers that reference
+   [Render.rect] continue to compile. *)
+type rect = Grid.rect = {
   row : int;
   col : int;
   height : int;
@@ -150,46 +153,30 @@ let rect_of_pane t = function
   | PBorderV | PBorderH | PBorderBoth
   | PBorderMinimap | PBorderFileTree | PNone -> empty_rect
 
-(* Write a string into a pane at pane-relative (row, col) *)
+(* All per-pane drawing routes through Grid's rect-aware primitives so
+   writes are clipped to the pane's rect. A long line no longer spills
+   into the next pane. *)
+
 let put_str t pane ~row ~col s attr =
-  let r = rect_of_pane t pane in
-  if row >= 0 && row < r.height then
-    Grid.put_str t.curr ~row:(r.row + row) ~col:(r.col + col) s attr
-  else 0
+  Grid.put_str_in_rect t.curr (rect_of_pane t pane) ~row ~col s attr
 
-(* Set a single cell in a pane *)
 let set_cell t pane ~row ~col s attr =
-  let r = rect_of_pane t pane in
-  if row >= 0 && row < r.height && col >= 0 && col < r.width then
-    Grid.set_cell t.curr ~row:(r.row + row) ~col:(r.col + col) s attr
+  Grid.set_cell_in_rect t.curr (rect_of_pane t pane) ~row ~col s attr
 
-(* Fill a region within a pane *)
 let fill t pane ~row ~col ~width ch attr =
-  let r = rect_of_pane t pane in
-  if row >= 0 && row < r.height then
-    Grid.fill t.curr ~row:(r.row + row) ~col:(r.col + col) ~width ch attr
+  Grid.fill_in_rect t.curr (rect_of_pane t pane) ~row ~col ~width ch attr
 
-(* Change attributes of a region (like mvwchgat) *)
 let chgat t pane ~row ~col ~width attr =
-  let r = rect_of_pane t pane in
-  let abs_row = r.row + row in
-  let abs_col = r.col + col in
-  if abs_row >= 0 && abs_row < t.term_h then
-    for c = abs_col to min (abs_col + width - 1) (t.term_w - 1) do
-      if c >= 0 then
-        t.curr.cells.(abs_row).(c).attr <- attr
-    done
+  Grid.chgat_in_rect t.curr (rect_of_pane t pane) ~row ~col ~width attr
 
 (* Clear a pane — content panes use theme default, UI panes use their own *)
 let clear_pane t pane =
-  let r = rect_of_pane t pane in
   let attr = match pane with
     | PScript | PGoals | PMessages | PFileTree -> (Theme.attrs ()).ga_default
     | PStatus -> (Theme.attrs ()).ga_status
     | _ -> Grid.default_attr
   in
-  Grid.clear_region t.curr ~row:r.row ~col:r.col
-    ~height:r.height ~width:r.width ~attr
+  Grid.clear_rect t.curr (rect_of_pane t pane) ~attr
 
 (* Get pane dimensions *)
 let pane_dims t pane =

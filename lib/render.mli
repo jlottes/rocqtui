@@ -1,7 +1,9 @@
 (** Rendering layer: pane layout on top of Grid.
     Replaces Display.t and ncurses window management. *)
 
-type rect = {
+(** Re-exported from [Grid] so the rect type is shared with the
+    rect-aware drawing primitives. *)
+type rect = Grid.rect = {
   row : int;
   col : int;
   height : int;
