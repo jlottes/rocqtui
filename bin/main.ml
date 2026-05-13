@@ -131,6 +131,7 @@ let () =
   if Tab.count mgr > 1 then
     Render.set_tab_bar r true;
   (* Editor context *)
+  let fm = File_manager.create () in
   let ctx = Editor_context.create
     ~switch_tab:(fun x ->
       match Tab.tab_at_x mgr x with
@@ -138,6 +139,7 @@ let () =
       | None -> ())
     ~open_files:(fun () ->
       List.filter_map (fun (t : Tab.t) -> Buffer.filename t.buf) mgr.tabs)
+    ~set_project_dir:(fun dir -> File_manager.set_project_dir fm dir)
     () in
   ctx.theme_name <- theme.Theme.name;
   if !xcompose then Editor.init_compose ctx;
@@ -149,13 +151,16 @@ let () =
   let mcp = Mcp_server.create () in
   (* Create MCP socket symlinks in project directories *)
   List.iter (Mcp_server.create_project_symlink mcp) project_dirs;
-  (* File manager *)
-  let fm = File_manager.create () in
+  (* File manager: per-tab content watches plus a recursive watch on
+     the first project directory so File_tree auto-refreshes. *)
   List.iter (fun (t : Tab.t) ->
     match Buffer.filename t.buf with
     | Some f -> File_manager.add_watch fm f
     | None -> ()
   ) mgr.tabs;
+  (match project_dirs with
+   | dir :: _ -> File_manager.set_project_dir fm dir
+   | [] -> ());
   (* Render helper *)
   let render ?(force=false) () =
     (* Set MCP status indicator. While a client is connected we always
@@ -318,18 +323,29 @@ let () =
     if Build.needs_repaint () then Render_need.request ();
     (* Poll file manager *)
     List.iter (fun ev ->
-      let msg = match ev with
-        | File_manager.Reloaded p ->
-          Printf.sprintf "%s reloaded" (Filename.basename p)
-        | File_manager.DiskChanged p ->
-          Printf.sprintf "%s changed on disk (buffer has unsaved changes)"
-            (Filename.basename p)
-        | File_manager.VerifiedAffected p ->
-          Printf.sprintf "%s changed on disk (verified region affected)"
-            (Filename.basename p)
-      in
-      Render.set_status r msg;
-      Render_need.request ()
+      match ev with
+      | File_manager.ProjectChanged ->
+        (* Refresh File_tree so newly created / deleted files appear
+           immediately. Cheap when the panel is hidden — refresh just
+           re-enumerates from disk, no rendering. *)
+        (match ctx.Editor_context.file_tree with
+         | Some ft -> File_tree.refresh ft
+         | None -> ());
+        Render_need.request ()
+      | _ ->
+        let msg = match ev with
+          | File_manager.Reloaded p ->
+            Printf.sprintf "%s reloaded" (Filename.basename p)
+          | File_manager.DiskChanged p ->
+            Printf.sprintf "%s changed on disk (buffer has unsaved changes)"
+              (Filename.basename p)
+          | File_manager.VerifiedAffected p ->
+            Printf.sprintf "%s changed on disk (verified region affected)"
+              (Filename.basename p)
+          | File_manager.ProjectChanged -> ""  (* handled above *)
+        in
+        Render.set_status r msg;
+        Render_need.request ()
     ) (File_manager.poll fm mgr.Tab.tabs);
     (* Poll ALL sessions *)
     if Tab.poll_all mgr then begin

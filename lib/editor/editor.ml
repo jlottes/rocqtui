@@ -357,9 +357,13 @@ let handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r =
            | None -> true
            | Some ft -> File_tree.project_file ft <> project_file
          in
-         if need_new then
+         if need_new then begin
            ctx.file_tree <-
              Some (File_tree.create ~project_dir ~project_file);
+           (* Retarget the project watcher so auto-refresh tracks the
+              tree the user is now looking at. *)
+           ctx.set_project_dir project_dir
+         end;
          let was_visible = Render.file_tree_visible r in
          if not was_visible then begin
            (* Refresh from disk on each show so newly-created files appear. *)

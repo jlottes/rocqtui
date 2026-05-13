@@ -79,3 +79,9 @@ CAMLprim value caml_inotify_in_modify(value unit) { (void)unit; return Val_int(I
 CAMLprim value caml_inotify_in_close_write(value unit) { (void)unit; return Val_int(IN_CLOSE_WRITE); }
 CAMLprim value caml_inotify_in_move_self(value unit) { (void)unit; return Val_int(IN_MOVE_SELF); }
 CAMLprim value caml_inotify_in_delete_self(value unit) { (void)unit; return Val_int(IN_DELETE_SELF); }
+CAMLprim value caml_inotify_in_create(value unit) { (void)unit; return Val_int(IN_CREATE); }
+CAMLprim value caml_inotify_in_delete(value unit) { (void)unit; return Val_int(IN_DELETE); }
+CAMLprim value caml_inotify_in_moved_from(value unit) { (void)unit; return Val_int(IN_MOVED_FROM); }
+CAMLprim value caml_inotify_in_moved_to(value unit) { (void)unit; return Val_int(IN_MOVED_TO); }
+CAMLprim value caml_inotify_in_isdir(value unit) { (void)unit; return Val_int(IN_ISDIR); }
+CAMLprim value caml_inotify_in_ignored(value unit) { (void)unit; return Val_int(IN_IGNORED); }

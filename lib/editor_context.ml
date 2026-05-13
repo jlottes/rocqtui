@@ -13,6 +13,7 @@ type jump_point = {
 type t = {
   switch_tab : int -> unit;
   open_files : unit -> string list;
+  set_project_dir : string -> unit;
   modal : Modal.t;
   mutable status_extra : string;
   mutable init_error : string;
@@ -36,9 +37,11 @@ type t = {
 let create
     ~switch_tab
     ~open_files
+    ?(set_project_dir = fun _ -> ())
     () =
   { switch_tab;
     open_files;
+    set_project_dir;
     modal = Modal.create ();
     status_extra = "";
     init_error = "";

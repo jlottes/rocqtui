@@ -12,6 +12,7 @@ type jump_point = {
 type t = {
   switch_tab : int -> unit;
   open_files : unit -> string list;
+  set_project_dir : string -> unit;
   modal : Modal.t;
   mutable status_extra : string;
   mutable init_error : string;
@@ -29,4 +30,5 @@ type t = {
 val create :
   switch_tab:(int -> unit) ->
   open_files:(unit -> string list) ->
+  ?set_project_dir:(string -> unit) ->
   unit -> t
