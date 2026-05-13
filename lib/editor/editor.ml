@@ -27,7 +27,7 @@ let handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r =
   let session = tab.session in
   (* Is a terminal sub-tab currently focused? *)
   let term_focused =
-    tab.focused_pane = `Messages &&
+    ctx.focus = FMessages &&
     (match Msg_pane.active_kind () with
      | Msg_pane.Terminal _ -> true
      | _ -> false)
@@ -109,8 +109,9 @@ let handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r =
     (match ev with
      | Input.Mouse _ -> ()
      | _ ->
-       let fp = match tab.focused_pane with
-         | `Script -> "Script" | `Goals -> "Goals" | `Messages -> "Msgs" in
+       let fp = match ctx.focus with
+         | FScript -> "Script" | FGoals -> "Goals"
+         | FMessages -> "Msgs" | FFileTree -> "FTree" in
        let tf = if term_focused then "T" else "-" in
        let desc = match ev with
          | Input.Key (cp, m) ->
@@ -149,12 +150,12 @@ let handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r =
            Terminal.destroy term;
            Msg_pane.sync_terminals ();
            (* Switch back to script pane so the user isn't stranded *)
-           tab.focused_pane <- `Script
+           ctx.focus <- FScript
          | None -> ());
         Some Continue
       end
       else if Keymatch.match_binding ev Keys.cycle_pane then begin
-        tab.focused_pane <- `Script; Some Continue end
+        ctx.focus <- FScript; Some Continue end
       else if Keymatch.match_binding ev Keys.save then Some Save_prompt
       else if Keymatch.match_binding ev Keys.build_menu then begin
         Modal.toggle ctx.modal Modal.BuildMenu; Some Continue end
@@ -177,9 +178,9 @@ let handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r =
         Some Continue
       end
       else if Keymatch.match_binding ev Keys.open_terminal then begin
-        Pty.open_tab tab r; Some Continue end
+        Pty.open_tab ctx tab r; Some Continue end
       else if Keymatch.match_binding ev Keys.open_claude then begin
-        Pty.open_tab ~cmd:"claude" tab r; Some Continue end
+        Pty.open_tab ~cmd:"claude" ctx tab r; Some Continue end
       else if (match ev with Input.Special (Input.Escape, _) -> true | _ -> false) then begin
         (* ESC starts compose mode; double-ESC sends ESC to terminal *)
         (match ctx.compose with
@@ -384,21 +385,21 @@ let handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r =
                | None -> ())
             | None -> ());
            Render.set_file_tree_visible r true;
-           ctx.file_tree_focused <- true
+           ctx.focus <- FFileTree
          end
-         else if ctx.file_tree_focused then begin
+         else if ctx.focus = FFileTree then begin
            Render.set_file_tree_visible r false;
-           ctx.file_tree_focused <- false
+           ctx.focus <- FScript
          end
          else
-           ctx.file_tree_focused <- true);
+           ctx.focus <- FFileTree);
       Some Continue
     end
     else if Keymatch.match_binding ev Keys.open_terminal then begin
-      Pty.open_tab tab r; Some Continue
+      Pty.open_tab ctx tab r; Some Continue
     end
     else if Keymatch.match_binding ev Keys.open_claude then begin
-      Pty.open_tab ~cmd:"claude" tab r; Some Continue
+      Pty.open_tab ~cmd:"claude" ctx tab r; Some Continue
     end
     else if Keymatch.match_binding ev Keys.query_menu then begin
       Modal.toggle ctx.modal Modal.QueryMenu;
@@ -407,18 +408,11 @@ let handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r =
     else if View.is_query ctx then Modals.handle_query ctx ev tab
     else if Keymatch.match_binding ev Keys.cycle_pane then begin
       let ft_visible = Render.file_tree_visible r in
-      if ctx.file_tree_focused then begin
-        ctx.file_tree_focused <- false;
-        tab.focused_pane <- `Script
-      end
-      else begin
-        match tab.focused_pane with
-        | `Script -> tab.focused_pane <- `Goals
-        | `Goals -> tab.focused_pane <- `Messages
-        | `Messages ->
-          if ft_visible then ctx.file_tree_focused <- true
-          else tab.focused_pane <- `Script
-      end;
+      ctx.focus <- (match ctx.focus with
+        | FFileTree -> FScript
+        | FScript -> FGoals
+        | FGoals -> FMessages
+        | FMessages -> if ft_visible then FFileTree else FScript);
       Some Continue
     end
     else if (match ev with Input.Resize -> true | _ -> false) then begin
@@ -493,7 +487,7 @@ let handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r =
              Render.set_status r "No module name at cursor.";
              None)
         | None ->
-          let word = Modals.query_subject tab in
+          let word = Modals.query_subject ctx tab in
           (match word, session with
            | Some w, Some s ->
              Session.query s ("Locate " ^ w ^ ".");
@@ -574,7 +568,7 @@ let handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r =
       Some Continue
     end
     else if Keymatch.match_binding ev Keys.about then begin
-      (match Modals.query_subject tab, session with
+      (match Modals.query_subject ctx tab, session with
        | Some word, Some s ->
          Session.query s ("About " ^ word ^ ".");
          Msg_pane.activate Msg_pane.Rocq
@@ -582,7 +576,7 @@ let handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r =
       Some Continue
     end
     else if Keymatch.match_binding ev Keys.print_query then begin
-      (match Modals.query_subject tab, session with
+      (match Modals.query_subject ctx tab, session with
        | Some word, Some s ->
          Session.query s ("Print " ^ word ^ ".");
          Msg_pane.activate Msg_pane.Rocq
@@ -590,13 +584,14 @@ let handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r =
       Some Continue
     end
     else if Keymatch.match_binding ev Keys.copy then begin
-      let text = match tab.focused_pane with
-        | `Goals -> View.pane_selection_text tab.goals_sel tab.goals_lines_cache
-        | `Messages ->
+      let text = match ctx.focus with
+        | FGoals -> View.pane_selection_text tab.goals_sel tab.goals_lines_cache
+        | FMessages ->
           (match Geom.active_msg_pane_state tab with
            | `Text (sel, cache, _) -> View.pane_selection_text sel cache
            | `Terminal -> None)
-        | `Script -> Buffer.selected_text buf
+        | FScript -> Buffer.selected_text buf
+        | FFileTree -> None
       in
       (match text with
        | Some t ->
@@ -655,7 +650,7 @@ let handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r =
      to snap the selection to the active tab's file — the panel itself
      has no knowledge of tabs. *)
   let try_file_tree () =
-    if not ctx.file_tree_focused then None
+    if ctx.focus <> FFileTree then None
     else match ctx.file_tree with
     | None -> None
     | Some ft ->
@@ -686,18 +681,17 @@ let handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r =
     match handle_global () with
     | Some a -> a
     | None ->
-      (* Panel is focused but neither it nor any global claimed the
-         key — there's no script/goals/messages pane to fall through
-         to in that case, so just continue. *)
-      if ctx.file_tree_focused then Continue
-      else
-      match tab.focused_pane with
-      | `Goals ->
+      match ctx.focus with
+      | FFileTree ->
+        (* Panel is focused but neither it nor any global claimed the
+           key — nothing else to dispatch to. *)
+        Continue
+      | FGoals ->
         let scroll_r = ref tab.goals_scroll in
         let result = handle_pane_scroll scroll_r Render.PGoals in
         tab.goals_scroll <- !scroll_r;
         (match result with Some a -> a | None -> Continue)
-      | `Messages ->
+      | FMessages ->
         (match Msg_pane.active_kind () with
          | Msg_pane.Terminal term ->
            Pty.forward_event term ev;
@@ -713,7 +707,7 @@ let handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r =
            let result = handle_pane_scroll scroll_r Render.PMessages in
            mt.scroll <- !scroll_r;
            (match result with Some a -> a | None -> Continue))
-      | `Script ->
+      | FScript ->
         (match Script.handle ctx ev tab r with
          | Some a -> a | None -> Continue)
   in

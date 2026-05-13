@@ -195,8 +195,9 @@ let handle (ctx : Editor_context.t) (mev : Input.mouse_event) (tab : Tab.t) r
         | _ -> Editor_context.DragV)
     else if (pane = Render.PGoals || pane = Render.PMessages)
             && is_left then begin
-      tab.focused_pane <- (if pane = Render.PGoals then `Goals else `Messages);
-      ctx.file_tree_focused <- false;
+      ctx.focus <-
+        (if pane = Render.PGoals then Editor_context.FGoals
+         else Editor_context.FMessages);
       (* Build / Errors tab click → jump to error *)
       let jumped_to_error =
         if pane = Render.PMessages then begin
@@ -295,7 +296,7 @@ let handle (ctx : Editor_context.t) (mev : Input.mouse_event) (tab : Tab.t) r
        | _ -> ())
     end
     else if pane = Render.PFileTree && is_left then begin
-      ctx.file_tree_focused <- true;
+      ctx.focus <- Editor_context.FFileTree;
       (match ctx.file_tree with
        | Some ft ->
          (match File_tree.handle_click ft r ~y with
@@ -318,8 +319,7 @@ let handle (ctx : Editor_context.t) (mev : Input.mouse_event) (tab : Tab.t) r
       ctx.dragging <- Editor_context.DragMinimapScroll
     end
     else if pane = Render.PScript && is_left then begin
-      tab.focused_pane <- `Script;
-      ctx.file_tree_focused <- false;
+      ctx.focus <- Editor_context.FScript;
       View.clear_pane_selection tab.goals_sel;
       View.clear_pane_selection (Geom.active_msg_pane_sel tab);
       if has_cmd then begin

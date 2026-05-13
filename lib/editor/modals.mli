@@ -2,7 +2,7 @@
 
 (** Subject for a query — pane selection if there is one, else the
     word at the script cursor. *)
-val query_subject : Tab.t -> string option
+val query_subject : Editor_context.t -> Tab.t -> string option
 
 (** Run a Rocq query phrase via the session, no-op if no session. *)
 val run_query : Session.t option -> string -> unit

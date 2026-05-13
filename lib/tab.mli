@@ -25,7 +25,6 @@ type t = {
   rb : Region_buffer.t;  (** Edit gateway. Owns the lock state. *)
   mutable session : Session.t option;
   session_args : string list;
-  mutable focused_pane : [`Script | `Goals | `Messages];
   mutable goals_scroll : int;
   mutable show_all_hyps : bool;
   mutable mouse_selecting : bool;

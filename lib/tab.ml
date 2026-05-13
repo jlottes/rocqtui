@@ -53,7 +53,6 @@ type t = {
   rb : Region_buffer.t;
   mutable session : Session.t option;
   session_args : string list;
-  mutable focused_pane : [`Script | `Goals | `Messages];
   mutable goals_scroll : int;
   mutable show_all_hyps : bool;
   mutable mouse_selecting : bool;
@@ -82,7 +81,6 @@ let make_tab ?(args=[]) buf session =
   { id = fresh_id (); buf;
     rb = Region_buffer.create buf ~session;
     session; session_args = args;
-    focused_pane = `Script;
     goals_scroll = 0;
     show_all_hyps = false;
     mouse_selecting = false;

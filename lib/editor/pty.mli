@@ -2,7 +2,7 @@
 
 (** Open a new terminal sub-tab. If [cmd] is given, run it; otherwise
     a default shell. Switches focus to the Messages pane. *)
-val open_tab : ?cmd:string -> Tab.t -> Render.t -> unit
+val open_tab : ?cmd:string -> Editor_context.t -> Tab.t -> Render.t -> unit
 
 (** Send an Escape keypress to the active terminal of [tab], if any. *)
 val send_escape : Tab.t -> unit

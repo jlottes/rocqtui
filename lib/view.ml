@@ -703,16 +703,16 @@ let update_status (ctx : Editor_context.t) r (tab : Tab.t) =
     in
     let reload_hint = if Buffer.disk_changed buf then
       " " ^ Keys.reload.display ^ ":Reload" else "" in
-    let focus_info = match tab.focused_pane with
-      | `Script ->
+    let focus_info = match ctx.focus with
+      | FScript | FFileTree ->
         Printf.sprintf "  %s:Save %s:Close %s:Opts %s:Query %s:Help%s"
           Keys.save.display Keys.close_tab.display Keys.options_menu.display
           Keys.query_menu.display Keys.help.display reload_hint
-      | `Goals ->
+      | FGoals ->
         Printf.sprintf "  [Goals] %s:Pane %s:Query %s:Help%s"
           Keys.cycle_pane.display Keys.query_menu.display
           Keys.help.display reload_hint
-      | `Messages ->
+      | FMessages ->
         (match Msg_pane.active_kind () with
          | Msg_pane.Terminal term ->
            let vt = Terminal.vterm term in
@@ -789,8 +789,8 @@ let render_all (ctx : Editor_context.t) r (tab : Tab.t) =
   let mp = Msg_pane.state () in
   let msg_tab_names = List.map Msg_pane.display_name mp.tabs in
   Render.draw_chrome r
-    ~goals_focused:(tab.focused_pane = `Goals)
-    ~messages_focused:(tab.focused_pane = `Messages)
+    ~goals_focused:(ctx.focus = FGoals)
+    ~messages_focused:(ctx.focus = FMessages)
     ~msg_tab_names
     ~msg_tab_active:mp.active
     ();
@@ -801,7 +801,7 @@ let render_all (ctx : Editor_context.t) r (tab : Tab.t) =
    | Some ft when Render.file_tree_visible r ->
      File_tree.render ft r
        ~open_files:(ctx.open_files ())
-       ~focused:ctx.file_tree_focused
+       ~focused:(ctx.focus = FFileTree)
    | _ -> ());
   update_status ctx r tab;
   (* Cursor visibility and positioning *)
@@ -809,7 +809,7 @@ let render_all (ctx : Editor_context.t) r (tab : Tab.t) =
     | Msg_pane.Terminal t -> Some t
     | _ -> None
   in
-  let term_focused = tab.focused_pane = `Messages && active_term <> None in
+  let term_focused = ctx.focus = FMessages && active_term <> None in
   let cursor_visible =
     if term_focused then begin
       (* Position hardware cursor at vterm cursor location, if visible *)
@@ -830,7 +830,7 @@ let render_all (ctx : Editor_context.t) r (tab : Tab.t) =
         else false
       | None -> false
     end
-    else if tab.focused_pane <> `Script then false
+    else if ctx.focus <> FScript then false
     else
       let (cl, _) = Buffer.cursor tab.buf in
       let scroll = Buffer.scroll_top tab.buf in
@@ -838,8 +838,7 @@ let render_all (ctx : Editor_context.t) r (tab : Tab.t) =
       cl >= scroll && cl < scroll + rows
   in
   let picker = get_picker ctx in
-  let cursor_visible =
-    cursor_visible && picker = None && not ctx.file_tree_focused in
+  let cursor_visible = cursor_visible && picker = None in
   Render.set_cursor_visible r cursor_visible;
   (match picker with
    | Some fp -> File_picker.render fp r

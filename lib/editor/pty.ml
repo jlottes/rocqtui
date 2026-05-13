@@ -1,4 +1,4 @@
-let open_tab ?cmd (tab : Tab.t) r =
+let open_tab ?cmd (ctx : Editor_context.t) (tab : Tab.t) r =
   let buf = tab.buf in
   let (h, w) = Render.pane_dims r Render.PMessages in
   let cwd = match Buffer.filename buf with
@@ -11,7 +11,7 @@ let open_tab ?cmd (tab : Tab.t) r =
   in
   Msg_pane.sync_terminals ();
   Msg_pane.activate (Msg_pane.Terminal term);
-  tab.focused_pane <- `Messages
+  ctx.focus <- Editor_context.FMessages
 
 let send_escape (_tab : Tab.t) =
   match Msg_pane.active_kind () with

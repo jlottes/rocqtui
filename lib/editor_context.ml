@@ -3,6 +3,10 @@
 
 type drag_mode = NoDrag | DragV | DragH | DragBoth | DragMinimap | DragMinimapScroll | DragFileTree
 
+(* Which pane currently receives keyboard input. Global rather than
+   per-tab: switching buffers shouldn't change which pane is focused. *)
+type focus = FScript | FGoals | FMessages | FFileTree
+
 type jump_point = {
   jp_tab_id : int;
   jp_file : string;
@@ -27,11 +31,10 @@ type t = {
      replace-all. Cleared by any other prompt interaction. Stays in the
      panel only — does not leak into the normal status bar. *)
   mutable search_panel_msg : string;
+  mutable focus : focus;
   (* File-tree panel: lazily created on first F8. Survives across tabs.
-     [file_tree_focused] tracks whether key events route to the panel
-     instead of the focused script/goals/messages pane. *)
+     Whether the panel currently receives keys is [focus = FFileTree]. *)
   mutable file_tree : File_tree.t option;
-  mutable file_tree_focused : bool;
 }
 
 let create
@@ -52,5 +55,5 @@ let create
     jump_stack = [];
     jump_target = None;
     search_panel_msg = "";
-    file_tree = None;
-    file_tree_focused = false }
+    focus = FScript;
+    file_tree = None }

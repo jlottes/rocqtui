@@ -2,6 +2,10 @@
 
 type drag_mode = NoDrag | DragV | DragH | DragBoth | DragMinimap | DragMinimapScroll | DragFileTree
 
+(** Which pane currently receives keyboard input. Global rather than
+    per-tab — switching buffers should not change focus. *)
+type focus = FScript | FGoals | FMessages | FFileTree
+
 type jump_point = {
   jp_tab_id : int;
   jp_file : string;
@@ -23,8 +27,8 @@ type t = {
   mutable jump_stack : jump_point list;
   mutable jump_target : (int * int) option;
   mutable search_panel_msg : string;
+  mutable focus : focus;
   mutable file_tree : File_tree.t option;
-  mutable file_tree_focused : bool;
 }
 
 val create :

@@ -1,13 +1,14 @@
 open Action
 
-let query_subject (tab : Tab.t) =
-  match tab.focused_pane with
-  | `Goals -> View.pane_selection_text tab.goals_sel tab.goals_lines_cache
-  | `Messages ->
+let query_subject (ctx : Editor_context.t) (tab : Tab.t) =
+  match ctx.focus with
+  | FGoals -> View.pane_selection_text tab.goals_sel tab.goals_lines_cache
+  | FMessages ->
     (match Geom.active_msg_pane_state tab with
      | `Text (sel, cache, _) -> View.pane_selection_text sel cache
      | `Terminal -> None)
-  | `Script ->
+  | FFileTree -> None
+  | FScript ->
     match Buffer.selected_text tab.buf with
     | Some text -> Some text
     | None ->
@@ -189,7 +190,7 @@ let handle_query (ctx : Editor_context.t) ev (tab : Tab.t) =
   | Some ch ->
     let c = Char.lowercase_ascii (Char.chr (ch land 0xFF)) in
     let with_subject prefix =
-      (match query_subject tab with
+      (match query_subject ctx tab with
        | Some word -> run_query session (prefix ^ " " ^ word ^ ".")
        | None -> ()); true
     in
@@ -199,7 +200,7 @@ let handle_query (ctx : Editor_context.t) ev (tab : Tab.t) =
       else if c = 'd' then with_subject "Print"
       else if c = 'l' then with_subject "Locate"
       else if c = 'g' then begin
-        (match query_subject tab, session with
+        (match query_subject ctx tab, session with
          | Some word, Some s -> coercion_filter s word
          | _ -> ()); true
       end
