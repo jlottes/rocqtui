@@ -838,7 +838,8 @@ let render_all (ctx : Editor_context.t) r (tab : Tab.t) =
       cl >= scroll && cl < scroll + rows
   in
   let picker = get_picker ctx in
-  let cursor_visible = cursor_visible && picker = None in
+  let cursor_visible =
+    cursor_visible && picker = None && not ctx.file_tree_focused in
   Render.set_cursor_visible r cursor_visible;
   (match picker with
    | Some fp -> File_picker.render fp r
