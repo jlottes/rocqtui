@@ -11,12 +11,16 @@ type pos = { line : int; col : int }
 
 type match_ = { start_ : pos; end_ : pos }
 
+type focus = Find | Replace
+
 type state = {
   query : string;
   flags : flags;
   matches : match_ array;
   current : int;
   saved_cursor : pos;
+  replacement : string;
+  focus : focus;
 }
 
 let empty_flags = { case = Smart; regex = false }
@@ -111,6 +115,8 @@ let create (buf : Buffer.t) : state =
     matches = [||];
     current = -1;
     saved_cursor = { line; col };
+    replacement = "";
+    focus = Find;
   }
 
 let resave_cursor s (buf : Buffer.t) =
@@ -162,3 +168,46 @@ let current_match s =
   if s.current >= 0 && s.current < Array.length s.matches
   then Some s.matches.(s.current)
   else None
+
+let set_replacement s replacement = { s with replacement }
+let set_focus s focus = { s with focus }
+
+(* Expand $1..$9, $&, $$ in [template] against [groups] (groups.(0) is the
+   whole match). Unknown $X sequences are kept verbatim. *)
+let expand_template template groups =
+  let n = String.length template in
+  let buf = Stdlib.Buffer.create (n + 16) in
+  let group_text i =
+    if i < Array.length groups then groups.(i) else ""
+  in
+  let i = ref 0 in
+  while !i < n do
+    let c = template.[!i] in
+    if c = '$' && !i + 1 < n then begin
+      let next = template.[!i + 1] in
+      if next = '$' then (Stdlib.Buffer.add_char buf '$'; i := !i + 2)
+      else if next = '&' then
+        (Stdlib.Buffer.add_string buf (group_text 0); i := !i + 2)
+      else if next >= '0' && next <= '9' then
+        (Stdlib.Buffer.add_string buf (group_text (Char.code next - Char.code '0'));
+         i := !i + 2)
+      else (Stdlib.Buffer.add_char buf c; incr i)
+    end
+    else (Stdlib.Buffer.add_char buf c; incr i)
+  done;
+  Stdlib.Buffer.contents buf
+
+let substitute ~query ~flags ~replacement ~matched =
+  if not flags.regex then replacement
+  else
+    match compile_re query flags with
+    | None -> replacement
+    | Some re ->
+      (match Re.exec_opt re matched with
+       | None -> replacement
+       | Some g ->
+         let groups =
+           Array.init (Re.Group.nb_groups g) (fun i ->
+             try Re.Group.get g i with Not_found -> "")
+         in
+         expand_template replacement groups)

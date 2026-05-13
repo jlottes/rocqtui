@@ -21,6 +21,7 @@ type t = {
   mutable dragging : drag_mode;
   mutable jump_stack : jump_point list;
   mutable jump_target : (int * int) option;
+  mutable search_panel_msg : string;
 }
 
 val create :

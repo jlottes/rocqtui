@@ -26,6 +26,7 @@ type t = {
   mutable split_row : int;
   mutable minimap_width : int;
   mutable has_tab_bar : bool;
+  mutable panel_rows : int;
   mutable cursor_row : int;
   mutable cursor_col : int;
   mutable cursor_visible : bool;
@@ -71,6 +72,7 @@ let create () =
     split_col; split_row;
     minimap_width = 0;
     has_tab_bar = false;
+    panel_rows = 0;
     cursor_row = 0; cursor_col = 0;
     cursor_visible = true;
     overlay = None;
@@ -98,7 +100,7 @@ let resize t =
 
 let pane_at t ~x ~y =
   if t.has_tab_bar && y = 0 then PTabBar
-  else if y >= t.term_h - 1 then PStatus
+  else if y >= t.term_h - 1 - t.panel_rows then PStatus
   else begin
     let mm_total = if t.minimap_width > 0 then t.minimap_width + 1 else 0 in
     let script_w = t.split_col - mm_total in
@@ -319,6 +321,20 @@ let set_status t text =
   let attr = (Theme.attrs ()).ga_status in
   Grid.fill t.curr ~row:t.status.row ~col:0 ~width:t.term_w ' ' attr;
   ignore (Grid.put_str t.curr ~row:t.status.row ~col:1 text attr)
+
+let set_panel_rows t n =
+  let n = max 0 n in
+  if n <> t.panel_rows then t.panel_rows <- n
+
+let panel_rows t = t.panel_rows
+
+let set_status_line t ~row_from_bottom text =
+  let attr = (Theme.attrs ()).ga_status in
+  let row = t.term_h - 1 - row_from_bottom in
+  if row >= 0 && row < t.term_h then begin
+    Grid.fill t.curr ~row ~col:0 ~width:t.term_w ' ' attr;
+    ignore (Grid.put_str t.curr ~row ~col:1 text attr)
+  end
 
 let set_overlay t rect render_fn =
   t.overlay <- Some { rect; render = render_fn }

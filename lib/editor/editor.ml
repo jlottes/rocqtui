@@ -55,12 +55,9 @@ let handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r =
           | Compose.Composed text ->
             (match Modal.top ctx.modal with
              | Some Modal.SearchPrompt ->
-               (* Append composed text to the search query. *)
-               let s = match Tab.search_state tab with
-                 | Some s -> s
-                 | None -> Search.create tab.buf in
-               Tab.set_search tab
-                 (Some (Search.update_query s tab.buf (s.query ^ text)))
+               (* Append composed text to the focused prompt field. *)
+               ctx.search_panel_msg <- "";
+               Modals.append_to_field tab text
              | _ ->
                if term_focused then begin
                  (match active_term () with

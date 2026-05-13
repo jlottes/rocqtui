@@ -593,13 +593,15 @@ let render_build_bar r =
   in
   Render.set_status r text
 
-let render_search_bar (ctx : Editor_context.t) (tab : Tab.t) r =
+let render_search_panel (ctx : Editor_context.t) (tab : Tab.t) r =
+  Render.set_panel_rows r 1;
   let s = Tab.search_state tab in
-  let query, count, idx, case_insensitive, regex =
+  let query, replacement, focus, count, idx, case_insensitive, regex =
     match s with
-    | None -> "", 0, 0, true, false
+    | None -> "", "", Search.Find, 0, 0, true, false
     | Some s ->
-      s.query, Array.length s.matches,
+      s.query, s.replacement, s.focus,
+      Array.length s.matches,
       (if s.current >= 0 then s.current + 1 else 0),
       Search.is_case_insensitive ~query:s.query ~flags:s.flags,
       s.flags.regex
@@ -620,12 +622,28 @@ let render_search_bar (ctx : Editor_context.t) (tab : Tab.t) r =
       else Printf.sprintf "  [c: %s]" typed
     | _ -> ""
   in
-  Render.set_status r
-    (Printf.sprintf "Search: %s%s  %s %s  %s %s%s"
-       query counter
-       Keys.search_toggle_case.display case_ind
-       Keys.search_toggle_regex.display regex_ind
-       compose_ind)
+  let caret = "\xe2\x96\x88" in  (* █ U+2588 FULL BLOCK *)
+  let find_text =
+    if focus = Search.Find then query ^ caret else query in
+  let replace_text =
+    if focus = Search.Replace then replacement ^ caret else replacement in
+  let find_row =
+    Printf.sprintf "Find:    %s%s  %s %s  %s %s%s"
+      find_text counter
+      Keys.search_toggle_case.display case_ind
+      Keys.search_toggle_regex.display regex_ind
+      compose_ind in
+  let trailer =
+    if ctx.search_panel_msg <> "" then "  " ^ ctx.search_panel_msg
+    else
+      Printf.sprintf "    %s:Field  %s:Replace  %s:All"
+        Keys.search_field_toggle.display
+        Keys.search_replace_one.display
+        Keys.search_replace_all.display in
+  let replace_row =
+    Printf.sprintf "Replace: %s%s" replace_text trailer in
+  Render.set_status_line r ~row_from_bottom:1 find_row;
+  Render.set_status_line r ~row_from_bottom:0 replace_row
 
 let render_options_bar r =
   let parts = List.map (fun (e : Printopts.entry) ->
@@ -640,11 +658,13 @@ let render_options_bar r =
 let update_status (ctx : Editor_context.t) r (tab : Tab.t) =
   let buf = tab.buf in
   let session = tab.session in
+  (* Default: status bar is one row. Panel callers grow it. *)
+  Render.set_panel_rows r 0;
   match Modal.top ctx.modal with
   | Some (Modal.Prompt p) ->
     Render.set_status r p.message
   | Some Modal.SearchPrompt ->
-    render_search_bar ctx tab r
+    render_search_panel ctx tab r
   | _ ->
   if is_help ctx then
     Render.set_status r

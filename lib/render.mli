@@ -60,6 +60,22 @@ val draw_tab_bar : t -> (string * bool) list -> int -> unit
 (** Status bar *)
 val set_status : t -> string -> unit
 
+(** Multi-row status panel.
+
+    [set_panel_rows] sets the number of *extra* rows above the bottom status
+    row that callers will paint into (via [set_status_line]). Default is 0
+    (only the bottom row is the status bar). Does not change pane layouts —
+    the painted rows simply cover the bottom of whatever pane sits beneath
+    them. Reset to 0 when the panel closes so [pane_at] hit-testing returns
+    the correct pane again. *)
+val set_panel_rows : t -> int -> unit
+val panel_rows : t -> int
+
+(** Paint into a status row. [row_from_bottom = 0] is the bottom row (same
+    cells as [set_status]). Higher values paint rows above it, up through
+    [panel_rows]. The cells use the status attribute. *)
+val set_status_line : t -> row_from_bottom:int -> string -> unit
+
 (** Message tab hit testing *)
 val msg_tab_at_x : t -> x:int -> tab_names:string list -> int option
 

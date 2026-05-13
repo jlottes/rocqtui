@@ -98,8 +98,11 @@ See `lib/keys.ml` for the source of truth. Summary:
 | ^Q | Exit all |
 | ^C | Copy (also to system clipboard) |
 | ^N | New tab |
-| ^F | Find / re-open search prompt |
+| ^F | Find / re-open find & replace panel |
 | F3 / Shift+F3 | Next / previous match (with active search) |
+| Tab | Toggle Find / Replace field (in panel) |
+| Alt+Enter | Replace current match, advance (in panel) |
+| Alt+A | Replace all matches (in panel) |
 | F9 / Shift+F9 | Next / previous build error / warning |
 | ^B | Jump back |
 | ^L | Jump to definition |

@@ -259,6 +259,49 @@ let test_tab_search_set_and_clear () =
   check_eq "tab search: cleared after set None"
     ~expected:true ~got:(Tab.search_state tab = None) string_of_bool
 
+let test_substitute_literal () =
+  let sub = Search.substitute
+    ~query:"foo" ~flags:Search.empty_flags
+    ~replacement:"bar" ~matched:"foo" in
+  check_eq "substitute literal: returns replacement verbatim"
+    ~expected:"bar" ~got:sub (fun s -> s);
+  (* `$` has no special meaning in literal mode. *)
+  let sub = Search.substitute
+    ~query:"x" ~flags:Search.empty_flags
+    ~replacement:"$1 dollar" ~matched:"x" in
+  check_eq "substitute literal: $1 is literal"
+    ~expected:"$1 dollar" ~got:sub (fun s -> s)
+
+let test_substitute_regex () =
+  let flags = { Search.case = Smart; regex = true } in
+  let sub = Search.substitute
+    ~query:"(\\w+)@(\\w+)" ~flags
+    ~replacement:"$2/$1" ~matched:"alice@example" in
+  check_eq "substitute regex: $1/$2 expands"
+    ~expected:"example/alice" ~got:sub (fun s -> s);
+  let sub = Search.substitute
+    ~query:"\\d+" ~flags
+    ~replacement:"<$&>" ~matched:"42" in
+  check_eq "substitute regex: $& is whole match"
+    ~expected:"<42>" ~got:sub (fun s -> s);
+  let sub = Search.substitute
+    ~query:"x" ~flags
+    ~replacement:"$$" ~matched:"x" in
+  check_eq "substitute regex: $$ is literal $"
+    ~expected:"$" ~got:sub (fun s -> s)
+
+let test_set_replacement_focus () =
+  let buf = load "hello" in
+  let s = Search.create buf in
+  let s = Search.set_replacement s "world" in
+  check_eq "set_replacement stores text"
+    ~expected:"world" ~got:s.replacement (fun s -> s);
+  check_eq "focus defaults to Find"
+    ~expected:true ~got:(s.focus = Search.Find) string_of_bool;
+  let s = Search.set_focus s Search.Replace in
+  check_eq "set_focus to Replace"
+    ~expected:true ~got:(s.focus = Search.Replace) string_of_bool
+
 let test_is_case_insensitive () =
   let f = Search.empty_flags in
   check_eq "is_case_insensitive: smart + lowercase => true"
@@ -296,6 +339,9 @@ let () =
   test_buffer_revision ();
   test_tab_search_lazy_refresh ();
   test_tab_search_set_and_clear ();
+  test_substitute_literal ();
+  test_substitute_regex ();
+  test_set_replacement_focus ();
   test_is_case_insensitive ();
   Printf.printf "\n%d passed, %d failed\n" !pass !fail;
   if !fail > 0 then exit 1;

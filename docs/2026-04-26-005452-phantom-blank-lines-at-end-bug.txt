@@ -1,0 +1,68 @@
+ ▐▛███▜▌   Claude Code v2.1.119
+▝▜█████▛▘  Opus 4.7 · Claude Max
+  ▘▘ ▝▝    ~/rocq/rocqtui
+
+❯ we're in the middle of a big refactor so the code here is in flux, and I      
+  don't want you disturb the on-going work in a parallel session. we have a     
+  worktree checked out at ~/rocq/rocqtui-old, and this is the version I'm       
+  actually running.                                                             
+                                                                                
+  I've noticed a source file I've been working on in rocqtui has accumulated    
+  1000's of blank lines at the end of the file, where I have not done any       
+  editing. (All my edits have been somewhere in the middle.) Do you think you   
+  can find this bug? Examine the code in rocqtui-old                            
+
+  Searched for 5 patterns, read 2 files, listed 2 directories (ctrl+o to expand)
+
+● Found it. Bug is in lib/buffer.ml:307 (delete_selection).
+
+  The off-by-one source:
+
+  let text buf =
+    let parts = Array.to_list (Array.sub buf.lines 0 buf.num_lines) in
+    String.concat "\n" parts ^ "\n"        (* always trailing \n *)
+
+  text always ends in \n. Then in delete_selection:
+
+  let t = text buf in
+  ...
+  let new_text = String.sub t 0 s ^ String.sub t e (String.length t - e) in
+  let new_lines = String.split_on_char '\n' new_text in
+  let n = List.length new_lines in
+
+  new_text still ends in \n, so String.split_on_char '\n' produces a trailing ""
+   element. n is therefore one greater than the true line count, and
+  buf.num_lines <- n records a phantom blank line at the end. The phantom line
+  gets shifted further down by every subsequent delete_selection call — each
+  delete adds exactly one more blank.
+
+  Trace example, starting with ["abc"; "def"], num_lines = 2:
+  - text → "abc\ndef\n"
+  - delete bytes 1..3 → new_text = "a\ndef\n"
+  - split → ["a"; "def"; ""], length 3 → num_lines = 3, lines ["a"; "def"; ""]
+  - next delete: text "a\ndef\n\n", drop "a" → split [""; "def"; ""; ""],
+  length 4. And so on.
+
+  save (buffer.ml:154) then writes those phantom lines to disk verbatim. The
+  file-watcher's self-save guard (file_manager.ml:58) suppresses the would-be
+  reload that would have corrected num_lines, so the count never gets cleaned up
+   while the buffer stays open.
+
+  Why this matches your symptoms: every MCP edit goes through delete_selection —
+   mcp_server.ml:670, 789, 892, 952 (replace / edit / apply paths). So
+  Claude-driven edits in the middle of the file each tack one blank line onto
+  the end, and after a long session you accumulate thousands.
+
+  Suggested fix (local to delete_selection): strip the trailing "" produced by
+  the split before counting, e.g.
+
+  let new_lines = match List.rev new_lines with
+    | "" :: rest -> List.rev rest
+    | _ -> new_lines
+  in
+  let n = max 1 (List.length new_lines) in
+
+  I haven't touched any files — wanted to flag it first since you said the
+  parallel session is in flux.
+
+✻ Brewed for 2m 9s

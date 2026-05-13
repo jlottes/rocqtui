@@ -18,12 +18,17 @@ type pos = { line : int; col : int }
 
 type match_ = { start_ : pos; end_ : pos }
 
+(** Which prompt field input is currently directed to. *)
+type focus = Find | Replace
+
 type state = private {
   query : string;
   flags : flags;
   matches : match_ array;  (** Sorted by start position. *)
   current : int;           (** Index into [matches]; -1 when none. *)
   saved_cursor : pos;      (** Cursor when search opened (cancel restore). *)
+  replacement : string;    (** Replace-field text (empty in pure-search mode). *)
+  focus : focus;           (** Which field receives typing. *)
 }
 
 val empty_flags : flags
@@ -54,6 +59,20 @@ val set_flags : state -> Buffer.t -> flags -> state
 
 val toggle_case : state -> Buffer.t -> state
 val toggle_regex : state -> Buffer.t -> state
+
+(** Update the replace-field text. Does not recompute matches. *)
+val set_replacement : state -> string -> state
+
+(** Set the focused field. *)
+val set_focus : state -> focus -> state
+
+(** Compute the substituted text for [matched] under the current query and
+    flags. In literal mode this is just [replacement]. In regex mode it
+    expands `$1`-`$9`, `$&`, and `$$` against the regex groups matched on
+    [matched]. Returns [replacement] verbatim if the regex no longer
+    compiles. *)
+val substitute :
+  query:string -> flags:flags -> replacement:string -> matched:string -> string
 
 (** Advance / retreat the current match. Wraps. No-op when there are
     no matches. *)

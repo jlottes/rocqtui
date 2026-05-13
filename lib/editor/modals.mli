@@ -53,6 +53,11 @@ val handle_search_prompt :
     by both the search prompt and the global F3 / Shift+F3 bindings. *)
 val search_advance : Tab.t -> [ `Next | `Prev ] -> unit
 
+(** Append text to whichever prompt field has focus. Find re-runs the
+    matcher; Replace just stores. Used by both the printable-character
+    handler in the prompt and the compose layer. *)
+val append_to_field : Tab.t -> string -> unit
+
 (** Logical-ESC handler. If the search prompt is open, restores the cursor
     to the position saved when the prompt opened, drops search state, and
     pops the prompt. If a search is active without the prompt, drops state

@@ -161,6 +161,21 @@ let search_toggle_regex = {
   display = "Alt+R"; context = Global;
   description = "Toggle regex (in prompt)" }
 
+let search_field_toggle = {
+  name = "search_field_toggle"; codes = [9]; kitty_codes = [(9, 1)];
+  display = "Tab"; context = Global;
+  description = "Toggle Find/Replace field (in prompt)" }
+
+let search_replace_one = {
+  name = "search_replace_one"; codes = []; kitty_codes = [(13, 3)];
+  display = "Alt+Enter"; context = Global;
+  description = "Replace current match (in prompt)" }
+
+let search_replace_all = {
+  name = "search_replace_all"; codes = []; kitty_codes = [(97, 3)];
+  display = "Alt+A"; context = Global;
+  description = "Replace all matches (in prompt)" }
+
 let next_error = {
   name = "next_error"; codes = [273]; kitty_codes = [];
   display = "F9"; context = Global; description = "Next build error" }
@@ -380,12 +395,17 @@ let generate_help () =
                  context=Global; description="Jump to error in Build / Errors tab" } in b)
       with name = "click_error" };
   ];
-  section "Search" [
-    { search with description = "Open / re-open search prompt" };
+  section "Search & Replace" [
+    { search with description = "Open / re-open find & replace panel" };
     { search_next with description = "Next match (also in prompt)" };
     { search_prev with description = "Previous match (also in prompt)" };
     search_toggle_case;
     search_toggle_regex;
+    search_field_toggle;
+    { search_replace_one with
+      description = "Replace current match, advance to next" };
+    { search_replace_all with
+      description = "Replace all matches ($1, $&, $$ in regex mode)" };
     { (let b = { name="search_accept"; codes=[]; kitty_codes=[];
                  display="Enter"; context=Global;
                  description="Close prompt, keep search active" } in b)

@@ -22,6 +22,10 @@ type t = {
   mutable dragging : drag_mode;
   mutable jump_stack : jump_point list;
   mutable jump_target : (int * int) option;
+  (* Transient message shown in the search panel after replace-current /
+     replace-all. Cleared by any other prompt interaction. Stays in the
+     panel only — does not leak into the normal status bar. *)
+  mutable search_panel_msg : string;
 }
 
 let create
@@ -38,4 +42,5 @@ let create
     compose = None;
     dragging = NoDrag;
     jump_stack = [];
-    jump_target = None }
+    jump_target = None;
+    search_panel_msg = "" }
