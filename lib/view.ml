@@ -584,7 +584,7 @@ let render_build_bar r =
   let text = if running then
     let desc = match Build.description () with
       | Some d -> d | None -> "building" in
-    Printf.sprintf "  Building: %s  [c]Cancel" desc
+    Printf.sprintf "  Building: %s  [%s]Cancel" desc Keys.build_cancel.display
   else
     Printf.sprintf "[%s]File [%s]Deps [%s]All [%s]Cursor [%s]Clean  %s:close"
       Keys.build_file.display Keys.build_deps.display Keys.build_all.display
@@ -647,7 +647,9 @@ let update_status (ctx : Editor_context.t) r (tab : Tab.t) =
     render_search_bar ctx tab r
   | _ ->
   if is_help ctx then
-    Render.set_status r "F1:close  Up/Down/PgUp/PgDn:scroll  any other key:close"
+    Render.set_status r
+      (Printf.sprintf "%s:close  Up/Down/PgUp/PgDn:scroll  any other key:close"
+         Keys.help.display)
   else if is_build ctx then
     render_build_bar r
   else if is_theme ctx then

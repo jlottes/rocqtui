@@ -628,7 +628,7 @@ let rejection_reason_str (r : Region_buffer.reject_reason) =
 let rejection_message (r : Region_buffer.reject_reason) =
   match r with
   | Region_buffer.In_verified_region ->
-    "Edit overlaps the verified region. Step backward (^B) or rewind first."
+    "Edit overlaps the verified region. Step backward or rewind first."
   | Region_buffer.Erodes_boundary ->
     "Edit would erode the sentence boundary at the verified end."
   | Region_buffer.In_pending_region ->

@@ -198,11 +198,6 @@ let () =
   in
   let stdin_fd = Unix.stdin in
   let running = ref true in
-  (* Blocking event read helper for prompts *)
-  let is_ctrl_key ev cp =
-    match ev with
-    | Input.Key (c, m) when c = cp && m.ctrl -> true
-    | _ -> false in
   let match_binding_input (ev : Input.event) (b : Keys.binding) =
     match ev with
     | Input.Key (cp, mods) ->
@@ -219,7 +214,9 @@ let () =
       (match code with Some c -> List.mem c b.codes | None -> false)
     | _ -> false
   in
-  let make_unsaved_prompt msg confirm_binding on_confirm =
+  let make_unsaved_prompt verb confirm_binding on_confirm =
+    let msg = Printf.sprintf "Unsaved changes! %s again to %s, %s to save."
+      confirm_binding.Keys.display verb Keys.save.Keys.display in
     let save_and_report () =
       let tab = Tab.active_tab mgr in
       (match Buffer.filename tab.buf with
@@ -237,7 +234,7 @@ let () =
       handler = (fun ev ->
         if match_binding_input ev confirm_binding then
           (on_confirm (); Modal.Handled)
-        else if is_ctrl_key ev 115 || is_ctrl_key ev 19 then
+        else if match_binding_input ev Keys.save then
           (save_and_report (); Modal.Handled)
         else Modal.Dismissed)
     }
@@ -247,7 +244,7 @@ let () =
     if Tab.count mgr > 1 then begin
       if Buffer.modified tab.buf then
         Modal.push ctx.modal
-          (make_unsaved_prompt "Unsaved changes! ^W again to close, ^S to save."
+          (make_unsaved_prompt "close"
              Keys.close_tab
              (fun () ->
                ignore (Tab.close_active mgr);
@@ -263,7 +260,7 @@ let () =
     end else begin
       if Buffer.modified tab.buf then
         Modal.push ctx.modal
-          (make_unsaved_prompt "Unsaved changes! ^W again to quit, ^S to save."
+          (make_unsaved_prompt "quit"
              Keys.close_tab
              (fun () -> running := false))
       else
@@ -275,7 +272,7 @@ let () =
       Buffer.modified t.buf) mgr.tabs in
     if any_unsaved then
       Modal.push ctx.modal
-        (make_unsaved_prompt "Unsaved changes! ^X again to quit, ^S to save."
+        (make_unsaved_prompt "quit"
            Keys.quit
            (fun () -> running := false))
     else
@@ -408,7 +405,9 @@ let () =
                  in
                  if Buffer.modified tab.buf then
                    Modal.push ctx.modal (Modal.Prompt {
-                     message = "Buffer has unsaved changes! F4 again to discard and reload.";
+                     message = Printf.sprintf
+                       "Buffer has unsaved changes! %s again to discard and reload."
+                       Keys.reload.Keys.display;
                      handler = (fun ev ->
                        match ev with
                        | Input.Special (Input.F 4, _) ->
@@ -425,15 +424,17 @@ let () =
                | Some _ ->
                  if Buffer.disk_changed tab.buf then
                    Modal.push ctx.modal (Modal.Prompt {
-                     message = "File changed on disk! ^S again to overwrite, ^R to reload.";
+                     message = Printf.sprintf
+                       "File changed on disk! %s again to overwrite, %s to reload."
+                       Keys.save.Keys.display Keys.reload.Keys.display;
                      handler = (fun ev ->
-                       if is_ctrl_key ev 115 || is_ctrl_key ev 19 then begin
+                       if match_binding_input ev Keys.save then begin
                          if Buffer.save tab.buf then
                            Render.set_status r "Saved (overwritten)."
                          else
                            Render.set_status r "Error saving file.";
                          Modal.Handled
-                       end else if is_ctrl_key ev 114 || is_ctrl_key ev 18 then begin
+                       end else if match_binding_input ev Keys.reload then begin
                          (match Buffer.filename tab.buf with
                           | Some f -> ignore (File_manager.reload_tab fm tab f)
                           | None -> ());
