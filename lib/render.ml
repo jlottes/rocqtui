@@ -10,7 +10,9 @@ type rect = {
 
 type pane_id =
   | PScript | PMinimap | PGoals | PMessages | PStatus | PTabBar
-  | PBorderV | PBorderH | PBorderBoth | PBorderMinimap | PNone
+  | PFileTree
+  | PBorderV | PBorderH | PBorderBoth | PBorderMinimap | PBorderFileTree
+  | PNone
 
 type overlay = {
   rect : rect;
@@ -27,6 +29,8 @@ type t = {
   mutable minimap_width : int;
   mutable has_tab_bar : bool;
   mutable panel_rows : int;
+  mutable file_tree_visible : bool;
+  mutable file_tree_width : int;
   mutable cursor_row : int;
   mutable cursor_col : int;
   mutable cursor_visible : bool;
@@ -37,6 +41,7 @@ type t = {
   mutable messages : rect;
   mutable status : rect;
   mutable minimap_rect : rect;
+  mutable file_tree_rect : rect;
 }
 
 let empty_rect = { row = 0; col = 0; height = 0; width = 0 }
@@ -45,11 +50,18 @@ let compute_layout t =
   let top = if t.has_tab_bar then 1 else 0 in
   let content_h = t.term_h - top - 1 in  (* minus status bar *)
   let mm_total = if t.minimap_width > 0 then t.minimap_width + 1 else 0 in
-  let script_w = t.split_col - mm_total in
-  t.script <- { row = top; col = 0;
-                height = content_h; width = max 1 script_w };
+  (* File-tree pane on the far left, separator column drawn by chrome. *)
+  let ft_total = if t.file_tree_visible then t.file_tree_width + 1 else 0 in
+  let script_right = t.split_col - mm_total in
+  t.file_tree_rect <- (if t.file_tree_visible then
+    { row = top; col = 0;
+      height = content_h; width = t.file_tree_width }
+  else empty_rect);
+  t.script <- { row = top; col = ft_total;
+                height = content_h;
+                width = max 1 (script_right - ft_total) };
   t.minimap_rect <- (if t.minimap_width > 0 then
-    { row = top; col = script_w; height = content_h;
+    { row = top; col = script_right; height = content_h;
       width = t.minimap_width + 1 }  (* +1 for separator *)
   else empty_rect);
   t.goals <- { row = top; col = t.split_col + 1;
@@ -73,12 +85,15 @@ let create () =
     minimap_width = 0;
     has_tab_bar = false;
     panel_rows = 0;
+    file_tree_visible = false;
+    file_tree_width = 28;
     cursor_row = 0; cursor_col = 0;
     cursor_visible = true;
     overlay = None;
     script = empty_rect; goals = empty_rect;
     messages = empty_rect; status = empty_rect;
     minimap_rect = empty_rect;
+    file_tree_rect = empty_rect;
   } in
   compute_layout t;
   t
@@ -89,6 +104,8 @@ let resize t =
   t.term_w <- w;
   t.split_col <- min t.split_col (w - 15);
   t.split_row <- min t.split_row (h - 3);
+  if t.file_tree_visible then
+    t.file_tree_width <- max 10 (min t.file_tree_width (w - 25));
   Grid.resize t.curr h w;
   Grid.resize t.prev h w;
   Grid.clear t.prev;  (* force full redraw *)
@@ -101,6 +118,8 @@ let resize t =
 let pane_at t ~x ~y =
   if t.has_tab_bar && y = 0 then PTabBar
   else if y >= t.term_h - 1 - t.panel_rows then PStatus
+  else if t.file_tree_visible && x < t.file_tree_width then PFileTree
+  else if t.file_tree_visible && x = t.file_tree_width then PBorderFileTree
   else begin
     let mm_total = if t.minimap_width > 0 then t.minimap_width + 1 else 0 in
     let script_w = t.split_col - mm_total in
@@ -126,8 +145,10 @@ let rect_of_pane t = function
   | PMessages -> t.messages
   | PStatus -> t.status
   | PMinimap -> t.minimap_rect
+  | PFileTree -> t.file_tree_rect
   | PTabBar -> { row = 0; col = 0; height = 1; width = t.term_w }
-  | PBorderV | PBorderH | PBorderBoth | PBorderMinimap | PNone -> empty_rect
+  | PBorderV | PBorderH | PBorderBoth
+  | PBorderMinimap | PBorderFileTree | PNone -> empty_rect
 
 (* Write a string into a pane at pane-relative (row, col) *)
 let put_str t pane ~row ~col s attr =
@@ -163,7 +184,7 @@ let chgat t pane ~row ~col ~width attr =
 let clear_pane t pane =
   let r = rect_of_pane t pane in
   let attr = match pane with
-    | PScript | PGoals | PMessages -> (Theme.attrs ()).ga_default
+    | PScript | PGoals | PMessages | PFileTree -> (Theme.attrs ()).ga_default
     | PStatus -> (Theme.attrs ()).ga_status
     | _ -> Grid.default_attr
   in
@@ -187,6 +208,12 @@ let draw_chrome t ?(goals_focused=false) ?(messages_focused=false)
     ?(msg_tab_names=[]) ?(msg_tab_active=0) () =
   let border_attr = (Theme.attrs ()).ga_border in
   let top = if t.has_tab_bar then 1 else 0 in
+  (* File-tree separator (right edge of the panel, when visible) *)
+  if t.file_tree_visible then
+    for row = top to t.term_h - 2 do
+      Grid.set_cell t.curr ~row ~col:t.file_tree_width
+        "\xe2\x94\x82" border_attr  (* │ *)
+    done;
   (* Vertical divider *)
   for row = top to t.term_h - 2 do
     Grid.set_cell t.curr ~row ~col:t.split_col "\xe2\x94\x82" border_attr  (* │ *)
@@ -256,6 +283,26 @@ let move_minimap_border t col =
   let new_w = max 2 (min new_w (t.split_col - 12)) in
   if new_w <> t.minimap_width then begin
     t.minimap_width <- new_w;
+    compute_layout t
+  end
+
+let file_tree_visible t = t.file_tree_visible
+let file_tree_width t = t.file_tree_width
+
+let set_file_tree_visible t v =
+  if v <> t.file_tree_visible then begin
+    t.file_tree_visible <- v;
+    compute_layout t
+  end
+
+(* Drag the file-tree border: new width = clicked column. Clamps so the
+   script pane keeps at least 15 cols after accounting for minimap. *)
+let move_file_tree_border t col =
+  let mm_total = if t.minimap_width > 0 then t.minimap_width + 1 else 0 in
+  let max_w = t.split_col - mm_total - 16 in
+  let new_w = max 10 (min col max_w) in
+  if new_w <> t.file_tree_width then begin
+    t.file_tree_width <- new_w;
     compute_layout t
   end
 

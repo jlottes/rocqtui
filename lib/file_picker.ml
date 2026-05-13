@@ -1,8 +1,6 @@
-(* File picker dialog — modal overlay showing project files in a tree. *)
-
-type entry =
-  | Dir of string * entry list
-  | File of string
+(* File picker dialog — modal overlay showing project files in a tree.
+   File enumeration and tree building live in [File_listing]; this module
+   owns display flattening, selection, scroll, and input. *)
 
 type flat_line = {
   indent : int;
@@ -14,81 +12,22 @@ type flat_line = {
   in_project : bool;   (* listed in _RocqProject *)
 }
 
-type mode = ProjectFiles | AllFiles
-
 type t = {
   mutable lines : flat_line array;
   mutable selected : int;
   mutable scroll : int;
-  mutable mode : mode;
+  mutable mode : File_listing.mode;
   mutable input : string;  (* typed path filter *)
   project_dir : string;
   project_file : string;  (* path to _RocqProject *)
   open_files : string list;  (* currently open file paths *)
-  mutable load_paths : Project.load_path_entry list;
 }
 
-(* State is now held in Modal.FilePicker, not a global ref. *)
-(* is_open is checked via Modal.get_file_picker *)
-
-(* Build a tree from a list of absolute file paths, relative to project_dir *)
-let build_tree project_dir files =
-  (* Convert absolute paths to relative *)
-  let prefix = project_dir ^ "/" in
-  let prefix_len = String.length prefix in
-  let relative_paths = List.filter_map (fun f ->
-    if String.length f > prefix_len
-       && String.sub f 0 prefix_len = prefix then
-      Some (String.sub f prefix_len (String.length f - prefix_len))
-    else if f = project_dir then None
-    else Some f
-  ) files in
-  (* Sort *)
-  let sorted = List.sort String.compare relative_paths in
-  (* Build tree by splitting on '/' *)
-  let rec insert tree parts full_path =
-    match parts with
-    | [] -> tree
-    | [name] ->
-      tree @ [File name]
-    | dir :: rest ->
-      let found = ref false in
-      let tree' = List.map (fun node ->
-        match node with
-        | Dir (d, children) when d = dir ->
-          found := true;
-          Dir (d, insert children rest full_path)
-        | other -> other
-      ) tree in
-      if !found then tree'
-      else tree' @ [Dir (dir, insert [] rest full_path)]
-  in
-  let tree = List.fold_left (fun tree relpath ->
-    let parts = String.split_on_char '/' relpath in
-    insert tree parts relpath
-  ) [] sorted in
-  (* Sort tree: dirs first, then files, alphabetically within each *)
-  let rec sort_tree = function
-    | Dir (n, children) -> Dir (n, sort_children children)
-    | File n -> File n
-  and sort_children nodes =
-    let dirs = List.filter_map (fun n ->
-      match n with Dir _ -> Some (sort_tree n) | _ -> None) nodes in
-    let files = List.filter_map (fun n ->
-      match n with File _ -> Some n | _ -> None) nodes in
-    let cmp a b = match a, b with
-      | Dir (na, _), Dir (nb, _) -> String.compare na nb
-      | File na, File nb -> String.compare na nb
-      | _ -> 0
-    in
-    List.sort cmp dirs @ List.sort cmp files
-  in
-  sort_children tree
-
-(* Flatten tree to display lines with full paths *)
-let flatten_tree_with_paths project_dir ~project_files tree =
+(* Flatten a tree of File_listing.node into display lines with box-drawing
+   connectors. *)
+let flatten tree =
   let lines = ref [] in
-  let rec walk ~prefix ~path_prefix ~depth nodes =
+  let rec walk ~prefix ~depth nodes =
     let n = List.length nodes in
     List.iteri (fun i node ->
       let last = (i = n - 1) in
@@ -101,37 +40,28 @@ let flatten_tree_with_paths project_dir ~project_files tree =
         if depth = 0 then ""
         else prefix ^ (if last then "    " else "\xe2\x94\x82   ")  (* "│   " *)
       in
-      match node with
-      | File name ->
-        let relpath = if path_prefix = "" then name
-                      else path_prefix ^ "/" ^ name in
-        let full = Filename.concat project_dir relpath in
-        let in_proj = List.mem full project_files in
-        lines := { indent = depth; connector = prefix ^ connector;
-                   name; full_path = full; rel_path = relpath;
-                   is_dir = false; in_project = in_proj } :: !lines
-      | Dir (name, children) ->
-        let new_path_prefix = if path_prefix = "" then name
-                              else path_prefix ^ "/" ^ name in
-        let dir_rel = new_path_prefix ^ "/" in
-        lines := { indent = depth; connector = prefix ^ connector;
-                   name = name ^ "/"; full_path = ""; rel_path = dir_rel;
-                   is_dir = true; in_project = true } :: !lines;
-        walk ~prefix:child_prefix ~path_prefix:new_path_prefix
-             ~depth:(depth + 1) children
+      let entry, children = match node with
+        | File_listing.File e -> e, None
+        | File_listing.Dir (e, c) -> e, Some c
+      in
+      lines := { indent = depth; connector = prefix ^ connector;
+                 name = entry.name; full_path = entry.full_path;
+                 rel_path = entry.rel_path; is_dir = entry.is_dir;
+                 in_project = entry.in_project } :: !lines;
+      match children with
+      | None -> ()
+      | Some c -> walk ~prefix:child_prefix ~depth:(depth + 1) c
     ) nodes
   in
-  walk ~prefix:"" ~path_prefix:"" ~depth:0 tree;
+  walk ~prefix:"" ~depth:0 tree;
   Array.of_list (List.rev !lines)
 
 let rebuild_lines t =
-  let project_files = Project.listed_files t.project_file in
-  let files = match t.mode with
-    | ProjectFiles -> project_files
-    | AllFiles -> Project.all_v_files t.load_paths
-  in
-  let tree = build_tree t.project_dir files in
-  t.lines <- flatten_tree_with_paths t.project_dir ~project_files tree;
+  let tree = File_listing.enumerate
+    ~project_dir:t.project_dir
+    ~project_file:t.project_file
+    ~mode:t.mode in
+  t.lines <- flatten tree;
   (* Clamp selection *)
   if t.selected >= Array.length t.lines then
     t.selected <- max 0 (Array.length t.lines - 1);
@@ -187,11 +117,10 @@ let tab_complete t =
   end
 
 let create ~project_dir ~project_file ~open_files =
-  let load_paths = Project.load_paths project_file in
   let t = {
     lines = [||]; selected = 0; scroll = 0;
-    mode = ProjectFiles; input = "";
-    project_dir; project_file; open_files; load_paths;
+    mode = File_listing.Project; input = "";
+    project_dir; project_file; open_files;
   } in
   rebuild_lines t;
   t
@@ -253,7 +182,9 @@ let handle_key t ch visible_rows =
       PickerContinue
     end
     else if ch = 20 then begin (* ^T -- toggle project/all *)
-      t.mode <- (match t.mode with ProjectFiles -> AllFiles | AllFiles -> ProjectFiles);
+      t.mode <- (match t.mode with
+        | File_listing.Project -> File_listing.All
+        | File_listing.All -> File_listing.Project);
       rebuild_lines t;
       navigate_to_input t;
       ensure_visible t visible_rows;
@@ -324,8 +255,8 @@ let render_overlay grid (rect : Render.rect) t =
   Grid.set_cell grid ~row:box_top ~col:(box_left + 1)
     "\xe2\x94\x80" border_attr;  (* ─ *)
   let title = match t.mode with
-    | ProjectFiles -> " Open File (project) "
-    | AllFiles -> " Open File (all .v) "
+    | File_listing.Project -> " Open File (project) "
+    | File_listing.All -> " Open File (all .v) "
   in
   ignore (Grid.put_str grid ~row:box_top ~col:(box_left + 2) title border_attr);
   let title_end = 2 + String.length title in
@@ -365,8 +296,8 @@ let render_overlay grid (rect : Render.rect) t =
   (* Mode / help bar *)
   let mode_row = box_top + box_h - 2 in
   let mode_label = match t.mode with
-    | ProjectFiles -> "project"
-    | AllFiles -> "all .v"
+    | File_listing.Project -> "project"
+    | File_listing.All -> "all .v"
   in
   ignore (Grid.put_str grid ~row:mode_row ~col:(box_left + 2)
     (Printf.sprintf "^T:%s  Tab:complete  Esc:close" mode_label) normal_attr);
@@ -401,7 +332,7 @@ let render_overlay grid (rect : Render.rect) t =
         let dim_attr = { Grid.default_attr with dim = true } in
         let bold_attr = { Grid.default_attr with bold = true } in
         let dim = not line.is_dir && not line.in_project
-                  && t.mode = AllFiles in
+                  && t.mode = File_listing.All in
         let prefix_cols = Grid.put_str grid ~row ~col:(box_left + 2)
           prefix_text normal_attr in
         let name_attr =

@@ -10,7 +10,9 @@ type rect = {
 
 type pane_id =
   | PScript | PMinimap | PGoals | PMessages | PStatus | PTabBar
-  | PBorderV | PBorderH | PBorderBoth | PBorderMinimap | PNone
+  | PFileTree
+  | PBorderV | PBorderH | PBorderBoth | PBorderMinimap | PBorderFileTree
+  | PNone
 
 type t
 
@@ -49,6 +51,14 @@ val set_minimap_width : t -> int -> unit
 val move_split_v : t -> int -> unit
 val move_split_h : t -> int -> unit
 val move_minimap_border : t -> int -> unit
+
+(** File-tree panel layout. When visible, allocates a left-side pane
+    [file_tree_width] columns wide plus a separator column; the script
+    (and minimap, if any) shift right by that amount. *)
+val file_tree_visible : t -> bool
+val file_tree_width : t -> int
+val set_file_tree_visible : t -> bool -> unit
+val move_file_tree_border : t -> int -> unit
 
 (** Cursor *)
 val place_cursor : t -> row:int -> col:int -> unit
