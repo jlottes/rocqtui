@@ -7,7 +7,12 @@
 
 (rule
  (target rocq_compat.ml)
- (deps (:exe discover.exe) (env_var OPAM_SWITCH_PREFIX))
+ (deps
+  (:exe discover.exe)
+  (env_var OPAM_SWITCH_PREFIX)
+  ; Tracks the installed gramlib so the probe re-runs when rocq-runtime
+  ; is reinstalled in place (which doesn't change OPAM_SWITCH_PREFIX).
+  %{lib:rocq-runtime.gramlib:gramlib.cmi})
  (action (run %{exe} %{target})))
 
 (library
