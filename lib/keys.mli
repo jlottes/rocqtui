@@ -69,6 +69,7 @@ val theme_menu : binding
 val reload : binding
 val build_menu : binding
 val refresh_screen : binding
+val toggle_file_tree : binding
 
 (** Query submenu *)
 val query_about : binding

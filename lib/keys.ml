@@ -228,6 +228,10 @@ let refresh_screen = {
   name = "refresh_screen"; codes = [276]; kitty_codes = [];
   display = "F12"; context = Global; description = "Refresh screen" }
 
+let toggle_file_tree = {
+  name = "toggle_file_tree"; codes = [272]; kitty_codes = [];
+  display = "F8"; context = Global; description = "File tree" }
+
 (* --- Query submenu --- *)
 
 let query_about = {
@@ -297,7 +301,7 @@ let open_claude = {
 let navigation_bindings = [step_forward; step_backward; go_to_cursor; step_to_start; step_to_end; cycle_pane]
 let editing_bindings = [open_file; save; close_tab; quit; cut; paste; copy; undo; redo]
 let query_bindings = [about; print_query; jump_to_def; jump_back; query_menu]
-let display_bindings = [toggle_hyps; toggle_gutter; options_menu; help; minimap; theme_menu; reload; build_menu; open_terminal; open_claude; refresh_screen]
+let display_bindings = [toggle_hyps; toggle_gutter; options_menu; help; minimap; theme_menu; reload; build_menu; toggle_file_tree; open_terminal; open_claude; refresh_screen]
 let tab_bindings = [new_tab; prev_tab; next_tab]
 
 (* Generate a hint string from a list of bindings: "^S:Save ^W:Close ..." *)
@@ -373,6 +377,7 @@ let generate_help () =
     theme_menu;
     { reload with description = "Reload from disk (prompts if dirty)" };
     { build_menu with description = "Build menu (make file/all/deps)" };
+    { toggle_file_tree with description = "Toggle file-tree panel" };
   ];
   section "Terminal" [
     { open_terminal with description = "Open terminal (in project dir)" };

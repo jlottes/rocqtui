@@ -59,6 +59,7 @@ let handle (ctx : Editor_context.t) (mev : Input.mouse_event) (tab : Tab.t) r
      | Editor_context.DragBoth ->
        Render.move_split_v r x; Render.move_split_h r y
      | Editor_context.DragMinimap -> Render.move_minimap_border r x
+     | Editor_context.DragFileTree -> Render.move_file_tree_border r x
      | Editor_context.DragMinimapScroll ->
        let mm_rect = Render.pane_rect r Render.PMinimap in
        let mm_row = y - mm_rect.row in
@@ -120,6 +121,10 @@ let handle (ctx : Editor_context.t) (mev : Input.mouse_event) (tab : Tab.t) r
         Buffer.set_scroll_top buf (max 0 (min max_scroll (Buffer.scroll_top buf + delta)))
       | Render.PGoals ->
         tab.goals_scroll <- max 0 (tab.goals_scroll + delta)
+      | Render.PFileTree ->
+        (match ctx.file_tree with
+         | Some ft -> File_tree.handle_scroll ft r (if is_scroll_up then -1 else 1)
+         | None -> ())
       | Render.PMessages ->
         (match Msg_pane.active_kind () with
          | Msg_pane.Terminal term ->
@@ -181,6 +186,8 @@ let handle (ctx : Editor_context.t) (mev : Input.mouse_event) (tab : Tab.t) r
     end
     else if pane = Render.PBorderBoth && is_left then
       ctx.dragging <- Editor_context.DragBoth
+    else if pane = Render.PBorderFileTree && is_left then
+      ctx.dragging <- Editor_context.DragFileTree
     else if (pane = Render.PBorderV || pane = Render.PBorderMinimap)
             && is_left then
       ctx.dragging <- (match pane with
@@ -189,6 +196,7 @@ let handle (ctx : Editor_context.t) (mev : Input.mouse_event) (tab : Tab.t) r
     else if (pane = Render.PGoals || pane = Render.PMessages)
             && is_left then begin
       tab.focused_pane <- (if pane = Render.PGoals then `Goals else `Messages);
+      ctx.file_tree_focused <- false;
       (* Build / Errors tab click → jump to error *)
       let jumped_to_error =
         if pane = Render.PMessages then begin
@@ -286,6 +294,15 @@ let handle (ctx : Editor_context.t) (mev : Input.mouse_event) (tab : Tab.t) r
            Terminal.send term ctx.clipboard
        | _ -> ())
     end
+    else if pane = Render.PFileTree && is_left then begin
+      ctx.file_tree_focused <- true;
+      (match ctx.file_tree with
+       | Some ft ->
+         (match File_tree.handle_click ft r ~y with
+          | File_tree.TreeOpen path -> result := Some (Action.Open_file path)
+          | File_tree.TreeContinue -> ())
+       | None -> ())
+    end
     else if pane = Render.PMinimap && is_left then begin
       let mm_rect = Render.pane_rect r Render.PMinimap in
       let mm_row = y - mm_rect.row in
@@ -302,6 +319,7 @@ let handle (ctx : Editor_context.t) (mev : Input.mouse_event) (tab : Tab.t) r
     end
     else if pane = Render.PScript && is_left then begin
       tab.focused_pane <- `Script;
+      ctx.file_tree_focused <- false;
       View.clear_pane_selection tab.goals_sel;
       View.clear_pane_selection (Geom.active_msg_pane_sel tab);
       if has_cmd then begin

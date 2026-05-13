@@ -344,6 +344,39 @@ let handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r =
       Some Continue
     end
     else if View.is_build ctx then Modals.handle_build ctx ev tab r
+    else if Keymatch.match_binding ev Keys.toggle_file_tree then begin
+      let filename = Buffer.filename buf in
+      let dir = match filename with
+        | Some f -> Filename.dirname f
+        | None -> Sys.getcwd ()
+      in
+      (match Project.find_project_file dir with
+       | None -> Render.set_status r "No _RocqProject found."
+       | Some (project_dir, project_file) ->
+         let need_new = match ctx.file_tree with
+           | None -> true
+           | Some ft -> File_tree.project_file ft <> project_file
+         in
+         if need_new then
+           ctx.file_tree <-
+             Some (File_tree.create ~project_dir ~project_file);
+         let was_visible = Render.file_tree_visible r in
+         if not was_visible then begin
+           (* Refresh from disk on each show so newly-created files appear. *)
+           (match ctx.file_tree with
+            | Some ft when not need_new -> File_tree.refresh ft
+            | _ -> ());
+           Render.set_file_tree_visible r true;
+           ctx.file_tree_focused <- true
+         end
+         else if ctx.file_tree_focused then begin
+           Render.set_file_tree_visible r false;
+           ctx.file_tree_focused <- false
+         end
+         else
+           ctx.file_tree_focused <- true);
+      Some Continue
+    end
     else if Keymatch.match_binding ev Keys.open_terminal then begin
       Pty.open_tab tab r; Some Continue
     end
@@ -356,8 +389,19 @@ let handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r =
     end
     else if View.is_query ctx then Modals.handle_query ctx ev tab
     else if Keymatch.match_binding ev Keys.cycle_pane then begin
-      tab.focused_pane <- (match tab.focused_pane with
-        | `Script -> `Goals | `Goals -> `Messages | `Messages -> `Script);
+      let ft_visible = Render.file_tree_visible r in
+      if ctx.file_tree_focused then begin
+        ctx.file_tree_focused <- false;
+        tab.focused_pane <- `Script
+      end
+      else begin
+        match tab.focused_pane with
+        | `Script -> tab.focused_pane <- `Goals
+        | `Goals -> tab.focused_pane <- `Messages
+        | `Messages ->
+          if ft_visible then ctx.file_tree_focused <- true
+          else tab.focused_pane <- `Script
+      end;
       Some Continue
     end
     else if (match ev with Input.Resize -> true | _ -> false) then begin
@@ -571,10 +615,37 @@ let handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r =
       pane_scroll_ref := max 0 (!pane_scroll_ref - (rows - 1)); Some Continue
     | _ -> None
   in
+  let file_tree_event_to_key = function
+    | Input.Key (cp, mods) ->
+      Some (if mods.ctrl && cp >= 97 && cp <= 122 then cp - 96 else cp)
+    | Input.Special (k, _) ->
+      (match k with
+       | Input.Up -> Some 259 | Input.Down -> Some 258
+       | Input.Left -> Some 260 | Input.Right -> Some 261
+       | Input.Home -> Some 262 | Input.End -> Some 360
+       | Input.PageUp -> Some 339 | Input.PageDown -> Some 338
+       | Input.Enter -> Some 13 | Input.Tab -> Some 9
+       | Input.Backspace -> Some 127 | Input.Escape -> Some 27
+       | _ -> None)
+    | _ -> None
+  in
+  let handle_file_tree_event () =
+    match ctx.file_tree with
+    | None -> Continue
+    | Some ft ->
+      (match file_tree_event_to_key ev with
+       | None -> Continue
+       | Some ch ->
+         (match File_tree.handle_key ft r ch with
+          | File_tree.TreeOpen path -> Open_file path
+          | File_tree.TreeContinue -> Continue))
+  in
   let action =
     match handle_global () with
     | Some a -> a
     | None ->
+      if ctx.file_tree_focused then handle_file_tree_event ()
+      else
       match tab.focused_pane with
       | `Goals ->
         let scroll_r = ref tab.goals_scroll in

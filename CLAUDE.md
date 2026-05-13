@@ -121,6 +121,7 @@ See `lib/keys.ml` for the source of truth. Summary:
 | F4 | Reload from disk |
 | F5 | Build menu |
 | F6 | Open Claude (in project dir) |
+| F8 | Toggle file-tree panel (focus on first press; close on second) |
 | F12 | Force redraw |
 | ESC | Start XCompose (only if launched with `--xcompose`); otherwise sent to terminal when focused |
 | ESC | Cancel search (prompt: restores cursor; outside prompt: clears highlights). Under `--xcompose`, ESC starts compose so the user-visible cancel is ESC ESC; the second ESC also doubles as "send ESC to terminal" when one is focused and no search is in flight. |

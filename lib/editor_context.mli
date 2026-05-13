@@ -1,6 +1,6 @@
 (** Editor context: dependencies injected from main.ml. *)
 
-type drag_mode = NoDrag | DragV | DragH | DragBoth | DragMinimap | DragMinimapScroll
+type drag_mode = NoDrag | DragV | DragH | DragBoth | DragMinimap | DragMinimapScroll | DragFileTree
 
 type jump_point = {
   jp_tab_id : int;
@@ -22,6 +22,8 @@ type t = {
   mutable jump_stack : jump_point list;
   mutable jump_target : (int * int) option;
   mutable search_panel_msg : string;
+  mutable file_tree : File_tree.t option;
+  mutable file_tree_focused : bool;
 }
 
 val create :

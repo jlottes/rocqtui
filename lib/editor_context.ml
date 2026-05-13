@@ -1,7 +1,7 @@
 (* Editor context: dependencies injected from main.ml.
    Replaces callback refs and global setters. *)
 
-type drag_mode = NoDrag | DragV | DragH | DragBoth | DragMinimap | DragMinimapScroll
+type drag_mode = NoDrag | DragV | DragH | DragBoth | DragMinimap | DragMinimapScroll | DragFileTree
 
 type jump_point = {
   jp_tab_id : int;
@@ -26,6 +26,11 @@ type t = {
      replace-all. Cleared by any other prompt interaction. Stays in the
      panel only — does not leak into the normal status bar. *)
   mutable search_panel_msg : string;
+  (* File-tree panel: lazily created on first F8. Survives across tabs.
+     [file_tree_focused] tracks whether key events route to the panel
+     instead of the focused script/goals/messages pane. *)
+  mutable file_tree : File_tree.t option;
+  mutable file_tree_focused : bool;
 }
 
 let create
@@ -43,4 +48,6 @@ let create
     dragging = NoDrag;
     jump_stack = [];
     jump_target = None;
-    search_panel_msg = "" }
+    search_panel_msg = "";
+    file_tree = None;
+    file_tree_focused = false }

@@ -784,6 +784,8 @@ let render_all (ctx : Editor_context.t) r (tab : Tab.t) =
   Render.clear_pane r Render.PStatus;
   if Render.minimap_width r > 0 then
     Render.clear_pane r Render.PMinimap;
+  if Render.file_tree_visible r then
+    Render.clear_pane r Render.PFileTree;
   let mp = Msg_pane.state () in
   let msg_tab_names = List.map Msg_pane.display_name mp.tabs in
   Render.draw_chrome r
@@ -795,6 +797,12 @@ let render_all (ctx : Editor_context.t) r (tab : Tab.t) =
   render_script ctx r tab;
   render_goals ctx r tab;
   render_messages r tab;
+  (match ctx.file_tree with
+   | Some ft when Render.file_tree_visible r ->
+     File_tree.render ft r
+       ~open_files:(ctx.open_files ())
+       ~focused:ctx.file_tree_focused
+   | _ -> ());
   update_status ctx r tab;
   (* Cursor visibility and positioning *)
   let active_term = match Msg_pane.active_kind () with
