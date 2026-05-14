@@ -55,8 +55,14 @@ type query_op_state = {
   qos_phase : query_phase;
 }
 
+type verifying_op_state = {
+  vos_sentence : sentence_info;
+  vos_pending : Interface.add_rty Rocq_protocol.handle;
+}
+
 type op_state =
   | Op_query of query_op_state
+  | Op_verifying of verifying_op_state
 
 type t = {
   rocq : Rocq_protocol.t;
@@ -277,64 +283,42 @@ let line_info_at buf byte_off =
   done;
   (!line + 1, !bol)
 
-(* Async: submit next sentence toward target_end *)
-let submit_next_sentence t =
-  if Rocq_protocol.is_busy t.rocq then ()
+let mk_add_call ~phrase ~edit_id ~tip ~verbose ~bp ~line ~bol =
+  Xmlprotocol.add ((((phrase, edit_id), (tip, verbose)), bp), (line, bol))
+
+(* Compute the next sentence to submit toward target_end. Returns
+   None if there's nothing more to verify. *)
+let next_sentence_phrase t =
+  let vend = verified_end t in
+  if vend >= t.target_end then None
   else begin
-    let vend = verified_end t in
-    if vend >= t.target_end then ()  (* already caught up *)
-    else begin
-      let text = Buffer.text t.buf in
-      match Sentence.find_end text ~start:vend with
-      | None -> ()
-      | Some end_off ->
-        let phrase = String.sub text vend (end_off - vend) in
-        let eid = t.next_edit_id in
-        t.next_edit_id <- eid - 1;
-        let (line, bol) = line_info_at t.buf vend in
-        let prev_tip = t.tip in
-        let s = { start_off = vend; end_off; state_id = Stateid.dummy;
-                  status = Processing } in
-        t.sentences <- s :: t.sentences;
-        t.state_changed <- true;
-        let call = Xmlprotocol.add
-          ((((phrase, eid), (prev_tip, true)), vend), (line, bol)) in
-        Rocq_protocol.send_call t.rocq call
-          (fun result ->
-             (* Set state_id BEFORE processing feedback so Processed
-                feedback can find the sentence *)
-             (match result with
-              | Interface.Good (new_id, _) -> s.state_id <- new_id
-              | _ -> ());
-             process_feedback t;
-             match result with
-             | Interface.Good (new_id, _) ->
-               t.tip <- new_id;
-               t.state_changed <- true;
-               t.goals_dirty <- true;
-               (* Don't call rewind_errors here — it uses eval_call
-                  which would deadlock inside the watch callback.
-                  Errors will be detected and handled in poll. *)
-             | Interface.Fail (safe_id, _, msg) ->
-               (* Remove the Processing sentence *)
-               (match t.sentences with
-                | hd :: rest when hd == s -> t.sentences <- rest
-                | _ -> ());
-               t.msgs <- t.msgs @ [msg];
-               t.err_range <- Some (vend, end_off);
-               t.target_end <- verified_end t;
-               t.state_changed <- true;
-               (* Don't call rewind_to_state here — defer to poll.
-                  Just record that we need to rewind. *)
-               if not (Stateid.equal safe_id t.tip
-                       || Stateid.equal safe_id Stateid.dummy) then
-                 t.needs_rewind <- Some safe_id
-               else
-                 t.tip <- (match t.sentences with
-                           | si :: _ -> si.state_id
-                           | [] -> Stateid.initial))
-    end
+    let text = Buffer.text t.buf in
+    match Sentence.find_end text ~start:vend with
+    | None -> None
+    | Some end_off ->
+      let phrase = String.sub text vend (end_off - vend) in
+      Some (vend, end_off, phrase)
   end
+
+(* Begin a verification op: submit the next pending sentence as
+   an Op_verifying. Caller has already checked [current_op = None]
+   and that the rocq queue is idle. *)
+let start_verify t =
+  match next_sentence_phrase t with
+  | None -> ()
+  | Some (vend, end_off, phrase) ->
+    let eid = t.next_edit_id in
+    t.next_edit_id <- eid - 1;
+    let (line, bol) = line_info_at t.buf vend in
+    let prev_tip = t.tip in
+    let s = { start_off = vend; end_off; state_id = Stateid.dummy;
+              status = Processing } in
+    t.sentences <- s :: t.sentences;
+    let call = mk_add_call ~phrase ~edit_id:eid ~tip:prev_tip
+      ~verbose:true ~bp:vend ~line ~bol in
+    let pending = Rocq_protocol.submit t.rocq call in
+    t.current_op <- Some (Op_verifying { vos_sentence = s; vos_pending = pending });
+    t.state_changed <- true
 
 (* Sync: rewind verified region to match target *)
 let rewind_to_target t =
@@ -378,9 +362,6 @@ let sentence_start_before t off =
    below for the rationale). The op runs as: send setup sentences
    one at a time → run the query at the resulting tip → restore
    the original tip via [edit_at]. *)
-
-let mk_add_call ~phrase ~edit_id ~tip ~verbose ~bp ~line ~bol =
-  Xmlprotocol.add ((((phrase, edit_id), (tip, verbose)), bp), (line, bol))
 
 (* Submit the next setup sentence on top of [tip]; build a Qp_setup
    phase referencing the resulting handle. *)
@@ -470,8 +451,43 @@ let advance_query_op t qos =
        t.current_op <- None;
        t.state_changed <- true)
 
+let advance_verifying_op t v =
+  match Rocq_protocol.poll_response v.vos_pending with
+  | None -> ()
+  | Some result ->
+    (* Set state_id BEFORE processing feedback so Processed feedback
+       can find the sentence *)
+    (match result with
+     | Interface.Good (new_id, _) -> v.vos_sentence.state_id <- new_id
+     | _ -> ());
+    process_feedback t;
+    (match result with
+     | Interface.Good (new_id, _) ->
+       t.tip <- new_id;
+       t.goals_dirty <- true
+     | Interface.Fail (safe_id, _, msg) ->
+       (* Remove the Processing sentence *)
+       (match t.sentences with
+        | hd :: rest when hd == v.vos_sentence -> t.sentences <- rest
+        | _ -> ());
+       t.msgs <- t.msgs @ [msg];
+       t.err_range <- Some (v.vos_sentence.start_off, v.vos_sentence.end_off);
+       t.target_end <- verified_end t;
+       (* Don't call rewind_to_state here — defer to poll. Just record
+          that we need to rewind. *)
+       if not (Stateid.equal safe_id t.tip
+               || Stateid.equal safe_id Stateid.dummy) then
+         t.needs_rewind <- Some safe_id
+       else
+         t.tip <- (match t.sentences with
+                   | si :: _ -> si.state_id
+                   | [] -> Stateid.initial));
+    t.current_op <- None;
+    t.state_changed <- true
+
 let advance_op t = function
   | Op_query qos -> advance_query_op t qos
+  | Op_verifying v -> advance_verifying_op t v
 
 (* Poll: process feedback and drive async stepping.
    Returns true if state changed. *)
@@ -501,7 +517,7 @@ let poll t =
        else if not (Rocq_protocol.is_busy t.rocq) then begin
          let vend = verified_end t in
          if vend < t.target_end then
-           submit_next_sentence t
+           start_verify t
          else if t.goals_dirty then begin
            t.goals_dirty <- false;
            let opts = Printopts.to_set_options () in
