@@ -66,10 +66,32 @@ type refresh_phase =
   | Rp_set_options of unit Rocq_protocol.handle
   | Rp_fetch of Interface.goals option Rocq_protocol.handle
 
+(* User intent: fetch goals text (formatted) with optional per-call
+   printing-option overrides. Result lands in [pf_result] when the
+   op finishes. *)
+type pending_fetch = {
+  pf_all_hyps : bool;
+  pf_width : int;
+  pf_extra_opts : (string list * Interface.option_value) list;
+  pf_result : string option ref;
+}
+
+(* Phases of an in-flight fetch_goals op: send Printopts, then fetch
+   goals and format them. *)
+type fetch_phase =
+  | Fp_set_options of unit Rocq_protocol.handle
+  | Fp_fetch of Interface.goals option Rocq_protocol.handle
+
+type fetch_op_state = {
+  fos_pf : pending_fetch;
+  fos_phase : fetch_phase;
+}
+
 type op_state =
   | Op_query of query_op_state
   | Op_verifying of verifying_op_state
   | Op_refreshing_goals of refresh_phase
+  | Op_fetch_goals of fetch_op_state
 
 type t = {
   rocq : Rocq_protocol.t;
@@ -102,6 +124,7 @@ type t = {
   (* Pending intent slots — picked up by [poll] when [current_op] is
      [None] and rocq is idle. *)
   mutable pending_query : pending_query option;
+  mutable pending_fetch : pending_fetch option;
 }
 
 let create ?(prog="coqidetop") ?(args=[]) buf =
@@ -112,7 +135,7 @@ let create ?(prog="coqidetop") ?(args=[]) buf =
     err_range = None; target_end = 0;
     goals_dirty = false; needs_rewind = None; state_changed = false;
     user_step_pending = false;
-    current_op = None; pending_query = None }
+    current_op = None; pending_query = None; pending_fetch = None }
 
 (* Find a sentence by state_id *)
 let find_sentence t sid =
@@ -458,6 +481,43 @@ let advance_query_op t qos =
        t.current_op <- None;
        t.state_changed <- true)
 
+(* Begin a fetch_goals op: send Printopts (with per-call overrides),
+   then fetch goals at the current tip. The formatted result lands
+   in [pf.pf_result] at the end. *)
+let start_fetch_goals t (pf : pending_fetch) =
+  let opts = Printopts.to_set_options_with pf.pf_extra_opts in
+  let pending = Rocq_protocol.submit t.rocq (Xmlprotocol.set_options opts) in
+  t.current_op <- Some (Op_fetch_goals {
+    fos_pf = pf;
+    fos_phase = Fp_set_options pending;
+  });
+  t.state_changed <- true
+
+let advance_fetch_goals_op t fos =
+  match fos.fos_phase with
+  | Fp_set_options p ->
+    (match Rocq_protocol.poll_response p with
+     | None -> ()
+     | Some _ ->
+       process_feedback t;
+       let pending = Rocq_protocol.submit t.rocq (Xmlprotocol.goals ()) in
+       t.current_op <- Some (Op_fetch_goals {
+         fos with fos_phase = Fp_fetch pending });
+       t.state_changed <- true)
+  | Fp_fetch p ->
+    (match Rocq_protocol.poll_response p with
+     | None -> ()
+     | Some result ->
+       process_feedback t;
+       let pf = fos.fos_pf in
+       (match result with
+        | Interface.Good (Some gs) ->
+          pf.pf_result := Some (format_goals
+            ~all_hyps:pf.pf_all_hyps ~width:pf.pf_width gs)
+        | Interface.Good None | Interface.Fail _ -> ());
+       t.current_op <- None;
+       t.state_changed <- true)
+
 (* Begin a goals-refresh op: send Printopts, then queue the goals
    fetch in the second phase. Caller has already cleared
    [goals_dirty]. *)
@@ -530,6 +590,7 @@ let advance_op t = function
   | Op_query qos -> advance_query_op t qos
   | Op_verifying v -> advance_verifying_op t v
   | Op_refreshing_goals phase -> advance_refreshing_goals_op t phase
+  | Op_fetch_goals fos -> advance_fetch_goals_op t fos
 
 (* Poll: process feedback and drive async stepping.
    Returns true if state changed. *)
@@ -568,7 +629,12 @@ let poll t =
            | Some pq ->
              t.pending_query <- None;
              start_query t pq
-           | None -> ()
+           | None ->
+             match t.pending_fetch with
+             | Some pf ->
+               t.pending_fetch <- None;
+               start_fetch_goals t pf
+             | None -> ()
        end
      end);
   let changed = t.state_changed in
@@ -692,7 +758,8 @@ let set_messages t msgs =
 let is_busy t =
   Rocq_protocol.is_busy t.rocq || verified_end t < t.target_end
   || t.goals_dirty || t.needs_rewind <> None
-  || t.current_op <> None || t.pending_query <> None
+  || t.current_op <> None
+  || t.pending_query <> None || t.pending_fetch <> None
 
 let set_user_step_pending t = t.user_step_pending <- true
 
@@ -741,19 +808,26 @@ let query_blocking ?(extra_opts=[]) t phrase =
     ignore (poll t)
   done
 
-(* Synchronously fetch goals and format them *)
+(* Fetch goals and format them, blocking until the result lands.
+   Drives the [Op_fetch_goals] state machine to completion. Used by
+   the MCP [get_goals] handler until step 7 splits it into a
+   start/poll pair. *)
 let fetch_goals_text ?(all_hyps=true) ?(width=default_width) ?(extra_opts=[]) t =
-  let opts = Printopts.to_set_options_with extra_opts in
-  ignore (Rocq_protocol.set_options t.rocq opts);
-  process_feedback t;
-  match Rocq_protocol.goals t.rocq with
-  | Interface.Good (Some gs) ->
-    process_feedback t;
-    Some (format_goals ~all_hyps ~width gs)
-  | Interface.Good None ->
-    process_feedback t; None
-  | Interface.Fail _ ->
-    process_feedback t; None
+  match t.pending_fetch with
+  | Some _ -> None  (* concurrent fetch in flight; drop *)
+  | None ->
+    let result = ref None in
+    t.pending_fetch <- Some {
+      pf_all_hyps = all_hyps; pf_width = width;
+      pf_extra_opts = extra_opts; pf_result = result;
+    };
+    while t.pending_fetch <> None || (match t.current_op with
+                                      | Some (Op_fetch_goals _) -> true
+                                      | _ -> false) do
+      ignore (Main_loop.select_with_watches [] 0.1);
+      ignore (poll t)
+    done;
+    !result
 
 let sync_options_and_refresh t =
   t.goals_dirty <- true;
