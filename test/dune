@@ -3,5 +3,6 @@
 (tests
  (names test_highlight test_protocol test_sentence test_project test_compose
         test_wrap test_width test_tab_names test_locate test_grid test_qualid
-        test_search test_msg_pane test_file_watch test_dep_graph)
+        test_search test_msg_pane test_file_watch test_dep_graph
+        test_search_results)
  (libraries rocqtui_lib unix))
