@@ -724,7 +724,7 @@ let handle_tool t client name args mgr =
     let temp_opts = parse_display_options (args |> member "options") in
     (match tab.session with
      | Some s ->
-       Session.query ~extra_opts:temp_opts s cmd
+       Session.query_blocking ~extra_opts:temp_opts s cmd
      | None -> ());
     let msgs = match tab.session with
       | Some s -> Session.messages s | None -> [] in

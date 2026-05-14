@@ -21,6 +21,43 @@ type sentence_info = {
   mutable status : sentence_status;
 }
 
+(* User intent: run [phrase] as a query at the current tip, with
+   per-call printing-option overrides. One-deep slot — second press
+   while a query is already pending is silently dropped. *)
+type pending_query = {
+  pq_phrase : string;
+  pq_extra_opts : (string list * Interface.option_value) list;
+}
+
+(* Phases of an in-flight query op. The query proceeds: send setup
+   sentences ([Set Printing X.] etc.) one at a time → run the query
+   at the resulting tip → restore the original tip via [edit_at]. *)
+type query_phase =
+  | Qp_setup of {
+      remaining : string list;     (* setup sentences left to send *)
+      tip : Stateid.t;             (* tip after sentences sent so far *)
+      pending : Interface.add_rty Rocq_protocol.handle;
+    }
+  | Qp_query of {
+      tip : Stateid.t;             (* tip the query is running at *)
+      pending : unit Rocq_protocol.handle;
+    }
+  | Qp_restore of {
+      pending : Interface.edit_at_rty Rocq_protocol.handle;
+    }
+
+type query_op_state = {
+  qos_pq : pending_query;
+  qos_original_tip : Stateid.t;
+  (* Query-feedback msgs captured between Qp_query and Qp_restore so
+     we can restore them after the edit_at adds its own feedback. *)
+  qos_query_msgs : Pp.t list;
+  qos_phase : query_phase;
+}
+
+type op_state =
+  | Op_query of query_op_state
+
 type t = {
   rocq : Rocq_protocol.t;
   buf : Buffer.t;
@@ -44,6 +81,14 @@ type t = {
      session settles. MCP-initiated steps don't set this, so they
      never trigger the post-step auto-switch. *)
   mutable user_step_pending : bool;
+  (* Active multi-call op (currently just queries). At most one op
+     can be active. Compound ops own the rocq queue from start to
+     finish; verification and other intent dispatch wait until
+     [current_op = None]. *)
+  mutable current_op : op_state option;
+  (* Pending intent slots — picked up by [poll] when [current_op] is
+     [None] and rocq is idle. *)
+  mutable pending_query : pending_query option;
 }
 
 let create ?(prog="coqidetop") ?(args=[]) buf =
@@ -53,7 +98,8 @@ let create ?(prog="coqidetop") ?(args=[]) buf =
     next_edit_id = -1; goals_cache = None; msgs = [];
     err_range = None; target_end = 0;
     goals_dirty = false; needs_rewind = None; state_changed = false;
-    user_step_pending = false }
+    user_step_pending = false;
+    current_op = None; pending_query = None }
 
 (* Find a sentence by state_id *)
 let find_sentence t sid =
@@ -325,55 +371,165 @@ let sentence_start_before t off =
   in
   find t.sentences
 
+(* --- Query op state machine ---
+
+   Bake current Printopts into a transient state so [Stm.query]
+   renders with them (see the long comment near [Session.query]
+   below for the rationale). The op runs as: send setup sentences
+   one at a time → run the query at the resulting tip → restore
+   the original tip via [edit_at]. *)
+
+let mk_add_call ~phrase ~edit_id ~tip ~verbose ~bp ~line ~bol =
+  Xmlprotocol.add ((((phrase, edit_id), (tip, verbose)), bp), (line, bol))
+
+(* Submit the next setup sentence on top of [tip]; build a Qp_setup
+   phase referencing the resulting handle. *)
+let issue_setup_add t ~remaining ~tip ~next =
+  let eid = t.next_edit_id in
+  t.next_edit_id <- eid - 1;
+  let call = mk_add_call ~phrase:next ~edit_id:eid ~tip
+    ~verbose:false ~bp:0 ~line:0 ~bol:0 in
+  let pending = Rocq_protocol.submit t.rocq call in
+  Qp_setup { remaining; tip; pending }
+
+(* Submit the query at [tip]; build a Qp_query phase. *)
+let issue_query t ~pq ~tip =
+  let pending = Rocq_protocol.submit t.rocq
+    (Xmlprotocol.query (0, (pq.pq_phrase, tip))) in
+  Qp_query { tip; pending }
+
+(* Begin a query op from a pending intent. *)
+let start_query t (pq : pending_query) =
+  let original_tip = t.tip in
+  let setup = Printopts.to_vernac_sentences ~override:pq.pq_extra_opts () in
+  t.msgs <- [];
+  let phase = match setup with
+    | [] -> issue_query t ~pq ~tip:original_tip
+    | next :: rest -> issue_setup_add t ~remaining:rest ~tip:original_tip ~next
+  in
+  t.current_op <- Some (Op_query {
+    qos_pq = pq;
+    qos_original_tip = original_tip;
+    qos_query_msgs = [];
+    qos_phase = phase;
+  });
+  t.state_changed <- true
+
+let advance_query_op t qos =
+  match qos.qos_phase with
+  | Qp_setup s ->
+    (match Rocq_protocol.poll_response s.pending with
+     | None -> ()
+     | Some (Interface.Good (new_id, _)) ->
+       process_feedback t;
+       t.msgs <- [];  (* discard setup feedback *)
+       let phase = match s.remaining with
+         | [] -> issue_query t ~pq:qos.qos_pq ~tip:new_id
+         | next :: rest -> issue_setup_add t ~remaining:rest ~tip:new_id ~next
+       in
+       t.current_op <- Some (Op_query { qos with qos_phase = phase });
+       t.state_changed <- true
+     | Some (Interface.Fail _) ->
+       process_feedback t;
+       t.msgs <- [];
+       (* Setup failed. Run the query at [original_tip] regardless of
+          whether earlier setup sentences succeeded — matches prior
+          synchronous behavior. If the tip did move, [Qp_query] will
+          see [tip ≠ original_tip] and trigger restore. *)
+       let phase = issue_query t ~pq:qos.qos_pq ~tip:qos.qos_original_tip in
+       t.current_op <- Some (Op_query { qos with qos_phase = phase });
+       t.state_changed <- true)
+  | Qp_query r ->
+    (match Rocq_protocol.poll_response r.pending with
+     | None -> ()
+     | Some _ ->
+       process_feedback t;
+       let query_msgs = t.msgs in
+       if Stateid.equal r.tip qos.qos_original_tip then begin
+         (* No restore needed *)
+         t.current_op <- None;
+         t.state_changed <- true
+       end else begin
+         let h = Rocq_protocol.submit t.rocq
+           (Xmlprotocol.edit_at qos.qos_original_tip) in
+         t.current_op <- Some (Op_query {
+           qos with
+           qos_query_msgs = query_msgs;
+           qos_phase = Qp_restore { pending = h };
+         });
+         t.state_changed <- true
+       end)
+  | Qp_restore r ->
+    (match Rocq_protocol.poll_response r.pending with
+     | None -> ()
+     | Some _ ->
+       process_feedback t;
+       (* edit_at may have appended its own feedback; replace t.msgs
+          with the captured query result so the user only sees that. *)
+       t.msgs <- qos.qos_query_msgs;
+       t.current_op <- None;
+       t.state_changed <- true)
+
+let advance_op t = function
+  | Op_query qos -> advance_query_op t qos
+
 (* Poll: process feedback and drive async stepping.
    Returns true if state changed. *)
 let poll t =
   Rocq_protocol.poll t.rocq;
   process_feedback t;
-  if not (Rocq_protocol.is_busy t.rocq) then begin
-    (* Handle deferred rewind from callback *)
-    (match t.needs_rewind with
-     | Some safe_id ->
-       t.needs_rewind <- None;
-       rewind_to_state t safe_id
-     | None -> ());
-    let has_error = List.exists (fun si ->
-      match si.status with Error _ -> true | _ -> false
-    ) t.sentences in
-    if has_error then
-      rewind_errors t
-    else if verified_end t > t.target_end then begin
-      (* Deferred rewind from step_backward/go_to_cursor *)
-      rewind_to_target t;
-      t.goals_dirty <- true
-    end
-    else if not (Rocq_protocol.is_busy t.rocq) then begin
-      let vend = verified_end t in
-      if vend < t.target_end then
-        submit_next_sentence t
-      else if t.goals_dirty then begin
-        t.goals_dirty <- false;
-        let opts = Printopts.to_set_options () in
-        Rocq_protocol.send_call t.rocq
-          (Xmlprotocol.set_options opts)
-          (fun _result ->
-             process_feedback t;
-             Rocq_protocol.send_call t.rocq
-               (Xmlprotocol.goals ())
-               (fun result ->
-                  process_feedback t;
-                  (match result with
-                   | Interface.Good (Some gs) ->
-                     t.goals_cache <- Some gs
-                   | Interface.Good None ->
-                     t.goals_cache <- None
-                   | Interface.Fail (_, _, msg) ->
-                     t.msgs <- t.msgs @ [msg];
-                     t.goals_cache <- None);
-                  t.state_changed <- true))
-      end
-    end
-  end;
+  (match t.current_op with
+   | Some op -> advance_op t op
+   | None ->
+     if not (Rocq_protocol.is_busy t.rocq) then begin
+       (* Handle deferred rewind from callback *)
+       (match t.needs_rewind with
+        | Some safe_id ->
+          t.needs_rewind <- None;
+          rewind_to_state t safe_id
+        | None -> ());
+       let has_error = List.exists (fun si ->
+         match si.status with Error _ -> true | _ -> false
+       ) t.sentences in
+       if has_error then
+         rewind_errors t
+       else if verified_end t > t.target_end then begin
+         (* Deferred rewind from step_backward/go_to_cursor *)
+         rewind_to_target t;
+         t.goals_dirty <- true
+       end
+       else if not (Rocq_protocol.is_busy t.rocq) then begin
+         let vend = verified_end t in
+         if vend < t.target_end then
+           submit_next_sentence t
+         else if t.goals_dirty then begin
+           t.goals_dirty <- false;
+           let opts = Printopts.to_set_options () in
+           Rocq_protocol.send_call t.rocq
+             (Xmlprotocol.set_options opts)
+             (fun _result ->
+                process_feedback t;
+                Rocq_protocol.send_call t.rocq
+                  (Xmlprotocol.goals ())
+                  (fun result ->
+                     process_feedback t;
+                     (match result with
+                      | Interface.Good (Some gs) ->
+                        t.goals_cache <- Some gs
+                      | Interface.Good None ->
+                        t.goals_cache <- None
+                      | Interface.Fail (_, _, msg) ->
+                        t.msgs <- t.msgs @ [msg];
+                        t.goals_cache <- None);
+                     t.state_changed <- true))
+         end
+         else match t.pending_query with
+           | Some pq ->
+             t.pending_query <- None;
+             start_query t pq
+           | None -> ()
+       end
+     end);
   let changed = t.state_changed in
   t.state_changed <- false;
   changed
@@ -495,6 +651,7 @@ let set_messages t msgs =
 let is_busy t =
   Rocq_protocol.is_busy t.rocq || verified_end t < t.target_end
   || t.goals_dirty || t.needs_rewind <> None
+  || t.current_op <> None || t.pending_query <> None
 
 let set_user_step_pending t = t.user_step_pending <- true
 
@@ -517,37 +674,31 @@ let is_busy_opt = function
    iteration's unfreeze hits a cache miss and reverts Goptions). What
    does work: [Stm.add] freezes live Goptions into the new state's
    snapshot. We Add one [Set Printing X.] per option, query at the
-   resulting tip, then [edit_at] back to undo the document mutation. *)
+   resulting tip, then [edit_at] back to undo the document mutation.
+
+   Pull-style: this just sets [pending_query]; [Session.poll] picks
+   it up when the session is idle and runs it as an [Op_query] state
+   machine (see [start_query], [advance_query_op]). Second presses
+   while a query is pending are silently dropped. *)
 let query ?(extra_opts=[]) t phrase =
-  t.msgs <- [];
-  let prev_tip = t.tip in
-  let setup = Printopts.to_vernac_sentences ~override:extra_opts () in
-  let final_tip = ref prev_tip in
-  let setup_ok = ref true in
-  List.iter (fun sent ->
-    if !setup_ok then begin
-      let eid = t.next_edit_id in
-      t.next_edit_id <- eid - 1;
-      match Rocq_protocol.add t.rocq
-        ~state_id:!final_tip ~edit_id:eid ~verbose:false
-        ~bp:0 ~line:0 ~bol:0 sent with
-      | Interface.Good (new_id, _) -> final_tip := new_id
-      | Interface.Fail _ -> setup_ok := false
-    end
-  ) setup;
-  process_feedback t;
-  (* Discard any feedback from the setup sentences; the user only
-     wants to see output from their actual query. *)
-  t.msgs <- [];
-  let query_at = if !setup_ok then !final_tip else prev_tip in
-  Rocq_protocol.query t.rocq ~state_id:query_at phrase;
-  process_feedback t;
-  let query_msgs = t.msgs in
-  if !final_tip <> prev_tip then begin
-    ignore (Rocq_protocol.edit_at t.rocq prev_tip);
-    process_feedback t
-  end;
-  t.msgs <- query_msgs
+  match t.pending_query with
+  | Some _ -> ()  (* already pending; drop *)
+  | None ->
+    t.pending_query <- Some {
+      pq_phrase = phrase;
+      pq_extra_opts = extra_opts;
+    };
+    t.state_changed <- true
+
+(* TEMPORARY: drives the query state machine to completion before
+   returning. Used by MCP's synchronous [query] handler until step 7
+   migrates MCP to a start/poll pair. Removed then. *)
+let query_blocking ?(extra_opts=[]) t phrase =
+  query ~extra_opts t phrase;
+  while t.pending_query <> None || t.current_op <> None do
+    ignore (Main_loop.select_with_watches [] 0.1);
+    ignore (poll t)
+  done
 
 (* Synchronously fetch goals and format them *)
 let fetch_goals_text ?(all_hyps=true) ?(width=default_width) ?(extra_opts=[]) t =

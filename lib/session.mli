@@ -79,6 +79,14 @@ val query :
   ?extra_opts:(string list * Interface.option_value) list ->
   t -> string -> unit
 
+(** Like [query] but drives the state machine to completion before
+    returning. Provided for the MCP synchronous [query] handler;
+    blocks the main thread until the result lands in [messages].
+    Removed once MCP migrates to a start/poll handler pair. *)
+val query_blocking :
+  ?extra_opts:(string list * Interface.option_value) list ->
+  t -> string -> unit
+
 val fetch_goals_text :
   ?all_hyps:bool ->
   ?width:int ->
