@@ -406,6 +406,32 @@ let activate_selected t =
       TreeOpen line.entry.full_path
     else TreeContinue
 
+(* Dep-view-only: step to the next/previous file in the current
+   selection's dependency closure (skipping dimmed files). When no
+   closure is computable (no graph yet, or selected isn't in graph)
+   we fall back to a plain step so Left/Right still moves something. *)
+let move_to_in_closure t direction =
+  if t.view <> VDepOrder then ()
+  else begin
+    ensure_closure t;
+    let st = t.dep_state in
+    let n = Array.length st.lines in
+    if n = 0 then ()
+    else if Hashtbl.length t.closure = 0 then
+      move_selection t direction
+    else
+      let i = ref (st.selected + direction) in
+      let found = ref false in
+      while not !found && !i >= 0 && !i < n do
+        if Hashtbl.mem t.closure st.lines.(!i).entry.rel_path
+        then begin
+          st.selected <- !i;
+          found := true
+        end else
+          i := !i + direction
+      done
+  end
+
 (* Number of file lines visible in the panel (height minus header minus
    filter row when active). *)
 let visible_content_rows t r =
@@ -457,27 +483,37 @@ let handle_key t r ch =
     TreeContinue
   end
   else if ch = 261 then begin (* Right *)
-    (match selected_line t with
-     | Some line when line.entry.is_dir && t.view = VTree ->
-       if not line.expanded then begin
-         expand_dir t line.entry.rel_path;
-         ensure_visible t visible_rows
-       end
-       else begin
-         move_selection t 1;
-         ensure_visible t visible_rows
-       end
-     | _ -> ());
+    if t.view = VDepOrder then begin
+      move_to_in_closure t 1;
+      ensure_visible t visible_rows
+    end
+    else begin
+      (match selected_line t with
+       | Some line when line.entry.is_dir ->
+         if not line.expanded then begin
+           expand_dir t line.entry.rel_path;
+           ensure_visible t visible_rows
+         end
+         else begin
+           move_selection t 1;
+           ensure_visible t visible_rows
+         end
+       | _ -> ())
+    end;
     TreeContinue
   end
   else if ch = 260 then begin (* Left *)
-    (match selected_line t with
-     | Some line when line.entry.is_dir && line.expanded
-                      && t.view = VTree ->
-       collapse_dir t line.entry.rel_path
-     | _ when t.view = VTree -> ignore (move_to_parent t)
-     | _ -> ());
-    ensure_visible t visible_rows;
+    if t.view = VDepOrder then begin
+      move_to_in_closure t (-1);
+      ensure_visible t visible_rows
+    end
+    else begin
+      (match selected_line t with
+       | Some line when line.entry.is_dir && line.expanded ->
+         collapse_dir t line.entry.rel_path
+       | _ -> ignore (move_to_parent t));
+      ensure_visible t visible_rows
+    end;
     TreeContinue
   end
   else if ch = 10 || ch = 13 then begin (* Enter *)
