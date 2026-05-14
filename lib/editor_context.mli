@@ -29,6 +29,17 @@ type t = {
   mutable jump_stack : jump_point list;
   mutable jump_target : (int * int) option;
   mutable search_panel_msg : string;
+  (** Whether the search prompt is scanning the whole project rather
+      than just the active buffer. Toggled by [Alt+P] inside the
+      prompt. *)
+  mutable project_mode : bool;
+  (** Latest Search_results snapshot — single-file when
+      [project_mode = false], project-wide when true. Read by the
+      Search messages tab and by F3 / Shift+F3 stepping. *)
+  mutable search : Search_results.t option;
+  (** Async project-wide scanner; results land here when
+      [project_mode] is on. *)
+  project_search : Project_search.t;
   mutable focus : focus;
   mutable file_tree : File_tree.t option;
 }

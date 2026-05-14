@@ -701,7 +701,7 @@ let handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r =
            let result = handle_pane_scroll scroll_r Render.PMessages in
            tab.rocq_msg.rms_scroll <- !scroll_r;
            (match result with Some a -> a | None -> Continue)
-         | Msg_pane.Build | Msg_pane.Errors ->
+         | Msg_pane.Build | Msg_pane.Errors | Msg_pane.Search ->
            let mt = Msg_pane.active_tab () in
            let scroll_r = ref mt.scroll in
            let result = handle_pane_scroll scroll_r Render.PMessages in

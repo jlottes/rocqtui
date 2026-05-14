@@ -28,7 +28,7 @@ let active_msg_pane_state (tab : Tab.t) =
     `Text (tab.rocq_msg.rms_sel,
            tab.rocq_msg.rms_lines_cache,
            tab.rocq_msg.rms_scroll)
-  | Msg_pane.Build | Msg_pane.Errors ->
+  | Msg_pane.Build | Msg_pane.Errors | Msg_pane.Search ->
     let t = Msg_pane.active_tab () in
     `Text (t.sel, t.lines_cache, t.scroll)
   | Msg_pane.Terminal _ -> `Terminal

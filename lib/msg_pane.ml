@@ -2,10 +2,11 @@ type kind =
   | Rocq
   | Build
   | Errors
+  | Search
   | Terminal of Terminal.t
 
 let kind_eq a b = match a, b with
-  | Rocq, Rocq | Build, Build | Errors, Errors -> true
+  | Rocq, Rocq | Build, Build | Errors, Errors | Search, Search -> true
   | Terminal t1, Terminal t2 -> t1 == t2
   | _ -> false
 
@@ -111,6 +112,7 @@ let display_name tab =
   | Rocq -> "Rocq"
   | Build -> "Build"
   | Errors -> "Errors"
+  | Search -> "Search"
   | Terminal term -> Terminal.title term
 
 let sync_terminals () =

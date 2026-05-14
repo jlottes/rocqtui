@@ -12,6 +12,7 @@ let assert_eq_kind msg got expected =
       | Msg_pane.Rocq -> "Rocq"
       | Msg_pane.Build -> "Build"
       | Msg_pane.Errors -> "Errors"
+      | Msg_pane.Search -> "Search"
       | Msg_pane.Terminal _ -> "Terminal _"
     in
     Printf.printf "  expected: %s\n  got:      %s\n" (to_s expected) (to_s got);
@@ -33,7 +34,8 @@ let assert_eq_kinds msg got expected =
   else begin
     let to_s = function
       | Msg_pane.Rocq -> "R" | Msg_pane.Build -> "B"
-      | Msg_pane.Errors -> "E" | Msg_pane.Terminal _ -> "T"
+      | Msg_pane.Errors -> "E" | Msg_pane.Search -> "S"
+      | Msg_pane.Terminal _ -> "T"
     in
     Printf.printf "  expected: [%s]\n  got:      [%s]\n"
       (String.concat ";" (List.map to_s expected))

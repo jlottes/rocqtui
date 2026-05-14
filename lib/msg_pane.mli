@@ -21,6 +21,7 @@ type kind =
   | Rocq
   | Build
   | Errors
+  | Search
   | Terminal of Terminal.t
 
 val kind_eq : kind -> kind -> bool

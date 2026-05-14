@@ -166,7 +166,7 @@ let handle (ctx : Editor_context.t) (mev : Input.mouse_event) (tab : Tab.t) r
          | Msg_pane.Rocq ->
            tab.rocq_msg.rms_scroll <-
              max 0 (tab.rocq_msg.rms_scroll + delta)
-         | Msg_pane.Build | Msg_pane.Errors ->
+         | Msg_pane.Build | Msg_pane.Errors | Msg_pane.Search ->
            let mt = Msg_pane.active_tab () in
            mt.scroll <- max 0 (mt.scroll + delta))
       | _ -> ()
@@ -198,11 +198,30 @@ let handle (ctx : Editor_context.t) (mev : Input.mouse_event) (tab : Tab.t) r
       ctx.focus <-
         (if pane = Render.PGoals then Editor_context.FGoals
          else Editor_context.FMessages);
-      (* Build / Errors tab click → jump to error *)
+      (* Build / Errors / Search tab click → jump to entry *)
       let jumped_to_error =
         if pane = Render.PMessages then begin
           match Msg_pane.active_kind () with
           | Msg_pane.Terminal _ | Msg_pane.Rocq -> false
+          | Msg_pane.Search ->
+            (match Geom.screen_to_pane_pos tab r ~x ~y `Messages with
+             | None -> false
+             | Some (row, _col) ->
+               (match Search_tab.lookup_tab_row row with
+                | None -> false
+                | Some (path, idx) ->
+                  (match ctx.search with
+                   | None -> false
+                   | Some sr ->
+                     (match Search_results.find_match sr path idx with
+                      | None -> false
+                      | Some m ->
+                        Search_results.set_current sr (Some (path, idx));
+                        Jump.push ctx tab;
+                        ctx.jump_target <-
+                          Some (m.ml_line - 1, m.ml_col_start);
+                        result := Some (Action.Open_file path);
+                        true))))
           | Msg_pane.Build | Msg_pane.Errors as ak ->
             (match Geom.screen_to_pane_pos tab r ~x ~y `Messages with
              | None -> false

@@ -281,7 +281,7 @@ let errors_last_active : int option ref = ref None
 (* Sync the global Msg_pane sub-tab list with current global state.
    Purely passive — never changes which sub-tab is active. Auto-switch
    is handled at action-handler call sites. *)
-let update_msg_tabs r (tab : Tab.t) =
+let update_msg_tabs (ctx : Editor_context.t) r (tab : Tab.t) =
   (* Rocq tab is always present. Its content (and scroll/sel) is
      pulled at render time from the active file. *)
   ignore (Msg_pane.ensure Msg_pane.Rocq);
@@ -319,10 +319,26 @@ let update_msg_tabs r (tab : Tab.t) =
     end else if cur = None then
       errors_last_active := None
   end;
+  (* Search tab: ensure when ctx.search has any matches (or a scan is
+     active so the placeholder "scanning…" header can show); remove
+     when neither. *)
+  let search_active =
+    match ctx.Editor_context.search with
+    | Some r ->
+      Search_results.total r > 0 || Search_results.scanning r
+    | None -> false
+  in
+  if not search_active then
+    Msg_pane.remove Msg_pane.Search
+  else begin
+    let st = Msg_pane.ensure Msg_pane.Search in
+    let (lines, _active_row) = Search_tab.render ctx.search in
+    if lines <> st.lines then st.lines <- lines
+  end;
   ignore tab
 
-let render_messages r (tab : Tab.t) =
-  update_msg_tabs r tab;
+let render_messages (ctx : Editor_context.t) r (tab : Tab.t) =
+  update_msg_tabs ctx r tab;
   Msg_pane.sync_terminals ();
   (* Resize all terminals to current messages pane dims. No-op if
      unchanged, so safe to call every frame. *)
@@ -351,9 +367,13 @@ let render_messages r (tab : Tab.t) =
       ~set_cache:(fun l -> tab.rocq_msg.rms_lines_cache <- l)
       r Render.PMessages ms lines;
     tab.rocq_msg.rms_scroll <- !ms
-  | Msg_pane.Build | Msg_pane.Errors ->
+  | Msg_pane.Build | Msg_pane.Errors | Msg_pane.Search ->
     let ms = ref active.scroll in
-    let hanging = match active.kind with Msg_pane.Errors -> 6 | _ -> 0 in
+    let hanging = match active.kind with
+      | Msg_pane.Errors -> 6
+      | Msg_pane.Search -> 10  (* "  ▸ NNNN: " *)
+      | _ -> 0
+    in
     render_text_pane ~sel:active.sel
       ~set_cache:(fun l -> active.lines_cache <- l)
       ~hanging
@@ -796,7 +816,7 @@ let render_all (ctx : Editor_context.t) r (tab : Tab.t) =
     ();
   render_script ctx r tab;
   render_goals ctx r tab;
-  render_messages r tab;
+  render_messages ctx r tab;
   (match ctx.file_tree with
    | Some ft when Render.file_tree_visible r ->
      let (graph, running) = ctx.dep_state () in

@@ -32,6 +32,9 @@ type t = {
      replace-all. Cleared by any other prompt interaction. Stays in the
      panel only — does not leak into the normal status bar. *)
   mutable search_panel_msg : string;
+  mutable project_mode : bool;
+  mutable search : Search_results.t option;
+  project_search : Project_search.t;
   mutable focus : focus;
   (* File-tree panel: lazily created on first F8. Survives across tabs.
      Whether the panel currently receives keys is [focus = FFileTree]. *)
@@ -58,5 +61,8 @@ let create
     jump_stack = [];
     jump_target = None;
     search_panel_msg = "";
+    project_mode = false;
+    search = None;
+    project_search = Project_search.create ();
     focus = FScript;
     file_tree = None }
