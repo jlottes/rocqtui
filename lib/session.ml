@@ -87,11 +87,21 @@ type fetch_op_state = {
   fos_phase : fetch_phase;
 }
 
+(* In-flight rewind to [ros_target_id]. On Good, sentences whose
+   state_id is "above" target_id are dropped (their state was
+   rolled back by rocq). On Fail, [safe_id] tells us where rocq
+   actually landed and we drop accordingly. *)
+type rewinding_op_state = {
+  ros_target_id : Stateid.t;
+  ros_pending : Interface.edit_at_rty Rocq_protocol.handle;
+}
+
 type op_state =
   | Op_query of query_op_state
   | Op_verifying of verifying_op_state
   | Op_refreshing_goals of refresh_phase
   | Op_fetch_goals of fetch_op_state
+  | Op_rewinding of rewinding_op_state
 
 type t = {
   rocq : Rocq_protocol.t;
@@ -175,37 +185,6 @@ let verified_end t =
   | s :: _ -> s.end_off
   | [] -> 0
 
-(* Rewind errored sentences *)
-let rewind_errors t =
-  let rec find_and_drop = function
-    | [] -> None
-    | s :: rest ->
-      match s.status with
-      | Error _ ->
-        let target_id = match rest with
-          | s2 :: _ -> s2.state_id
-          | [] -> Stateid.initial
-        in
-        Some (rest, target_id, s)
-      | _ ->
-        match find_and_drop rest with
-        | Some (surviving, target_id, err_s) ->
-          Some (surviving, target_id, err_s)
-        | None -> None
-  in
-  match find_and_drop t.sentences with
-  | None -> ()
-  | Some (surviving, target_id, err_s) ->
-    t.err_range <- Some (err_s.start_off, err_s.end_off);
-    t.sentences <- surviving;
-    t.tip <- target_id;
-    (* Snap target back to error *)
-    t.target_end <- (match surviving with s :: _ -> s.end_off | [] -> 0);
-    let result = Rocq_protocol.edit_at t.rocq target_id in
-    process_feedback t;
-    (match result with Interface.Good _ -> () | Interface.Fail _ -> ());
-    t.goals_dirty <- true;
-    t.state_changed <- true
 
 (* Format goals for display.
 
@@ -350,32 +329,6 @@ let start_verify t =
     t.current_op <- Some (Op_verifying { vos_sentence = s; vos_pending = pending });
     t.state_changed <- true
 
-(* Sync: rewind verified region to match target *)
-let rewind_to_target t =
-  while verified_end t > t.target_end do
-    match t.sentences with
-    | [] -> ()  (* shouldn't happen *)
-    | _ :: rest ->
-      let target_id = match rest with
-        | s :: _ -> s.state_id
-        | [] -> Stateid.initial
-      in
-      let result = Rocq_protocol.edit_at t.rocq target_id in
-      process_feedback t;
-      (match result with
-       | Interface.Good _ ->
-         t.sentences <- rest;
-         t.tip <- target_id;
-         t.state_changed <- true
-       | Interface.Fail (safe_id, _, msg) ->
-         t.msgs <- t.msgs @ [Pp.(str "Undo failed: " ++ msg)];
-         if not (Stateid.equal safe_id t.tip
-                 || Stateid.equal safe_id Stateid.dummy) then
-           rewind_to_state t safe_id;
-         (* Break the loop *)
-         t.target_end <- verified_end t)
-  done
-
 (* Find the sentence boundary before a given offset *)
 let sentence_start_before t off =
   let rec find = function
@@ -480,6 +433,87 @@ let advance_query_op t qos =
        t.msgs <- qos.qos_query_msgs;
        t.current_op <- None;
        t.state_changed <- true)
+
+(* Drop sentences whose state was rolled back by an edit_at to
+   [target_id]. After a successful edit_at, only sentences below
+   target_id remain. If target_id is Stateid.initial, drop all. *)
+let drop_above_state target_id sentences =
+  if Stateid.equal target_id Stateid.initial then []
+  else
+    let rec walk = function
+      | [] -> []
+      | s :: _ as rest when Stateid.equal s.state_id target_id -> rest
+      | _ :: rest -> walk rest
+    in
+    walk sentences
+
+(* Compute the state_id we should land at when rewinding to
+   [t.target_end]: state of the topmost sentence whose end_off does
+   not exceed target_end, or Stateid.initial if none. *)
+let target_id_for_target_end t =
+  let rec walk = function
+    | [] -> Stateid.initial
+    | s :: rest when s.end_off > t.target_end -> walk rest
+    | s :: _ -> s.state_id
+  in
+  walk t.sentences
+
+(* Begin a rewind op: issue [edit_at target_id] and stash it. *)
+let start_rewinding t target_id =
+  let pending = Rocq_protocol.submit t.rocq (Xmlprotocol.edit_at target_id) in
+  t.current_op <- Some (Op_rewinding {
+    ros_target_id = target_id;
+    ros_pending = pending;
+  });
+  t.state_changed <- true
+
+let advance_rewinding_op t r =
+  match Rocq_protocol.poll_response r.ros_pending with
+  | None -> ()
+  | Some result ->
+    process_feedback t;
+    (match result with
+     | Interface.Good _ ->
+       t.sentences <- drop_above_state r.ros_target_id t.sentences;
+       t.tip <- r.ros_target_id;
+       t.goals_dirty <- true
+     | Interface.Fail (safe_id, _, msg) ->
+       t.msgs <- t.msgs @ [Pp.(str "Undo failed: " ++ msg)];
+       (* Rocq landed at safe_id rather than the requested target. *)
+       if not (Stateid.equal safe_id Stateid.dummy) then begin
+         t.sentences <- drop_above_state safe_id t.sentences;
+         t.tip <- safe_id
+       end;
+       (* Snap target up to where we ended up so we don't loop. *)
+       t.target_end <- verified_end t;
+       t.goals_dirty <- true);
+    t.current_op <- None;
+    t.state_changed <- true
+
+(* Find the lowest errored sentence and start an [Op_rewinding] back
+   to before it. *)
+let start_rewind_errors_op t =
+  let rec find_lowest_err = function
+    | [] -> None
+    | s :: rest ->
+      match s.status with
+      | Error _ ->
+        let target_id = match rest with
+          | s2 :: _ -> s2.state_id
+          | [] -> Stateid.initial
+        in
+        Some (rest, target_id, s)
+      | _ ->
+        match find_lowest_err rest with
+        | Some _ as r -> r
+        | None -> None
+  in
+  match find_lowest_err t.sentences with
+  | None -> ()
+  | Some (surviving, target_id, err_s) ->
+    t.err_range <- Some (err_s.start_off, err_s.end_off);
+    t.target_end <- (match surviving with s :: _ -> s.end_off | [] -> 0);
+    start_rewinding t target_id
 
 (* Begin a fetch_goals op: send Printopts (with per-call overrides),
    then fetch goals at the current tip. The formatted result lands
@@ -591,6 +625,7 @@ let advance_op t = function
   | Op_verifying v -> advance_verifying_op t v
   | Op_refreshing_goals phase -> advance_refreshing_goals_op t phase
   | Op_fetch_goals fos -> advance_fetch_goals_op t fos
+  | Op_rewinding r -> advance_rewinding_op t r
 
 (* Poll: process feedback and drive async stepping.
    Returns true if state changed. *)
@@ -611,12 +646,10 @@ let poll t =
          match si.status with Error _ -> true | _ -> false
        ) t.sentences in
        if has_error then
-         rewind_errors t
-       else if verified_end t > t.target_end then begin
-         (* Deferred rewind from step_backward/go_to_cursor *)
-         rewind_to_target t;
-         t.goals_dirty <- true
-       end
+         start_rewind_errors_op t
+       else if verified_end t > t.target_end then
+         (* Deferred rewind from step_backward / go_to_cursor / etc. *)
+         start_rewinding t (target_id_for_target_end t)
        else if not (Rocq_protocol.is_busy t.rocq) then begin
          let vend = verified_end t in
          if vend < t.target_end then
@@ -680,17 +713,9 @@ let step_backward t =
     (* Pull cursor back if it was exactly on the old boundary *)
     if cursor_off = old_target then
       Buffer.move_to_byte_offset t.buf new_target;
-    t.state_changed <- true;
-    (* If verified > target, rewind. If busy, defer to poll. *)
-    if verified_end t > t.target_end then begin
-      if Rocq_protocol.is_busy t.rocq then
-        (* Can't rewind yet — poll will handle it when the in-flight call completes *)
-        ()
-      else begin
-        rewind_to_target t;
-        t.goals_dirty <- true
-      end
-    end
+    t.state_changed <- true
+    (* poll picks up the deferred rewind via [target_id_for_target_end]
+       once it's idle. *)
   end
 
 let go_to_offset t offset =
@@ -708,15 +733,8 @@ let go_to_offset t offset =
       pos := end_off
   done;
   t.target_end <- !snapped;
-  t.state_changed <- true;
-  if verified_end t > t.target_end then begin
-    if Rocq_protocol.is_busy t.rocq then
-      ()
-    else begin
-      rewind_to_target t;
-      t.goals_dirty <- true
-    end
-  end
+  t.state_changed <- true
+  (* poll picks up the deferred rewind once idle. *)
 
 let go_to_cursor t =
   let (cur_line, cur_col) = Buffer.cursor t.buf in
