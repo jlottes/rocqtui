@@ -512,25 +512,33 @@ let advance_rewinding_op t r =
     t.current_op <- None;
     t.state_changed <- true
 
-(* Find the lowest errored sentence and start an [Op_rewinding] back
-   to before it. *)
+(* Find the OLDEST errored sentence (deepest in the most-recent-first
+   stack) and start an [Op_rewinding] back to just before it. The
+   oldest error is the root cause; sentences after it are either
+   cascaded failures or unrelated work that's now invalidated, so we
+   want to drop them all. Targeting the topmost error instead would
+   leave older errors in place — has_error stays true, the next poll
+   issues another rewind, and we cascade one sentence per pass. The
+   target also lands on a known-Verified state below the bad region,
+   which rocq is more likely to accept cleanly. *)
 let start_rewind_errors_op t =
-  let rec find_lowest_err = function
+  let rec find_oldest_err = function
     | [] -> None
     | s :: rest ->
-      match s.status with
-      | Error _ ->
-        let target_id = match rest with
-          | s2 :: _ -> s2.state_id
-          | [] -> Stateid.initial
-        in
-        Some (rest, target_id, s)
-      | _ ->
-        match find_lowest_err rest with
-        | Some _ as r -> r
-        | None -> None
+      (* Recurse first — a deeper Error wins. *)
+      match find_oldest_err rest with
+      | Some _ as r -> r
+      | None ->
+        match s.status with
+        | Error _ ->
+          let target_id = match rest with
+            | s2 :: _ -> s2.state_id
+            | [] -> Stateid.initial
+          in
+          Some (rest, target_id, s)
+        | _ -> None
   in
-  match find_lowest_err t.sentences with
+  match find_oldest_err t.sentences with
   | None -> ()
   | Some (surviving, target_id, err_s) ->
     t.err_range <- Some (err_s.start_off, err_s.end_off);
