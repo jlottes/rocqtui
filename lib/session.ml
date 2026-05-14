@@ -482,10 +482,29 @@ let advance_rewinding_op t r =
        t.goals_dirty <- true
      | Interface.Fail (safe_id, _, msg) ->
        t.msgs <- t.msgs @ [Pp.(str "Undo failed: " ++ msg)];
-       (* Rocq landed at safe_id rather than the requested target. *)
        if not (Stateid.equal safe_id Stateid.dummy) then begin
+         (* Rocq landed at safe_id instead. Drop above it. *)
          t.sentences <- drop_above_state safe_id t.sentences;
          t.tip <- safe_id
+       end else begin
+         (* Rocq couldn't tell us a safe state. If we leave Error
+            sentences in [t.sentences], [has_error] stays true and
+            [dispatch_idle_work] will issue the same rewind again
+            forever (e.g. universe-binding errors that block undo).
+            Trim the stack to its contiguous Verified suffix — the
+            most we can be sure of — so the loop terminates. The
+            user can step manually if they want to recover further. *)
+         let oldest_first = List.rev t.sentences in
+         let rec take_verified = function
+           | s :: rest
+             when (match s.status with Verified -> true | _ -> false) ->
+             s :: take_verified rest
+           | _ -> []
+         in
+         t.sentences <- List.rev (take_verified oldest_first);
+         t.tip <- (match t.sentences with
+                   | s :: _ -> s.state_id
+                   | [] -> Stateid.initial)
        end;
        (* Snap target up to where we ended up so we don't loop. *)
        t.target_end <- verified_end t;

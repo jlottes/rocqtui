@@ -8,7 +8,8 @@
 (executables
  (names test_smoke test_display_options test_query_display test_display_keys
         test_error_recovery test_buffer_mutation test_save test_open_file
-        test_bridge_validation test_replace_after test_undo_redo)
+        test_bridge_validation test_replace_after test_undo_redo
+        test_mid_file_error)
  (libraries rocqtui_lib unix yojson str))
 
 ; The harness locates rocqtui and the bridge by walking up from cwd
@@ -48,3 +49,6 @@
 (rule (alias e2e)
  (deps %{exe:../../bin/main.exe} %{exe:../../bridge/rocqtui_mcp.exe})
  (action (run %{dep:test_undo_redo.exe})))
+(rule (alias e2e)
+ (deps %{exe:../../bin/main.exe} %{exe:../../bridge/rocqtui_mcp.exe})
+ (action (run %{dep:test_mid_file_error.exe})))
