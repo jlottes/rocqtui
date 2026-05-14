@@ -18,6 +18,7 @@ type t = {
   switch_tab : int -> unit;
   open_files : unit -> (string * File_tree.file_status) list;
   set_project_dir : string -> unit;
+  dep_state : unit -> Dep_graph.t option * bool;
   modal : Modal.t;
   mutable status_extra : string;
   mutable init_error : string;
@@ -41,10 +42,12 @@ let create
     ~switch_tab
     ~open_files
     ?(set_project_dir = fun _ -> ())
+    ?(dep_state = fun () -> (None, false))
     () =
   { switch_tab;
     open_files;
     set_project_dir;
+    dep_state;
     modal = Modal.create ();
     status_extra = "";
     init_error = "";

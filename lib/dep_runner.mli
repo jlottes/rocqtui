@@ -13,6 +13,10 @@ val create : unit -> t
     directory as CWD so emitted paths are project-relative. *)
 val refresh : t -> project_file:string -> unit
 
+(** Re-run for whatever project file was last passed to [refresh].
+    No-op if [refresh] has never been called. *)
+val refresh_last : t -> unit
+
 (** fd to include in [select]. None when no subprocess is running. *)
 val watch_fd : t -> Unix.file_descr option
 

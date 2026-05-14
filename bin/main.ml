@@ -132,6 +132,13 @@ let () =
     Render.set_tab_bar r true;
   (* Editor context *)
   let fm = File_manager.create () in
+  let dr = Dep_runner.create () in
+  let refresh_dep_runner_for_dir dir =
+    match Project.find_project_file dir with
+    | Some (_, project_file) ->
+      Dep_runner.refresh dr ~project_file
+    | None -> ()
+  in
   let ctx = Editor_context.create
     ~switch_tab:(fun x ->
       match Tab.tab_at_x mgr x with
@@ -147,7 +154,10 @@ let () =
             disk_changed = Buffer.disk_changed t.buf;
           })
       ) mgr.tabs)
-    ~set_project_dir:(fun dir -> File_manager.set_project_dir fm dir)
+    ~set_project_dir:(fun dir ->
+      File_manager.set_project_dir fm dir;
+      refresh_dep_runner_for_dir dir)
+    ~dep_state:(fun () -> (Dep_runner.graph dr, Dep_runner.running dr))
     () in
   ctx.theme_name <- theme.Theme.name;
   if !xcompose then Editor.init_compose ctx;
@@ -167,7 +177,9 @@ let () =
     | None -> ()
   ) mgr.tabs;
   (match project_dirs with
-   | dir :: _ -> File_manager.set_project_dir fm dir
+   | dir :: _ ->
+     File_manager.set_project_dir fm dir;
+     refresh_dep_runner_for_dir dir
    | [] -> ());
   (* Render helper *)
   let render ?(force=false) () =
@@ -302,9 +314,11 @@ let () =
     let build_fds = match Build.watch_fd () with
       | Some fd -> [fd] | None -> [] in
     let watch_fds = [File_manager.watch_fd fm] in
+    let dep_fds = match Dep_runner.watch_fd dr with
+      | Some fd -> [fd] | None -> [] in
     let term_fds = Terminal.fds () in
     let extra_fds = stdin_fd :: mcp_fds @ build_fds @ watch_fds
-      @ List.map fst term_fds in
+      @ dep_fds @ List.map fst term_fds in
     let ready = Main_loop.select_with_watches extra_fds timeout in
     (* Poll terminals *)
     List.iter (fun (fd, term) ->
@@ -329,6 +343,9 @@ let () =
     if Build.poll () then Render_need.request ();
     (* Keep redrawing while the build spinner / result indicator is live. *)
     if Build.needs_repaint () then Render_need.request ();
+    (* Poll the dep runner; a fresh graph triggers a re-render so the
+       panel header transitions from "computing…" to the new state. *)
+    if Dep_runner.poll dr then Render_need.request ();
     (* Poll file manager *)
     List.iter (fun ev ->
       match ev with
@@ -339,6 +356,8 @@ let () =
         (match ctx.Editor_context.file_tree with
          | Some ft -> File_tree.refresh ft
          | None -> ());
+        (* Also re-run rocq dep so the dep-order view stays current. *)
+        Dep_runner.refresh_last dr;
         Render_need.request ()
       | _ ->
         let msg = match ev with
@@ -517,6 +536,7 @@ let () =
   done;
   Mcp_server.shutdown mcp;
   File_manager.close fm;
+  Dep_runner.close dr;
   List.iter (fun (tab : Tab.t) ->
     match tab.session with Some s -> Session.quit s | None -> ()
   ) mgr.tabs;

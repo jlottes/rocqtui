@@ -799,6 +799,8 @@ let render_all (ctx : Editor_context.t) r (tab : Tab.t) =
   render_messages r tab;
   (match ctx.file_tree with
    | Some ft when Render.file_tree_visible r ->
+     let (graph, running) = ctx.dep_state () in
+     File_tree.set_dep_graph ft ~graph ~running;
      File_tree.render ft r
        ~open_files:(ctx.open_files ())
        ~focused:(ctx.focus = FFileTree)

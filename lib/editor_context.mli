@@ -17,6 +17,8 @@ type t = {
   switch_tab : int -> unit;
   open_files : unit -> (string * File_tree.file_status) list;
   set_project_dir : string -> unit;
+  (** Snapshot of the dep runner state. Cheap to call every frame. *)
+  dep_state : unit -> Dep_graph.t option * bool;
   modal : Modal.t;
   mutable status_extra : string;
   mutable init_error : string;
@@ -35,4 +37,5 @@ val create :
   switch_tab:(int -> unit) ->
   open_files:(unit -> (string * File_tree.file_status) list) ->
   ?set_project_dir:(string -> unit) ->
+  ?dep_state:(unit -> Dep_graph.t option * bool) ->
   unit -> t

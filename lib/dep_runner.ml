@@ -76,6 +76,14 @@ let refresh t ~project_file =
   | Some i -> t.inflight <- Some i
   | None -> ()
 
+(* Re-run for whatever project_file was last passed to [refresh].
+   No-op if [refresh] was never called. Convenient for invalidation
+   from ProjectChanged events. *)
+let refresh_last t =
+  match t.last_project_file with
+  | Some pf -> refresh t ~project_file:pf
+  | None -> ()
+
 let watch_fd t = match t.inflight with
   | Some i -> Some i.fd
   | None -> None
