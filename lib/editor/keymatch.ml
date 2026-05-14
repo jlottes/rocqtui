@@ -39,40 +39,10 @@ let match_binding (ev : Input.event) (b : Keys.binding) =
     in
     (match base_code with
      | Some code ->
-       if modifier = 1 then
-         List.mem code b.codes
-       else begin
-         (* Modified special keys: try kitty_codes, then legacy shift/alt/ctrl codes *)
-         let has_kitty = List.exists (fun (kc, m) ->
-           kc = code && m = modifier) b.kitty_codes in
-         if has_kitty then true
-         else begin
-           (* Map modified arrows to legacy ncurses codes *)
-           let has_alt = mods.alt in
-           let has_ctrl = mods.ctrl in
-           let has_shift = mods.shift in
-           (* Map modified arrows to ALL legacy ncurses code variants *)
-           let mapped = match key with
-             | Input.Up ->
-               if has_alt then [564; 567; 573; 558]
-               else if has_ctrl then [567; 573; 558]
-               else if has_shift then [337] else []
-             | Input.Down ->
-               if has_alt then [523; 526; 532; 517]
-               else if has_ctrl then [526; 532; 517]
-               else if has_shift then [336] else []
-             | Input.Right ->
-               if has_alt then [558; 561] else if has_ctrl then [561]
-               else if has_shift then [402] else []
-             | Input.Left ->
-               if has_alt then [543; 546; 552]
-               else if has_ctrl then [546]
-               else if has_shift then [393] else []
-             | _ -> []
-           in
-           List.exists (fun c -> List.mem c b.codes) mapped
-         end
-       end
+       if modifier = 1 then List.mem code b.codes
+       else
+         List.exists (fun (kc, m) ->
+           kc = code && m = modifier) b.kitty_codes
      | None -> false)
   | _ -> false
 

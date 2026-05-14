@@ -68,11 +68,11 @@ let interrupt = {
   context = Global; description = "Interrupt" }
 
 let step_forward = {
-  name = "step_forward"; codes = [526; 532; 517]; kitty_codes = [];
+  name = "step_forward"; codes = []; kitty_codes = [(258, 3)];
   display = "Alt+Down"; context = Global; description = "Step forward" }
 
 let step_backward = {
-  name = "step_backward"; codes = [567; 573; 558]; kitty_codes = [];
+  name = "step_backward"; codes = []; kitty_codes = [(259, 3)];
   display = "Alt+Up"; context = Global; description = "Step backward" }
 
 let go_to_cursor = {
@@ -190,11 +190,11 @@ let prev_error = {
   display = "Shift+F9"; context = Global; description = "Previous build error" }
 
 let prev_tab = {
-  name = "prev_tab"; codes = [552]; kitty_codes = []; display = "Alt+Left";
+  name = "prev_tab"; codes = []; kitty_codes = [(260, 3)]; display = "Alt+Left";
   context = Global; description = "Prev tab" }
 
 let next_tab = {
-  name = "next_tab"; codes = [567]; kitty_codes = []; display = "Alt+Right";
+  name = "next_tab"; codes = []; kitty_codes = [(261, 3)]; display = "Alt+Right";
   context = Global; description = "Next tab" }
 
 (* --- Script-only bindings --- *)
