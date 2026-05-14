@@ -144,6 +144,8 @@ let () =
       match Tab.tab_at_x mgr x with
       | Some i -> mgr.active <- i; Render_need.request ()
       | None -> ())
+    ~switch_to_tab_id:(fun id ->
+      if Tab.switch_to_id mgr id then Render_need.request ())
     ~open_files:(fun () ->
       List.filter_map (fun (t : Tab.t) ->
         match Buffer.filename t.buf with

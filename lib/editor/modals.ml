@@ -327,10 +327,13 @@ let dispatched_advance (ctx : Editor_context.t) (tab : Tab.t) dir
           Some Action.Continue
         end
         else begin
-          (* Cross-file: open/switch then land via jump_target.
-             The destination tab's buffer_matches will be lazily
-             populated on render; we'll set its current via the
-             dispatcher's "land on match" sync next frame. *)
+          (* Cross-file. If the destination is already open as a tab,
+             save its pre-search cursor for ESC rollback before we
+             clobber it via jump_target. *)
+          List.iter (fun (other : Tab.t) ->
+            if Buffer.filename other.buf = Some path then
+              Editor_context.touch_tab_for_session ctx other
+          ) (ctx.tabs ());
           Jump.push ctx tab;
           ctx.jump_target <- Some (target_line, target_col);
           Some (Action.Open_file path)
@@ -396,21 +399,20 @@ let replace_all (ctx : Editor_context.t) (tab : Tab.t) =
   | _ -> (0, 0)
 
 let logical_escape (ctx : Editor_context.t) (tab : Tab.t) =
-  let restore_active_tab_cursor () =
-    match Editor_context.tab_matches ctx tab with
-    | Some bm ->
-      Buffer.move_to tab.buf bm.saved_cursor.line bm.saved_cursor.col
-    | None -> ()
-  in
+  let _ = tab in
   match Modal.top ctx.modal with
   | Some Modal.SearchPrompt ->
-    restore_active_tab_cursor ();
+    ignore (Editor_context.rollback_search_session ctx);
     Editor_context.clear_search ctx;
     Modal.pop ctx.modal;
     true
   | _ ->
     (match ctx.search_query with
      | Some _ ->
+       (* Out-of-prompt ESC with an active search: rollback any
+          session state (rare — usually the session ends when the
+          prompt is dismissed) and clear. *)
+       ignore (Editor_context.rollback_search_session ctx);
        Editor_context.clear_search ctx;
        true
      | None -> false)
@@ -445,6 +447,11 @@ let handle_search_prompt (ctx : Editor_context.t) ev (tab : Tab.t) =
    | _ -> ctx.search_panel_msg <- "");
   match ev with
   | Input.Special (Input.Enter, _) ->
+    (* Accept the search: keep ctx.search_query and per-tab matches
+       so F3 outside the prompt still works, but drop the
+       ESC-rollback session — user is committing to the new cursor
+       positions. *)
+    Editor_context.drop_search_session ctx;
     Modal.pop ctx.modal;
     Some Continue
 

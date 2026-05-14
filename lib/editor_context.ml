@@ -7,6 +7,12 @@ type drag_mode = NoDrag | DragV | DragH | DragBoth | DragMinimap | DragMinimapSc
    per-tab: switching buffers shouldn't change which pane is focused. *)
 type focus = FScript | FGoals | FMessages | FFileTree
 
+(* Tracks ESC-rollback state for an in-flight search prompt. *)
+type search_session = {
+  origin_tab_id : int;
+  mutable saved_cursors : (int * Search.pos) list;
+}
+
 type jump_point = {
   jp_tab_id : int;
   jp_file : string;
@@ -16,6 +22,7 @@ type jump_point = {
 
 type t = {
   switch_tab : int -> unit;
+  switch_to_tab_id : int -> unit;
   open_files : unit -> (string * File_tree.file_status) list;
   set_project_dir : string -> unit;
   dep_state : unit -> Dep_graph.t option * bool;
@@ -35,6 +42,7 @@ type t = {
   mutable search_panel_msg : string;
   mutable search_query : Search.query_state option;
   mutable search_query_gen : int;
+  mutable search_session : search_session option;
   mutable project_mode : bool;
   project_search : Project_search.t;
   mutable focus : focus;
@@ -45,12 +53,14 @@ type t = {
 
 let create
     ~switch_tab
+    ~switch_to_tab_id
     ~open_files
     ~tabs
     ?(set_project_dir = fun _ -> ())
     ?(dep_state = fun () -> (None, false))
     () =
   { switch_tab;
+    switch_to_tab_id;
     open_files;
     set_project_dir;
     dep_state;
@@ -67,6 +77,7 @@ let create
     search_panel_msg = "";
     search_query = None;
     search_query_gen = 0;
+    search_session = None;
     project_mode = false;
     project_search = Project_search.create ();
     focus = FScript;
@@ -108,8 +119,48 @@ let bump_search_gen t =
 let clear_search t =
   t.search_query <- None;
   t.search_query_gen <- t.search_query_gen + 1;
+  t.search_session <- None;
   t.project_mode <- false;
   Project_search.cancel t.project_search
+
+let pos_of_buffer_cursor (buf : Buffer.t) : Search.pos =
+  let (l, c) = Buffer.cursor buf in
+  { Search.line = l; col = c }
+
+let begin_search_session t (active : Tab.t) =
+  t.search_session <- Some {
+    origin_tab_id = active.id;
+    saved_cursors = [(active.id, pos_of_buffer_cursor active.buf)];
+  }
+
+let touch_tab_for_session t (tab : Tab.t) =
+  match t.search_session with
+  | None -> ()
+  | Some s ->
+    if not (List.mem_assoc tab.id s.saved_cursors) then
+      s.saved_cursors <-
+        (tab.id, pos_of_buffer_cursor tab.buf) :: s.saved_cursors
+
+let rollback_search_session t =
+  match t.search_session with
+  | None -> false
+  | Some s ->
+    let tabs = t.tabs () in
+    let find_tab id =
+      List.find_opt (fun (tab : Tab.t) -> tab.id = id) tabs
+    in
+    List.iter (fun (tab_id, (pos : Search.pos)) ->
+      match find_tab tab_id with
+      | Some tab -> Buffer.move_to tab.buf pos.line pos.col
+      | None -> ()
+    ) s.saved_cursors;
+    (* Switch back to origin (if still open). *)
+    t.switch_to_tab_id s.origin_tab_id;
+    t.search_session <- None;
+    true
+
+let drop_search_session t =
+  t.search_session <- None
 
 (* Compute the project-relative path of [abs] under [project_dir],
    or "" when outside the project root. *)

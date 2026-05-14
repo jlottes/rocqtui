@@ -233,6 +233,13 @@ let handle (ctx : Editor_context.t) (mev : Input.mouse_event) (tab : Tab.t) r
                       (match Search_results.find_match sr path idx with
                        | None -> false
                        | Some m ->
+                         (* Save the destination tab's cursor (if
+                            already open) for ESC rollback. *)
+                         List.iter (fun (other : Tab.t) ->
+                           if Buffer.filename other.buf = Some path then
+                             Editor_context.touch_tab_for_session
+                               ctx other
+                         ) (ctx.tabs ());
                          Search_results.set_current sr
                            (Some (path, idx));
                          Jump.push ctx tab;

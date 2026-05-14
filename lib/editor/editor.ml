@@ -220,15 +220,16 @@ let handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r =
       Some Continue
     end
     else if Keymatch.match_binding ev Keys.search then begin
-      (* Ensure ctx.search_query exists. Re-save the active tab's
-         saved_cursor on every prompt-open so ESC restores to the
-         pre-prompt position. We invalidate the per-tab match cache
-         so the lazy accessor picks up the current cursor as the new
-         saved_cursor. *)
+      (* Ensure ctx.search_query exists. Start a fresh search-prompt
+         session — discards any prior rollback state and records the
+         active tab + its cursor for ESC. Invalidate the active tab's
+         buffer_matches cache so the lazy accessor picks up the
+         current cursor as saved_cursor too. *)
       if ctx.search_query = None then begin
         ctx.search_query <- Some Search.empty_query;
         Editor_context.bump_search_gen ctx
       end;
+      Editor_context.begin_search_session ctx tab;
       tab.search_matches <- None;
       tab.search_matches_gen <- None;
       ignore (Editor_context.tab_matches ctx tab);
