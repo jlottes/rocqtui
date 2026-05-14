@@ -177,8 +177,62 @@ let get_state conn ?(tab=(-1)) () =
   else "rocqtui://state" in
   parse_state (read_resource conn uri)
 
+(* Extract the inline JSON payload from a tool's content envelope.
+   Server-side async tools (query_start/poll, get_goals_start/poll)
+   stuff a JSON string into the text field, which we re-parse. *)
+let parse_tool_content_json result =
+  match Yojson.Safe.Util.member "content" result with
+  | `List ((`Assoc c) :: _) ->
+    (match List.assoc_opt "text" c with
+     | Some (`String t) ->
+       (try Some (Yojson.Safe.from_string t)
+        with Yojson.Json_error _ -> None)
+     | _ -> None)
+  | _ -> None
+
+let async_poll_interval = 0.05
+let async_poll_timeout = 60.0
+
+(* Drive a server-side async tool: call [start_name], extract the
+   ticket, then poll [poll_name] until status "done" (or timeout).
+   Returns the final text from a "done" response. *)
+let call_async_tool conn start_name poll_name args =
+  match call_tool conn start_name args with
+  | None -> None
+  | Some (start_result, _) ->
+    (match parse_tool_content_json start_result with
+     | None -> None
+     | Some payload ->
+       match Yojson.Safe.Util.member "ticket" payload with
+       | `String ticket ->
+         let start_t = Unix.gettimeofday () in
+         let rec poll () =
+           match call_tool conn poll_name
+                   (`Assoc ["ticket", `String ticket]) with
+           | None -> None
+           | Some (poll_result, _) ->
+             (match parse_tool_content_json poll_result with
+              | None -> None
+              | Some p ->
+                match Yojson.Safe.Util.member "status" p with
+                | `String "done" ->
+                  (match Yojson.Safe.Util.member "text" p with
+                   | `String text -> Some text
+                   | _ -> None)
+                | `String "pending" ->
+                  if Unix.gettimeofday () -. start_t > async_poll_timeout
+                  then None
+                  else begin
+                    Unix.sleepf async_poll_interval;
+                    poll ()
+                  end
+                | _ -> None)
+         in
+         poll ()
+       | _ -> None)
+
 (* If [args] carries a [display] options block, replace [state.goals] with
-   a fresh render via the [get_goals] MCP tool. The [rocqtui://state]
+   a fresh render via the get_goals_start/poll tools. The [rocqtui://state]
    resource only carries the IDE's persistent rendering, so per-call
    display options would otherwise be silently dropped. *)
 let apply_display conn args ?tab state =
@@ -190,15 +244,10 @@ let apply_display conn args ?tab state =
       | Some n -> ("tab", `Int n) :: base
       | None -> base
     in
-    (match call_tool conn "get_goals" (`Assoc tool_args) with
-     | Some (`Assoc fields, _) ->
-       (match List.assoc_opt "content" fields with
-        | Some (`List ((`Assoc c) :: _)) ->
-          (match List.assoc_opt "text" c with
-           | Some (`String t) -> { state with goals = Some t }
-           | _ -> state)
-        | _ -> state)
-     | _ -> state)
+    (match call_async_tool conn "get_goals_start" "get_goals_poll"
+             (`Assoc tool_args) with
+     | Some text -> { state with goals = Some text }
+     | None -> state)
   | _ -> state
 
 (* --- Poll until idle --- *)
@@ -557,17 +606,27 @@ let handle_query conn args _state =
   let open Yojson.Safe.Util in
   let command = args |> member "command" |> to_string in
   let options = args |> member "display" in
+  let tab = match args |> member "tab" with
+    | `Int n -> Some n | _ -> None in
   let tool_args = `Assoc (
     ("command", `String command) ::
     (match options with
      | `Assoc _ -> ["options", options]
-     | _ -> [])
+     | _ -> []) @
+    (match tab with
+     | Some n -> ["tab", `Int n]
+     | None -> [])
   ) in
-  ignore (call_tool conn "query" tool_args);
-  let tab = match args |> member "tab" with
-    | `Int n -> Some n | _ -> None in
+  (* The server delivers the query result via the ticket — it does NOT
+     pollute the editor's [t.msgs] anymore. Inject the result into
+     the response directly rather than reading [state.messages]. *)
+  let query_text = call_async_tool conn "query_start" "query_poll" tool_args in
   let final = get_state conn ?tab () in
   let final = apply_display conn args ?tab final in
+  let final = match query_text with
+    | Some t when t <> "" -> { final with messages = [t] }
+    | _ -> final
+  in
   build_response final
 
 (* Unwrap an inner MCP tool's content-envelope result so the bridge's

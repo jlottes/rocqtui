@@ -21,12 +21,21 @@ type sentence_info = {
   mutable status : sentence_status;
 }
 
+(* Where to deliver a query's result. [Qr_msgs] (the editor case)
+   leaves the result in [t.msgs] for the user to see. [Qr_external]
+   (the MCP case) hands the result to a callback and restores the
+   editor's prior [t.msgs] contents. *)
+type query_reply =
+  | Qr_msgs
+  | Qr_external of (Pp.t list -> unit)
+
 (* User intent: run [phrase] as a query at the current tip, with
    per-call printing-option overrides. One-deep slot — second press
    while a query is already pending is silently dropped. *)
 type pending_query = {
   pq_phrase : string;
   pq_extra_opts : (string list * Interface.option_value) list;
+  pq_reply : query_reply;
 }
 
 (* Phases of an in-flight query op. The query proceeds: send setup
@@ -49,6 +58,9 @@ type query_phase =
 type query_op_state = {
   qos_pq : pending_query;
   qos_original_tip : Stateid.t;
+  (* Snapshot of [t.msgs] when the op started. Restored at op end
+     when [pq_reply = Qr_external] so the editor view is preserved. *)
+  qos_msgs_before : Pp.t list;
   (* Query-feedback msgs captured between Qp_query and Qp_restore so
      we can restore them after the edit_at adds its own feedback. *)
   qos_query_msgs : Pp.t list;
@@ -67,13 +79,13 @@ type refresh_phase =
   | Rp_fetch of Interface.goals option Rocq_protocol.handle
 
 (* User intent: fetch goals text (formatted) with optional per-call
-   printing-option overrides. Result lands in [pf_result] when the
-   op finishes. *)
+   printing-option overrides. The formatted result (or [None] if
+   there's no proof in progress) is delivered to [pf_on_done]. *)
 type pending_fetch = {
   pf_all_hyps : bool;
   pf_width : int;
   pf_extra_opts : (string list * Interface.option_value) list;
-  pf_result : string option ref;
+  pf_on_done : string option -> unit;
 }
 
 (* Phases of an in-flight fetch_goals op: send Printopts, then fetch
@@ -366,6 +378,7 @@ let issue_query t ~pq ~tip =
 let start_query t (pq : pending_query) =
   let original_tip = t.tip in
   let setup = Printopts.to_vernac_sentences ~override:pq.pq_extra_opts () in
+  let msgs_before = t.msgs in
   t.msgs <- [];
   let phase = match setup with
     | [] -> issue_query t ~pq ~tip:original_tip
@@ -374,10 +387,18 @@ let start_query t (pq : pending_query) =
   t.current_op <- Some (Op_query {
     qos_pq = pq;
     qos_original_tip = original_tip;
+    qos_msgs_before = msgs_before;
     qos_query_msgs = [];
     qos_phase = phase;
   });
   t.state_changed <- true
+
+let deliver_query_result t qos query_msgs =
+  match qos.qos_pq.pq_reply with
+  | Qr_msgs -> t.msgs <- query_msgs
+  | Qr_external k ->
+    t.msgs <- qos.qos_msgs_before;
+    k query_msgs
 
 let advance_query_op t qos =
   match qos.qos_phase with
@@ -410,7 +431,8 @@ let advance_query_op t qos =
        process_feedback t;
        let query_msgs = t.msgs in
        if Stateid.equal r.tip qos.qos_original_tip then begin
-         (* No restore needed *)
+         (* No restore needed; deliver immediately. *)
+         deliver_query_result t qos query_msgs;
          t.current_op <- None;
          t.state_changed <- true
        end else begin
@@ -428,9 +450,9 @@ let advance_query_op t qos =
      | None -> ()
      | Some _ ->
        process_feedback t;
-       (* edit_at may have appended its own feedback; replace t.msgs
-          with the captured query result so the user only sees that. *)
-       t.msgs <- qos.qos_query_msgs;
+       (* edit_at may have appended its own feedback to t.msgs; we
+          deliver only the previously-captured query_msgs. *)
+       deliver_query_result t qos qos.qos_query_msgs;
        t.current_op <- None;
        t.state_changed <- true)
 
@@ -516,8 +538,8 @@ let start_rewind_errors_op t =
     start_rewinding t target_id
 
 (* Begin a fetch_goals op: send Printopts (with per-call overrides),
-   then fetch goals at the current tip. The formatted result lands
-   in [pf.pf_result] at the end. *)
+   then fetch goals at the current tip. The formatted result is
+   delivered to [pf.pf_on_done] at the end. *)
 let start_fetch_goals t (pf : pending_fetch) =
   let opts = Printopts.to_set_options_with pf.pf_extra_opts in
   let pending = Rocq_protocol.submit t.rocq (Xmlprotocol.set_options opts) in
@@ -544,11 +566,13 @@ let advance_fetch_goals_op t fos =
      | Some result ->
        process_feedback t;
        let pf = fos.fos_pf in
-       (match result with
-        | Interface.Good (Some gs) ->
-          pf.pf_result := Some (format_goals
-            ~all_hyps:pf.pf_all_hyps ~width:pf.pf_width gs)
-        | Interface.Good None | Interface.Fail _ -> ());
+       let formatted = match result with
+         | Interface.Good (Some gs) ->
+           Some (format_goals
+             ~all_hyps:pf.pf_all_hyps ~width:pf.pf_width gs)
+         | Interface.Good None | Interface.Fail _ -> None
+       in
+       pf.pf_on_done formatted;
        t.current_op <- None;
        t.state_changed <- true)
 
@@ -815,48 +839,40 @@ let is_busy_opt = function
 
    Pull-style: this just sets [pending_query]; [Session.poll] picks
    it up when the session is idle and runs it as an [Op_query] state
-   machine (see [start_query], [advance_query_op]). Second presses
-   while a query is pending are silently dropped. *)
-let query ?(extra_opts=[]) t phrase =
+   machine (see [start_query], [advance_query_op]). Second calls
+   while a query is pending are silently dropped.
+
+   Without [on_done] (the editor case), the result lands in [t.msgs]
+   so the user sees it. With [on_done] (the MCP case), the callback
+   receives the result and the editor's prior [t.msgs] are restored. *)
+let query ?(extra_opts=[]) ?on_done t phrase =
   match t.pending_query with
   | Some _ -> ()  (* already pending; drop *)
   | None ->
+    let reply = match on_done with
+      | None -> Qr_msgs
+      | Some k -> Qr_external k
+    in
     t.pending_query <- Some {
       pq_phrase = phrase;
       pq_extra_opts = extra_opts;
+      pq_reply = reply;
     };
     t.state_changed <- true
 
-(* TEMPORARY: drives the query state machine to completion before
-   returning. Used by MCP's synchronous [query] handler until step 7
-   migrates MCP to a start/poll pair. Removed then. *)
-let query_blocking ?(extra_opts=[]) t phrase =
-  query ~extra_opts t phrase;
-  while t.pending_query <> None || t.current_op <> None do
-    ignore (Main_loop.select_with_watches [] 0.1);
-    ignore (poll t)
-  done
-
-(* Fetch goals and format them, blocking until the result lands.
-   Drives the [Op_fetch_goals] state machine to completion. Used by
-   the MCP [get_goals] handler until step 7 splits it into a
-   start/poll pair. *)
-let fetch_goals_text ?(all_hyps=true) ?(width=default_width) ?(extra_opts=[]) t =
+(* Async fetch_goals: deliver formatted goals text (or [None] if no
+   proof in progress) to [on_done] when the op completes. Drops if
+   another fetch is already pending. *)
+let start_fetch_goals ?(all_hyps=true) ?(width=default_width)
+                      ?(extra_opts=[]) t ~on_done =
   match t.pending_fetch with
-  | Some _ -> None  (* concurrent fetch in flight; drop *)
+  | Some _ -> ()  (* concurrent fetch; drop *)
   | None ->
-    let result = ref None in
     t.pending_fetch <- Some {
       pf_all_hyps = all_hyps; pf_width = width;
-      pf_extra_opts = extra_opts; pf_result = result;
+      pf_extra_opts = extra_opts; pf_on_done = on_done;
     };
-    while t.pending_fetch <> None || (match t.current_op with
-                                      | Some (Op_fetch_goals _) -> true
-                                      | _ -> false) do
-      ignore (Main_loop.select_with_watches [] 0.1);
-      ignore (poll t)
-    done;
-    !result
+    t.state_changed <- true
 
 let sync_options_and_refresh t =
   t.goals_dirty <- true;

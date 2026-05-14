@@ -9,6 +9,13 @@ type client = {
   id : int;  (* unique client ID for lock tracking *)
 }
 
+(* Async tool tickets — one per outstanding query / get_goals call.
+   The bridge polls until [Tk_done_*]; results are reaped on read. *)
+type ticket_state =
+  | Tk_pending
+  | Tk_done_query of string             (* formatted query messages *)
+  | Tk_done_fetch of string option      (* formatted goals text *)
+
 type t = {
   server_fd : Unix.file_descr;
   path : string;
@@ -22,6 +29,8 @@ type t = {
   mutable symlinks : string list;  (* symlink paths to clean up *)
   mutable next_client_id : int;
   mutable locked_tabs : (int * int) list;  (* (tab_id, client_id) pairs *)
+  tickets : (string, ticket_state) Hashtbl.t;
+  mutable next_ticket : int;
 }
 
 let spinner_chars = [| "·"; "✶"; "✢"; "✻" |]
@@ -169,7 +178,7 @@ let tool_defs = [
      ];
      "required", `List [`String "line"; `String "col"];
    ]);
-  ("query", "Run a Rocq query (e.g. 'About nat.', 'Print plus.')",
+  ("query_start", "Initiate a Rocq query (About, Print, etc.). Returns a ticket; poll with query_poll.",
    `Assoc [
      "type", `String "object";
      "properties", `Assoc [
@@ -183,6 +192,14 @@ let tool_defs = [
      ];
      "required", `List [`String "command"];
    ]);
+  ("query_poll", "Poll a query ticket. Returns {status:'pending'} or {status:'done', text:...}",
+   `Assoc [
+     "type", `String "object";
+     "properties", `Assoc [
+       "ticket", `Assoc ["type", `String "string"];
+     ];
+     "required", `List [`String "ticket"];
+   ]);
   ("interrupt", "Send interrupt (SIGINT) to rocqtop",
    `Assoc [
      "type", `String "object";
@@ -193,7 +210,7 @@ let tool_defs = [
      "type", `String "object";
      "properties", `Assoc [];
    ]);
-  ("get_goals", "Get current goals with custom printing options",
+  ("get_goals_start", "Initiate a goals fetch with custom printing options. Returns a ticket; poll with get_goals_poll.",
    `Assoc [
      "type", `String "object";
      "properties", `Assoc [
@@ -204,6 +221,14 @@ let tool_defs = [
            k, `Assoc ["type", `String "boolean"]) display_option_keys);
        ];
      ];
+   ]);
+  ("get_goals_poll", "Poll a get_goals ticket. Returns {status:'pending'} or {status:'done', text:...}",
+   `Assoc [
+     "type", `String "object";
+     "properties", `Assoc [
+       "ticket", `Assoc ["type", `String "string"];
+     ];
+     "required", `List [`String "ticket"];
    ]);
   ("switch_tab", "Switch to a specific tab by ID",
    `Assoc [
@@ -718,18 +743,44 @@ let handle_tool t client name args mgr =
     (true, `Assoc ["content", `List [
       `Assoc ["type", `String "text"; "text", `String "OK"]
     ]])
-  | "query" ->
+  | "query_start" ->
     let open Yojson.Safe.Util in
     let cmd = args |> member "command" |> to_string in
     let temp_opts = parse_display_options (args |> member "options") in
     (match tab.session with
      | Some s ->
-       Session.query_blocking ~extra_opts:temp_opts s cmd
-     | None -> ());
-    let msgs = match tab.session with
-      | Some s -> Session.messages s | None -> [] in
+       let ticket = Printf.sprintf "q-%d" t.next_ticket in
+       t.next_ticket <- t.next_ticket + 1;
+       Hashtbl.replace t.tickets ticket Tk_pending;
+       Session.query ~extra_opts:temp_opts s cmd
+         ~on_done:(fun msgs ->
+           let text = String.concat "\n"
+             (List.map (fun pp -> Pp.string_of_ppcmds pp) msgs) in
+           Hashtbl.replace t.tickets ticket (Tk_done_query text));
+       (false, `Assoc ["content", `List [
+         `Assoc ["type", `String "text";
+                 "text", `String (Yojson.Safe.to_string
+                   (`Assoc ["ticket", `String ticket]))]
+       ]])
+     | None ->
+       (false, `Assoc ["content", `List [
+         `Assoc ["type", `String "text"; "text", `String "No session."]
+       ]; "isError", `Bool true]))
+  | "query_poll" ->
+    let open Yojson.Safe.Util in
+    let ticket = args |> member "ticket" |> to_string in
+    let payload = match Hashtbl.find_opt t.tickets ticket with
+      | None -> `Assoc ["status", `String "unknown"]
+      | Some Tk_pending -> `Assoc ["status", `String "pending"]
+      | Some (Tk_done_query text) ->
+        Hashtbl.remove t.tickets ticket;
+        `Assoc ["status", `String "done"; "text", `String text]
+      | Some (Tk_done_fetch _) ->
+        `Assoc ["status", `String "wrong_type"]
+    in
     (false, `Assoc ["content", `List [
-      `Assoc ["type", `String "text"; "text", `String (String.concat "\n" msgs)]
+      `Assoc ["type", `String "text";
+              "text", `String (Yojson.Safe.to_string payload)]
     ]])
   | "interrupt" ->
     (match tab.session with
@@ -745,22 +796,46 @@ let handle_tool t client name args mgr =
       `Assoc ["type", `String "text"; "text",
         `String (if ok then "Saved" else "Failed")]
     ]])
-  | "get_goals" ->
+  | "get_goals_start" ->
     let open Yojson.Safe.Util in
     let temp_opts = parse_display_options (args |> member "options") in
     (match tab.session with
      | Some s ->
-       let goals_text = ref "No proof in progress." in
-       (match Session.fetch_goals_text ~extra_opts:temp_opts s with
-        | Some t -> goals_text := t
-        | None -> ());
+       let ticket = Printf.sprintf "g-%d" t.next_ticket in
+       t.next_ticket <- t.next_ticket + 1;
+       Hashtbl.replace t.tickets ticket Tk_pending;
+       Session.start_fetch_goals ~extra_opts:temp_opts s
+         ~on_done:(fun goals ->
+           Hashtbl.replace t.tickets ticket (Tk_done_fetch goals));
        (false, `Assoc ["content", `List [
-         `Assoc ["type", `String "text"; "text", `String !goals_text]
+         `Assoc ["type", `String "text";
+                 "text", `String (Yojson.Safe.to_string
+                   (`Assoc ["ticket", `String ticket]))]
        ]])
      | None ->
        (false, `Assoc ["content", `List [
          `Assoc ["type", `String "text"; "text", `String "No session."]
-       ]]))
+       ]; "isError", `Bool true]))
+  | "get_goals_poll" ->
+    let open Yojson.Safe.Util in
+    let ticket = args |> member "ticket" |> to_string in
+    let payload = match Hashtbl.find_opt t.tickets ticket with
+      | None -> `Assoc ["status", `String "unknown"]
+      | Some Tk_pending -> `Assoc ["status", `String "pending"]
+      | Some (Tk_done_fetch goals) ->
+        Hashtbl.remove t.tickets ticket;
+        let text = match goals with
+          | Some s -> s
+          | None -> "No proof in progress."
+        in
+        `Assoc ["status", `String "done"; "text", `String text]
+      | Some (Tk_done_query _) ->
+        `Assoc ["status", `String "wrong_type"]
+    in
+    (false, `Assoc ["content", `List [
+      `Assoc ["type", `String "text";
+              "text", `String (Yojson.Safe.to_string payload)]
+    ]])
   | "switch_tab" ->
     let id = args |> Yojson.Safe.Util.member "tab" |> to_int_lenient in
     (match Tab.index_of_id mgr id with
@@ -1262,7 +1337,8 @@ let create ?(socket_path="") () =
     active_tab_ids = []; spinner_frame = 0;
     last_activity = 0.0;
     last_goals = ""; last_verified_end = 0; last_messages = [];
-    symlinks = []; next_client_id = 1; locked_tabs = [] }
+    symlinks = []; next_client_id = 1; locked_tabs = [];
+    tickets = Hashtbl.create 8; next_ticket = 1 }
 
 let server_fd t = t.server_fd
 

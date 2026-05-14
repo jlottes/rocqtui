@@ -70,27 +70,33 @@ val consume_user_step_result : t -> [`Ok | `Error] option
 
 (** Run a query (e.g. [About foo.]) at the current tip with the
     current Printopts baked in. Per-call [extra_opts] override
-    persistent options for this query only. Implementation: Add one
-    [Set Printing X.] sentence per option to a transient state on top
-    of [tip], query at that state, then [edit_at] back. Slightly
-    expensive (one round-trip per option) but the only way to affect
-    [Stm.query]'s rendering — see [session.ml] for the rationale. *)
+    persistent options for this query only.
+
+    Implementation: Add one [Set Printing X.] sentence per option to
+    a transient state on top of [tip], query at that state, then
+    [edit_at] back. Slightly expensive (one round-trip per option)
+    but the only way to affect [Stm.query]'s rendering — see
+    [session.ml] for the rationale.
+
+    Pull-style: this sets the pending intent. [poll] picks it up
+    when the session is idle. Without [on_done] (editor case), the
+    result lands in [messages]. With [on_done] (MCP case), the
+    callback receives the result and the editor's prior [messages]
+    are preserved. Second calls while a query is pending are
+    silently dropped. *)
 val query :
   ?extra_opts:(string list * Interface.option_value) list ->
+  ?on_done:(Pp.t list -> unit) ->
   t -> string -> unit
 
-(** Like [query] but drives the state machine to completion before
-    returning. Provided for the MCP synchronous [query] handler;
-    blocks the main thread until the result lands in [messages].
-    Removed once MCP migrates to a start/poll handler pair. *)
-val query_blocking :
-  ?extra_opts:(string list * Interface.option_value) list ->
-  t -> string -> unit
-
-val fetch_goals_text :
+(** Set the pending fetch_goals intent. [poll] picks it up when the
+    session is idle. The formatted goals text (or [None] if there's
+    no proof in progress) is delivered to [on_done]. Second calls
+    while a fetch is pending are silently dropped. *)
+val start_fetch_goals :
   ?all_hyps:bool ->
   ?width:int ->
   ?extra_opts:(string list * Interface.option_value) list ->
-  t -> string option
+  t -> on_done:(string option -> unit) -> unit
 val sync_options_and_refresh : t -> unit
 val quit : t -> unit
