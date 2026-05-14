@@ -378,6 +378,7 @@ if new_active_row <> last_active_row && new_active_row <> None then begin
       tab.scroll <- max 0 (ar - rows + 1)
   | None -> ()
 end
+```
 
 ## Architecture by module
 
