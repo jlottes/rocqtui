@@ -114,62 +114,37 @@ let submit t call =
 
 let poll_response h = !h
 
-(* Push-style: enqueue with a continuation. Always safe — multiple
-   sends are queued FIFO. *)
-let send_call t call k =
-  enqueue t (Pending (call, k))
-
-(* Interrupt callback — set by the application to handle ^C during blocking calls *)
+(* Interrupt callback — set by the application to handle ^C during
+   the blocking [init] / [block_for_response] path. *)
 let interrupt_hook : (t -> unit) option ref = ref None
 
 let set_interrupt_hook f = interrupt_hook := Some f
 
-(* Send a call and block until the response arrives.
-   Uses select_with_watches to keep processing other watches. *)
-let eval_call t call =
-  let result = ref None in
-  send_call t call (fun v -> result := Some v);
-  while !result = None do
-    (* Include stdin so we don't block when user presses keys *)
+(* Block until [h] is filled. The only blocking call site post-refactor
+   is [init] (which runs once at session creation, before the main
+   loop starts). Uses [select_with_watches] so other watches keep
+   running and ^C still interrupts via [interrupt_hook]. *)
+let block_for_response t h =
+  while !h = None do
     let ready = Main_loop.select_with_watches [Unix.stdin] 0.1 in
-    (* If stdin is ready, check for ^C via the hook *)
     if List.mem Unix.stdin ready then
       (match !interrupt_hook with Some f -> f t | None -> ())
   done;
-  match !result with
-  | Some v -> v
-  | None -> assert false
+  Option.get !h
 
 let is_busy t = t.queue <> []
 
 let init t filename =
-  match eval_call t (Xmlprotocol.init filename) with
+  let h = submit t (Xmlprotocol.init filename) in
+  match block_for_response t h with
   | Interface.Good id -> id
   | Interface.Fail (_, _, msg) ->
     failwith ("rocq init failed: " ^ Pp.string_of_ppcmds msg)
 
-let add t ~state_id ~edit_id ~verbose ~bp ~line ~bol phrase =
-  let call = Xmlprotocol.add
-    ((((phrase, edit_id), (state_id, verbose)), bp), (line, bol)) in
-  eval_call t call
-
-let edit_at t state_id =
-  eval_call t (Xmlprotocol.edit_at state_id)
-
-let goals t =
-  eval_call t (Xmlprotocol.goals ())
-
-let query t ~state_id phrase =
-  let call = Xmlprotocol.query (0, (phrase, state_id)) in
-  ignore (eval_call t call)
-
-let set_options t opts =
-  match eval_call t (Xmlprotocol.set_options opts) with
-  | Interface.Good () -> true
-  | Interface.Fail _ -> false
-
 let quit t =
-  (try ignore (eval_call t (Xmlprotocol.quit ())) with _ -> ());
+  (* Best-effort: send Quit then kill. Don't wait for response — the
+     subprocess is being torn down anyway. *)
+  (try ignore (submit t (Xmlprotocol.quit ())) with _ -> ());
   RocqAsync.kill t.process
 
 let pid t = RocqAsync.unixpid t.process

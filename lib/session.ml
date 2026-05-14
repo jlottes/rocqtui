@@ -257,25 +257,6 @@ let format_goals ?(all_hyps=true) ?(width=default_width) (gs : Interface.goals) 
   end;
   Stdlib.Buffer.contents ob
 
-let [@warning "-32"] refresh_goals t =
-  let opts = Printopts.to_set_options () in
-  ignore (Rocq_protocol.set_options t.rocq opts);
-  process_feedback t;
-  match Rocq_protocol.goals t.rocq with
-  | Interface.Good (Some gs) ->
-    process_feedback t;
-    t.goals_cache <- Some gs;
-    t.state_changed <- true
-  | Interface.Good None ->
-    process_feedback t;
-    t.goals_cache <- None;
-    t.state_changed <- true
-  | Interface.Fail (_, _, msg) ->
-    process_feedback t;
-    t.msgs <- t.msgs @ [msg];
-    t.goals_cache <- None;
-    t.state_changed <- true
-
 let rewind_to_state t safe_id =
   let rec drop = function
     | s :: rest when not (Stateid.equal s.state_id safe_id) -> drop rest
