@@ -46,6 +46,10 @@ val resave_cursor : state -> Buffer.t -> state
     empty array for an empty query or an invalid regex. *)
 val recompute : Buffer.t -> string -> flags -> match_ array
 
+(** Like [recompute] but on a raw text string. Used by the project-wide
+    scanner so each file doesn't have to be wrapped in a [Buffer.t]. *)
+val recompute_in_text : string -> string -> flags -> match_ array
+
 (** Replace [query] and recompute. Picks the first match at or after the
     saved cursor as the new [current]. *)
 val update_query : state -> Buffer.t -> string -> state

@@ -84,11 +84,14 @@ let compile_re query flags =
       Some (Re.compile pat)
     with _ -> None
 
-let recompute (buf : Buffer.t) (query : string) (flags : flags) : match_ array =
+(* Core matcher: operate on raw text. Used directly by the
+   project-wide scanner so it doesn't have to wrap each scanned file
+   in a Buffer.t. *)
+let recompute_in_text (text : string) (query : string) (flags : flags)
+  : match_ array =
   match compile_re query flags with
   | None -> [||]
   | Some re ->
-    let text = Buffer.text buf in
     let starts = line_starts text in
     Re.all re text
     |> List.map (fun g ->
@@ -96,6 +99,9 @@ let recompute (buf : Buffer.t) (query : string) (flags : flags) : match_ array =
       let e = Re.Group.stop g 0 in
       { start_ = pos_of_offset starts s; end_ = pos_of_offset starts e })
     |> Array.of_list
+
+let recompute (buf : Buffer.t) (query : string) (flags : flags) : match_ array =
+  recompute_in_text (Buffer.text buf) query flags
 
 let first_match_at_or_after matches anchor =
   let n = Array.length matches in

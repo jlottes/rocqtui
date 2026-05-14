@@ -36,6 +36,8 @@ let empty ~query ~flags = {
   current = None;
 }
 
+let query t = t.query
+let flags t = t.flags
 let total t = t.total
 let scanning t = t.scanning
 let files t = t.files

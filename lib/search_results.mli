@@ -18,6 +18,8 @@ type t
 
 val empty : query:string -> flags:Search.flags -> t
 
+val query : t -> string
+val flags : t -> Search.flags
 val total : t -> int
 val scanning : t -> bool
 val files : t -> file_matches list
