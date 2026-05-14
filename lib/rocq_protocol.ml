@@ -15,24 +15,51 @@ type t = {
   mutable head_dispatched : bool;     (* head of queue has been written *)
   mutable fragment : string;
   mutable lexerror : int option;
+  mutable dead : bool;
 }
 
 let handle_feedback t xml =
   let fb = Xmlprotocol.to_feedback xml in
   t.pending_feedback <- fb :: t.pending_feedback
 
+(* Stamp on Fail values we synthesize when the subprocess died. *)
+let died_pp = Pp.str "rocq subprocess died"
+
+(* Mark the protocol as dead and reply Fail to every queued caller.
+   Idempotent — multiple write failures land here harmlessly. *)
+let mark_dead t =
+  if not t.dead then begin
+    t.dead <- true;
+    let pending = t.queue in
+    t.queue <- [];
+    t.head_dispatched <- false;
+    List.iter (fun (Pending (_, k)) ->
+      k (Interface.Fail (Stateid.dummy, None, died_pp))) pending
+  end
+
 let dispatch_head t =
   match t.queue with
   | [] -> t.head_dispatched <- false
   | Pending (call, _) :: _ ->
-    Xml_printer.print t.xml_printer (Xmlprotocol.of_call call);
-    t.head_dispatched <- true
+    (try
+       Xml_printer.print t.xml_printer (Xmlprotocol.of_call call);
+       t.head_dispatched <- true
+     with Sys_error _ | End_of_file ->
+       (* The subprocess died (or the pipe was closed). Don't crash
+          the editor — fail every queued call cleanly. *)
+       mark_dead t)
 
 (* Add a pending entry to the back. Dispatch immediately if nothing is
-   currently in flight. *)
+   currently in flight. If the protocol is dead, fail the new entry
+   directly without enqueueing. *)
 let enqueue t pending =
-  t.queue <- t.queue @ [pending];
-  if not t.head_dispatched then dispatch_head t
+  if t.dead then
+    let Pending (_, k) = pending in
+    k (Interface.Fail (Stateid.dummy, None, died_pp))
+  else begin
+    t.queue <- t.queue @ [pending];
+    if not t.head_dispatched then dispatch_head t
+  end
 
 let handle_final_answer t xml =
   match t.queue with
@@ -92,15 +119,19 @@ let spawn ?(prog="coqidetop") ?(args=[]) () =
        | Some t ->
          try
            let _ = conds in
-           handle_input t ~read_all
+           let alive = handle_input t ~read_all in
+           if not alive then mark_dead t;
+           alive
          with e ->
-           ignore e; false)
+           ignore e;
+           mark_dead t;
+           false)
   in
   let xml_printer = Xml_printer.make (Xml_printer.TChannel cout) in
   let t = {
     process; out_chan = cout; xml_printer;
     pending_feedback = []; queue = []; head_dispatched = false;
-    fragment = ""; lexerror = None;
+    fragment = ""; lexerror = None; dead = false;
   } in
   t_ref := Some t;
   t
