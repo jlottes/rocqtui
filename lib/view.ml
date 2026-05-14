@@ -369,8 +369,7 @@ let update_msg_tabs (ctx : Editor_context.t) r (tab : Tab.t) =
   end;
   ignore tab
 
-let render_messages (ctx : Editor_context.t) r (tab : Tab.t) =
-  update_msg_tabs ctx r tab;
+let render_messages (_ctx : Editor_context.t) r (tab : Tab.t) =
   Msg_pane.sync_terminals ();
   (* Resize all terminals to current messages pane dims. No-op if
      unchanged, so safe to call every frame. *)
@@ -889,6 +888,11 @@ let render_all (ctx : Editor_context.t) r (tab : Tab.t) =
     Render.clear_pane r Render.PMinimap;
   if Render.file_tree_visible r then
     Render.clear_pane r Render.PFileTree;
+  (* Update messages-pane sub-tabs BEFORE draw_chrome reads the tab
+     list: an ESC-clear of the search prompt removes the Search tab,
+     but the chrome would otherwise still label the removed tab one
+     frame stale. *)
+  update_msg_tabs ctx r tab;
   let mp = Msg_pane.state () in
   let msg_tab_names = List.map Msg_pane.display_name mp.tabs in
   Render.draw_chrome r
