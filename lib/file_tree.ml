@@ -149,7 +149,10 @@ let rebuild_dep_lines t =
             File_listing.full_path =
               Filename.concat t.project_dir rel_path;
             rel_path;
-            name = Filename.basename rel_path;
+            (* Show the project-relative path in the dep view so files
+               with the same basename in different subdirs are
+               distinguishable. Tree view still uses basenames. *)
+            name = rel_path;
             is_dir = false;
             in_project = true;
           } in
