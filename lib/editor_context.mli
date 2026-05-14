@@ -19,6 +19,9 @@ type t = {
   set_project_dir : string -> unit;
   (** Snapshot of the dep runner state. Cheap to call every frame. *)
   dep_state : unit -> Dep_graph.t option * bool;
+  (** All currently-open tabs. Used by project-search merge to
+      substitute live buffer matches for open files. *)
+  tabs : unit -> Tab.t list;
   modal : Modal.t;
   mutable status_extra : string;
   mutable init_error : string;
@@ -49,6 +52,7 @@ type t = {
 val create :
   switch_tab:(int -> unit) ->
   open_files:(unit -> (string * File_tree.file_status) list) ->
+  tabs:(unit -> Tab.t list) ->
   ?set_project_dir:(string -> unit) ->
   ?dep_state:(unit -> Dep_graph.t option * bool) ->
   unit -> t
@@ -67,3 +71,10 @@ val bump_search_gen : t -> unit
 (** Drop the global search state and invalidate all tabs. Called on
     ESC. *)
 val clear_search : t -> unit
+
+(** Build a [Search_results.t] for the active query. In single-file
+    mode this is just the active tab's matches. In project mode it
+    merges open-tab live matches into project_search.results,
+    preserving the project's scan order for stable global ordering.
+    Returns [None] when there's no active query. *)
+val search_snapshot : t -> Tab.t -> Search_results.t option

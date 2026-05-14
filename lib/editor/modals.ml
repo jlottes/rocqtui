@@ -292,12 +292,49 @@ let project_search_kick (ctx : Editor_context.t) (tab : Tab.t) =
            Project_search.start ctx.project_search
              ~project_dir ~project_file ~query ~flags)
 
-(* F3 / Shift+F3 dispatcher. Phase 2: always single-file (project F3
-   reintroduces in Phase 3). *)
+(* F3 / Shift+F3 dispatcher. In single-file mode walks the active
+   tab's matches. In project mode walks the merged-stream
+   Search_results.t from Editor_context.search_snapshot; when the
+   next match is in a different file, returns Open_file so the
+   editor opens (or switches to) that file before jumping. *)
 let dispatched_advance (ctx : Editor_context.t) (tab : Tab.t) dir
   : Action.action option =
-  search_advance ctx tab dir;
-  Some Action.Continue
+  if not ctx.project_mode then begin
+    search_advance ctx tab dir;
+    Some Action.Continue
+  end
+  else
+    match Editor_context.search_snapshot ctx tab with
+    | None -> Some Action.Continue
+    | Some sr ->
+      let forward = (dir = `Next) in
+      match Search_results.advance sr ~forward with
+      | None -> Some Action.Continue
+      | Some (path, m) ->
+        let target_line = m.ml_line - 1 in
+        let target_col = m.ml_col_start in
+        let active_path = Buffer.filename tab.buf in
+        if Some path = active_path then begin
+          (* Same tab: move cursor and update tab.buffer_matches.current
+             to match the new global position. *)
+          Buffer.move_to tab.buf target_line target_col;
+          (match Editor_context.tab_matches ctx tab,
+                 Search_results.current sr with
+           | Some bm, Some (_, idx) when idx >= 0
+                                         && idx < Array.length bm.matches ->
+             Search.bm_set_current bm idx
+           | _ -> ());
+          Some Action.Continue
+        end
+        else begin
+          (* Cross-file: open/switch then land via jump_target.
+             The destination tab's buffer_matches will be lazily
+             populated on render; we'll set its current via the
+             dispatcher's "land on match" sync next frame. *)
+          Jump.push ctx tab;
+          ctx.jump_target <- Some (target_line, target_col);
+          Some (Action.Open_file path)
+        end
 
 (* Byte offset of (line, col) within [Buffer.text buf]. *)
 let pos_to_byte (buf : Buffer.t) (p : Search.pos) =

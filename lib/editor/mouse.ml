@@ -204,25 +204,43 @@ let handle (ctx : Editor_context.t) (mev : Input.mouse_event) (tab : Tab.t) r
           match Msg_pane.active_kind () with
           | Msg_pane.Terminal _ | Msg_pane.Rocq -> false
           | Msg_pane.Search ->
-            (* Phase 2: single-file only. Match is always in the
-               active tab. Phase 3 reintroduces cross-file via
-               Open_file. *)
             (match Geom.screen_to_pane_pos tab r ~x ~y `Messages with
              | None -> false
              | Some (row, _col) ->
                (match Search_tab.lookup_tab_row row with
                 | None -> false
                 | Some (path, idx) ->
-                  (match Buffer.filename tab.buf,
-                         Editor_context.tab_matches ctx tab with
-                   | Some f, Some bm when f = path
-                                          && idx >= 0
-                                          && idx < Array.length bm.matches ->
-                     Search.bm_set_current bm idx;
-                     let m = bm.matches.(idx) in
-                     Buffer.move_to tab.buf m.start_.line m.start_.col;
-                     true
-                   | _ -> false)))
+                  let active_path = Buffer.filename tab.buf in
+                  if Some path = active_path then begin
+                    (* In-tab click: update buffer_matches.current
+                       and move cursor. *)
+                    match Editor_context.tab_matches ctx tab with
+                    | Some bm when idx >= 0
+                                   && idx < Array.length bm.matches ->
+                      Search.bm_set_current bm idx;
+                      let m = bm.matches.(idx) in
+                      Buffer.move_to tab.buf m.start_.line m.start_.col;
+                      true
+                    | _ -> false
+                  end
+                  else begin
+                    (* Cross-file click (project mode): we have the
+                       match coordinates from the rendered snapshot.
+                       Look them up to get the line/col. *)
+                    match Editor_context.search_snapshot ctx tab with
+                    | None -> false
+                    | Some sr ->
+                      (match Search_results.find_match sr path idx with
+                       | None -> false
+                       | Some m ->
+                         Search_results.set_current sr
+                           (Some (path, idx));
+                         Jump.push ctx tab;
+                         ctx.jump_target <-
+                           Some (m.ml_line - 1, m.ml_col_start);
+                         result := Some (Action.Open_file path);
+                         true)
+                  end))
           | Msg_pane.Build | Msg_pane.Errors as ak ->
             (match Geom.screen_to_pane_pos tab r ~x ~y `Messages with
              | None -> false

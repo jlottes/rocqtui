@@ -154,6 +154,7 @@ let () =
             disk_changed = Buffer.disk_changed t.buf;
           })
       ) mgr.tabs)
+    ~tabs:(fun () -> mgr.tabs)
     ~set_project_dir:(fun dir ->
       File_manager.set_project_dir fm dir;
       refresh_dep_runner_for_dir dir)

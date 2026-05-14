@@ -280,6 +280,7 @@ let render_goals (ctx : Editor_context.t) r (tab : Tab.t) =
    Errors tab when the cursor actually changes (F9 or click), not on
    every frame. *)
 let errors_last_active : int option ref = ref None
+let search_last_active : int option ref = ref None
 
 (* Sync the global Msg_pane sub-tab list with current global state.
    Purely passive — never changes which sub-tab is active. Auto-switch
@@ -322,50 +323,39 @@ let update_msg_tabs (ctx : Editor_context.t) r (tab : Tab.t) =
     end else if cur = None then
       errors_last_active := None
   end;
-  (* Build the Search_results.t for the messages tab from the new
-     state model. Phase 2: single-file only. Phase 3 will merge in
-     project_search.results for cross-file rendering. *)
-  let search_snapshot : Search_results.t option =
-    match ctx.search_query with
-    | None -> None
-    | Some q ->
-      if q.query = "" then None
-      else
-        match Buffer.filename tab.buf,
-              Editor_context.tab_matches ctx tab with
-        | Some path, Some bm ->
-          let project_dir = match
-            Project.find_project_file (Filename.dirname path) with
-            | Some (pd, _) -> pd
-            | None -> Filename.dirname path
-          in
-          let prefix = project_dir ^ "/" in
-          let plen = String.length prefix in
-          let rel_path =
-            if String.length path > plen
-               && String.sub path 0 plen = prefix
-            then String.sub path plen (String.length path - plen)
-            else ""
-          in
-          Some (Search_results.of_buffer_matches
-                  ~path ~rel_path q bm tab.buf)
-        | _ -> None
-  in
+  let search_snapshot = Editor_context.search_snapshot ctx tab in
   let search_active =
     match search_snapshot with
     | Some r ->
       Search_results.total r > 0 || Search_results.scanning r
     | None -> false
   in
-  if not search_active then
-    Msg_pane.remove Msg_pane.Search
+  if not search_active then begin
+    Msg_pane.remove Msg_pane.Search;
+    search_last_active := None
+  end
   else begin
     let was_present = Msg_pane.find Msg_pane.Search <> None in
     let st = Msg_pane.ensure Msg_pane.Search in
-    let (lines, _active_row) = Search_tab.render search_snapshot in
+    let (lines, active_row) = Search_tab.render search_snapshot in
     if lines <> st.lines then st.lines <- lines;
     if not was_present then
-      Msg_pane.activate_unless_terminal Msg_pane.Search
+      Msg_pane.activate_unless_terminal Msg_pane.Search;
+    (* Auto-scroll to keep the active match visible whenever the
+       active row changes. Mirrors Build_errors's behavior for the
+       Errors tab. *)
+    if active_row <> !search_last_active && active_row <> None then begin
+      search_last_active := active_row;
+      match active_row with
+      | None -> ()
+      | Some ar ->
+        let (rows, _) = Render.pane_dims r Render.PMessages in
+        let scroll = st.scroll in
+        if ar < scroll then st.scroll <- ar
+        else if ar >= scroll + rows then
+          st.scroll <- max 0 (ar - rows + 1)
+    end else if active_row = None then
+      search_last_active := None
   end;
   ignore tab
 
@@ -671,9 +661,41 @@ let render_search_panel (ctx : Editor_context.t) (tab : Tab.t) r =
       Search.is_case_insensitive ~query:q.query ~flags:q.flags,
       q.flags.regex
   in
+  (* In project mode, append the global counter "· G/T" after the
+     current-file pair. G is the global index of the active match in
+     the merged stream; T is the total across the project. *)
+  let global_counter =
+    if not ctx.project_mode then ""
+    else
+      match Editor_context.search_snapshot ctx tab,
+            Buffer.filename tab.buf, bm with
+      | Some sr, Some active_path, Some active_bm
+        when active_bm.current >= 0 ->
+        let total = Search_results.total sr in
+        let global_idx = ref 0 in
+        let found = ref false in
+        List.iter (fun (fm : Search_results.file_matches) ->
+          if not !found then begin
+            if fm.fm_path = active_path then begin
+              global_idx := !global_idx + active_bm.current + 1;
+              found := true
+            end else
+              global_idx :=
+                !global_idx + Array.length fm.fm_matches
+          end
+        ) (Search_results.files sr);
+        if !found && total > 0 then
+          Printf.sprintf " \xc2\xb7 %d/%d" !global_idx total
+        else if total > 0 then
+          Printf.sprintf " \xc2\xb7 -/%d" total
+        else ""
+      | Some sr, _, _ when Search_results.total sr > 0 ->
+        Printf.sprintf " \xc2\xb7 -/%d" (Search_results.total sr)
+      | _ -> ""
+  in
   let counter =
     if count = 0 && query = "" then "       "  (* keep alignment *)
-    else Printf.sprintf "  %d/%d" idx count
+    else Printf.sprintf "  %d/%d%s" idx count global_counter
   in
   let case_ind = if case_insensitive then "[aa]" else "[Aa]" in
   let regex_ind = if regex then "[.*]" else "[..]" in

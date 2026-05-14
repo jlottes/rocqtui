@@ -19,6 +19,7 @@ type t = {
   open_files : unit -> (string * File_tree.file_status) list;
   set_project_dir : string -> unit;
   dep_state : unit -> Dep_graph.t option * bool;
+  tabs : unit -> Tab.t list;
   modal : Modal.t;
   mutable status_extra : string;
   mutable init_error : string;
@@ -45,6 +46,7 @@ type t = {
 let create
     ~switch_tab
     ~open_files
+    ~tabs
     ?(set_project_dir = fun _ -> ())
     ?(dep_state = fun () -> (None, false))
     () =
@@ -52,6 +54,7 @@ let create
     open_files;
     set_project_dir;
     dep_state;
+    tabs;
     modal = Modal.create ();
     status_extra = "";
     init_error = "";
@@ -107,3 +110,107 @@ let clear_search t =
   t.search_query_gen <- t.search_query_gen + 1;
   t.project_mode <- false;
   Project_search.cancel t.project_search
+
+(* Compute the project-relative path of [abs] under [project_dir],
+   or "" when outside the project root. *)
+let rel_under project_dir abs =
+  let prefix = project_dir ^ "/" in
+  let plen = String.length prefix in
+  if String.length abs > plen
+     && String.sub abs 0 plen = prefix then
+    String.sub abs plen (String.length abs - plen)
+  else ""
+
+(* Build a Search_results.t for the active query that the Search
+   messages tab renders and the cross-file F3 dispatcher walks. In
+   project mode this is the merged stream (open tabs' live matches
+   substituted into the project_search.results scan order). In
+   single-file mode it's just the active tab. None when no search is
+   active. *)
+let search_snapshot t (active_tab : Tab.t) : Search_results.t option =
+  match t.search_query with
+  | None -> None
+  | Some q when q.query = "" -> None
+  | Some q ->
+    let active_path = Buffer.filename active_tab.buf in
+    let project_dir =
+      match active_path with
+      | Some p ->
+        (match Project.find_project_file (Filename.dirname p) with
+         | Some (pd, _) -> pd
+         | None -> Filename.dirname p)
+      | None -> ""
+    in
+    if not t.project_mode then begin
+      (* Single-file: just the active tab. *)
+      match active_path, tab_matches t active_tab with
+      | Some path, Some bm ->
+        let rel_path = rel_under project_dir path in
+        Some (Search_results.of_buffer_matches
+                ~path ~rel_path q bm active_tab.buf)
+      | _ -> None
+    end
+    else begin
+      (* Project mode: merge open tabs' live matches into
+         project_search.results, preserving the project's scan order
+         for stability. *)
+      let psr_opt = Project_search.results t.project_search in
+      let project_files = match psr_opt with
+        | Some r -> Search_results.files r
+        | None -> []
+      in
+      let tabs = t.tabs () in
+      let tab_by_path =
+        List.filter_map (fun (tab : Tab.t) ->
+          match Buffer.filename tab.buf with
+          | Some f -> Some (f, tab)
+          | None -> None
+        ) tabs
+      in
+      let merged =
+        Search_results.empty ~query:q.query ~flags:q.flags in
+      let project_paths = ref [] in
+      let live_for_open_tab path tab =
+        (* Try the open tab's buffer_matches first. *)
+        match tab_matches t tab with
+        | Some bm ->
+          let rel_path = rel_under project_dir path in
+          let single = Search_results.of_buffer_matches
+            ~path ~rel_path q bm tab.buf in
+          (match Search_results.files single with
+           | [fm] -> Some fm
+           | _ -> None)
+        | None -> None
+      in
+      List.iter (fun (fm : Search_results.file_matches) ->
+        project_paths := fm.fm_path :: !project_paths;
+        let live_fm =
+          match List.assoc_opt fm.fm_path tab_by_path with
+          | Some tab -> live_for_open_tab fm.fm_path tab
+          | None -> Some fm
+        in
+        (match live_fm with
+         | Some fm' -> Search_results.add_file merged fm'
+         | None -> ())
+      ) project_files;
+      let project_path_set = !project_paths in
+      List.iter (fun (tab : Tab.t) ->
+        match Buffer.filename tab.buf with
+        | None -> ()
+        | Some path when List.mem path project_path_set -> ()
+        | Some path ->
+          (match live_for_open_tab path tab with
+           | Some fm -> Search_results.add_file merged fm
+           | None -> ())
+      ) tabs;
+      Search_results.set_scanning merged
+        (match psr_opt with
+         | Some r -> Search_results.scanning r
+         | None -> false);
+      (* Set [current] from the active tab if it has any matches. *)
+      (match active_path, tab_matches t active_tab with
+       | Some path, Some bm when bm.current >= 0 ->
+         Search_results.set_current merged (Some (path, bm.current))
+       | _ -> ());
+      Some merged
+    end
