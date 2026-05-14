@@ -20,12 +20,24 @@ val quit : t -> unit
 
 (** {2 Async operations} *)
 
-(** Send a call with a continuation. The continuation is invoked when
-    the response arrives (via poll or eval_call). *)
+(** A pull-style result handle. [None] until the response arrives,
+    then [Some value]. *)
+type 'a handle = 'a Interface.value option ref
+
+(** Submit a call and return a handle for the result. Always safe —
+    multiple submissions are queued FIFO and dispatched serially. *)
+val submit : t -> 'a Xmlprotocol.call -> 'a handle
+
+(** Read the result from a handle ([None] if still pending). *)
+val poll_response : 'a handle -> 'a Interface.value option
+
+(** Push-style: submit with a continuation. Equivalent to [submit]
+    followed by polling, but the continuation fires automatically
+    when the response arrives. *)
 val send_call : t -> 'a Xmlprotocol.call ->
   ('a Interface.value -> unit) -> unit
 
-(** Whether there is a pending async call. *)
+(** Whether any call is currently queued or in flight. *)
 val is_busy : t -> bool
 
 (** Poll: dispatch any pending watch callbacks (non-blocking). *)

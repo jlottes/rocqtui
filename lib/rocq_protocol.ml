@@ -1,15 +1,18 @@
 module RocqAsync = Spawn.Async(Main_loop)
 
-(* Existential wrapper for pending call + continuation *)
+(* Existential wrapper for a queued call + its result delivery. *)
 type pending =
   | Pending : 'a Xmlprotocol.call * ('a Interface.value -> unit) -> pending
+
+type 'a handle = 'a Interface.value option ref
 
 type t = {
   process : RocqAsync.process;
   out_chan : out_channel;
   xml_printer : Xml_printer.t;
   mutable pending_feedback : Feedback.feedback list;
-  mutable waiting_for : pending option;
+  mutable queue : pending list;       (* head is in flight if head_dispatched *)
+  mutable head_dispatched : bool;     (* head of queue has been written *)
   mutable fragment : string;
   mutable lexerror : int option;
 }
@@ -18,13 +21,32 @@ let handle_feedback t xml =
   let fb = Xmlprotocol.to_feedback xml in
   t.pending_feedback <- fb :: t.pending_feedback
 
+let dispatch_head t =
+  match t.queue with
+  | [] -> t.head_dispatched <- false
+  | Pending (call, _) :: _ ->
+    Xml_printer.print t.xml_printer (Xmlprotocol.of_call call);
+    t.head_dispatched <- true
+
+(* Add a pending entry to the back. Dispatch immediately if nothing is
+   currently in flight. *)
+let enqueue t pending =
+  t.queue <- t.queue @ [pending];
+  if not t.head_dispatched then dispatch_head t
+
 let handle_final_answer t xml =
-  match t.waiting_for with
-  | None -> ()  (* unexpected response, ignore *)
-  | Some (Pending (call, k)) ->
-    t.waiting_for <- None;
+  match t.queue with
+  | [] -> ()  (* unexpected response, ignore *)
+  | Pending (call, k) :: rest ->
+    t.queue <- rest;
+    t.head_dispatched <- false;
     let answer = Xmlprotocol.to_answer call xml in
-    k answer
+    k answer;
+    (* k may have enqueued new items. If it did and the queue was
+       previously empty (rest = []), enqueue already dispatched the
+       new head. Otherwise (head not dispatched but queue non-empty),
+       dispatch now. *)
+    if not t.head_dispatched then dispatch_head t
 
 let [@warning "-32"] handle_input t ~read_all =
   let s = read_all () in
@@ -48,9 +70,9 @@ let [@warning "-32"] handle_input t ~read_all =
         loop ()
       | Xmlprotocol.Other ->
         handle_final_answer t xml;
-        (* If there's still a pending call (shouldn't happen normally),
-           keep parsing *)
-        if t.waiting_for <> None then loop ()
+        (* If more calls are queued (or were enqueued in the
+           continuation just run), there may be more responses. *)
+        if t.queue <> [] then loop ()
     in
     (try loop ()
      with Xml_parser.Error _ as e ->
@@ -77,25 +99,33 @@ let spawn ?(prog="coqidetop") ?(args=[]) () =
   let xml_printer = Xml_printer.make (Xml_printer.TChannel cout) in
   let t = {
     process; out_chan = cout; xml_printer;
-    pending_feedback = []; waiting_for = None;
+    pending_feedback = []; queue = []; head_dispatched = false;
     fragment = ""; lexerror = None;
   } in
   t_ref := Some t;
   t
 
-(* Send a call asynchronously with a continuation *)
-let send_call t call k =
-  assert (t.waiting_for = None);
-  t.waiting_for <- Some (Pending (call, k));
-  Xml_printer.print t.xml_printer (Xmlprotocol.of_call call)
+(* Pull-style: enqueue and return a handle whose ref fills when the
+   response arrives. *)
+let submit t call =
+  let h = ref None in
+  enqueue t (Pending (call, fun v -> h := Some v));
+  h
 
-(* Send a call and block until the response arrives.
-   Uses select_with_watches to keep processing other watches. *)
+let poll_response h = !h
+
+(* Push-style: enqueue with a continuation. Always safe — multiple
+   sends are queued FIFO. *)
+let send_call t call k =
+  enqueue t (Pending (call, k))
+
 (* Interrupt callback — set by the application to handle ^C during blocking calls *)
 let interrupt_hook : (t -> unit) option ref = ref None
 
 let set_interrupt_hook f = interrupt_hook := Some f
 
+(* Send a call and block until the response arrives.
+   Uses select_with_watches to keep processing other watches. *)
 let eval_call t call =
   let result = ref None in
   send_call t call (fun v -> result := Some v);
@@ -110,7 +140,7 @@ let eval_call t call =
   | Some v -> v
   | None -> assert false
 
-let is_busy t = t.waiting_for <> None
+let is_busy t = t.queue <> []
 
 let init t filename =
   match eval_call t (Xmlprotocol.init filename) with
