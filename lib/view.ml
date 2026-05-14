@@ -192,10 +192,13 @@ let render_sentence_regions r buf session spans =
 (* Wrap lines to fit a given width, returning a flat list of screen lines *)
 (* Render a scrollable text pane with optional selection highlight *)
 let render_text_pane ?(sel : Tab.pane_selection option) ?set_cache
-    ?(hanging=0) r pane scroll_ref lines_list =
+    ?(hanging=0) ?(wrap=true) r pane scroll_ref lines_list =
   Render.clear_pane r pane;
   let (rows, cols) = Render.pane_dims r pane in
-  let wrapped = Styled.wrap ~hanging cols lines_list in
+  let wrapped =
+    if wrap then Styled.wrap ~hanging cols lines_list
+    else lines_list
+  in
   (match set_cache with Some f -> f wrapped | None -> ());
   let n = List.length wrapped in
   scroll_ref := max 0 (min !scroll_ref (max 0 (n - rows)));
@@ -356,9 +359,17 @@ let update_msg_tabs (ctx : Editor_context.t) r (tab : Tab.t) =
   if not search_active then
     Msg_pane.remove Msg_pane.Search
   else begin
+    (* Auto-pop the Search tab the first time it appears for a given
+       search session (single-file or project). Once the user has
+       clicked away to another tab they stay there; the next ESC →
+       new ^F cycle removes and re-creates the tab, re-triggering
+       the auto-pop. *)
+    let was_present = Msg_pane.find Msg_pane.Search <> None in
     let st = Msg_pane.ensure Msg_pane.Search in
     let (lines, _active_row) = Search_tab.render ctx.search in
-    if lines <> st.lines then st.lines <- lines
+    if lines <> st.lines then st.lines <- lines;
+    if not was_present then
+      Msg_pane.activate_unless_terminal Msg_pane.Search
   end;
   ignore tab
 
@@ -396,12 +407,15 @@ let render_messages (ctx : Editor_context.t) r (tab : Tab.t) =
     let ms = ref active.scroll in
     let hanging = match active.kind with
       | Msg_pane.Errors -> 6
-      | Msg_pane.Search -> 10  (* "  ▸ NNNN: " *)
       | _ -> 0
     in
+    (* Search rows must not wrap: lookup_tab_row maps row indices
+       1:1 to (file, match), and wrapping breaks that. Long match
+       lines clip at the pane's right edge instead. *)
+    let wrap = active.kind <> Msg_pane.Search in
     render_text_pane ~sel:active.sel
       ~set_cache:(fun l -> active.lines_cache <- l)
-      ~hanging
+      ~hanging ~wrap
       r Render.PMessages ms active.lines;
     active.scroll <- !ms
 
@@ -441,9 +455,13 @@ let render_script (ctx : Editor_context.t) r (tab : Tab.t) =
   let (rows, cols) = Render.pane_dims r Render.PScript in
   let gw = gutter_width buf in
   let content_cols = max 1 (cols - gw) in
+  (* The search prompt and any other bottom panel overlay the pane's
+     bottom [panel_rows]; treat those as not visible when ensuring the
+     cursor is in view. *)
+  let visible_rows = max 1 (rows - Render.panel_rows r) in
   let cur = Buffer.cursor buf in
   if tab.last_ensured_cur <> Some cur then begin
-    Buffer.ensure_visible_h buf rows content_cols;
+    Buffer.ensure_visible_h buf visible_rows content_cols;
     tab.last_ensured_cur <- Some cur
   end;
   let scroll = Buffer.scroll_top buf in
@@ -884,7 +902,8 @@ let render_all (ctx : Editor_context.t) r (tab : Tab.t) =
       let (cl, _) = Buffer.cursor tab.buf in
       let scroll = Buffer.scroll_top tab.buf in
       let (rows, _) = Render.pane_dims r Render.PScript in
-      cl >= scroll && cl < scroll + rows
+      let visible_rows = max 1 (rows - Render.panel_rows r) in
+      cl >= scroll && cl < scroll + visible_rows
   in
   let picker = get_picker ctx in
   let cursor_visible = cursor_visible && picker = None in

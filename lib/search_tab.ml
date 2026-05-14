@@ -55,8 +55,12 @@ let render results_opt =
          let text = prefix_text ^ line_no ^ body_text in
          let line_no_attr = attrs.ga_comment in
          let match_attr =
+           (* All match spans share the active-match palette so the
+              user actually sees them. The non-current matches get
+              reverse-video on top — flipping the bright bg to fg
+              dims the cell. The current match stays bright. *)
            if is_current then attrs.ga_search_current
-           else attrs.ga_search_match in
+           else { attrs.ga_search_current with reverse = true } in
          let spans = [
            { Styled.start = prefix_len;
              len = line_no_len;

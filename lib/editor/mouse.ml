@@ -216,7 +216,20 @@ let handle (ctx : Editor_context.t) (mev : Input.mouse_event) (tab : Tab.t) r
                      (match Search_results.find_match sr path idx with
                       | None -> false
                       | Some m ->
+                        (* Update both the project-search-side cursor
+                           (which survives because Project_search.results
+                           returns the same mutable object every frame)
+                           and the per-tab Search.state.current (which is
+                           the source of truth in single-file mode, where
+                           ctx.search is re-derived each frame). *)
                         Search_results.set_current sr (Some (path, idx));
+                        if not ctx.project_mode then begin
+                          match Tab.search_state tab with
+                          | Some s ->
+                            Tab.set_search tab
+                              (Some (Search.set_current s idx))
+                          | None -> ()
+                        end;
                         Jump.push ctx tab;
                         ctx.jump_target <-
                           Some (m.ml_line - 1, m.ml_col_start);
@@ -241,7 +254,11 @@ let handle (ctx : Editor_context.t) (mev : Input.mouse_event) (tab : Tab.t) r
                   true))
         end else false
       in
-      if jumped_to_error then ()
+      if jumped_to_error then
+        (* A click that jumps to a match / error is a "go there"
+           gesture — focus should end up in the script pane where
+           the cursor now is, not in the messages tab we clicked. *)
+        ctx.focus <- Editor_context.FScript
       else
       (* Check if we should forward to terminal *)
       let forwarded = if pane = Render.PMessages then

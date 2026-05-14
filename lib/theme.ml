@@ -273,7 +273,13 @@ let grid_attrs_of_theme (theme : t) : grid_attrs =
     ga_status = a theme.status_fg theme.status_bg;
     ga_border = a theme.border_fg theme.bg;
     ga_selection = a theme.selection_fg theme.selection_bg;
-    ga_search_match = a theme.default_fg theme.search_match_bg;
+    (* Non-current matches: same palette as the current match but
+       with reverse-video, which swaps fg/bg so the cell reads as
+       dim against the buffer background. Keeps them visibly in the
+       same color family as the active highlight. *)
+    ga_search_match =
+      (let a = make_attr theme.search_current_fg theme.search_current_bg in
+       { a with reverse = true });
     ga_search_current = ab theme.search_current_fg theme.search_current_bg;
     ga_tab_active = ab theme.status_fg theme.status_bg;
     ga_tab_inactive = a theme.border_fg theme.status_bg;
