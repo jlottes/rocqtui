@@ -109,26 +109,33 @@ let poll t =
     match List.find_opt (fun w -> w.wd = wd) t.watches with
     | None -> ()
     | Some w ->
-      (* IN_IGNORED fires when the watch is removed (file deleted /
-         filesystem unmounted). Drop the dead watch entry. *)
-      if emask land mask_ignored <> 0 then
-        t.watches <- List.filter (fun w2 -> w2.wd <> wd) t.watches
-      else
-        match w.kind with
-        | WatchFile ->
-          (* Re-attach after atomic rename so further edits still fire. *)
-          if emask land mask_delete_self <> 0
-             || emask land mask_move_self <> 0 then begin
-            t.watches <- List.filter (fun w2 -> w2.wd <> wd) t.watches;
-            (try
-               let new_wd = inotify_add_watch t.ifd w.path file_mask in
-               t.watches <-
-                 { wd = new_wd; path = w.path; kind = WatchFile }
-                 :: t.watches
-             with _ -> ())
-          end;
-          push (FileChanged w.path)
-        | WatchDir ->
+      match w.kind with
+      | WatchFile ->
+        (* The watched inode is gone whenever MOVE_SELF, DELETE_SELF,
+           or IGNORED fires. Atomic-rename saves produce all three —
+           Claude Code's Edit tool emits IGNORED before DELETE_SELF,
+           so checking only the latter two would let IGNORED GC the
+           entry first and silently skip the re-attach. Drop the dead
+           entry and try to re-attach on the same path so subsequent
+           edits still fire. Repeat events for the same wd within one
+           poll are harmless: the second lookup falls through to None. *)
+        if emask land mask_delete_self <> 0
+           || emask land mask_move_self <> 0
+           || emask land mask_ignored <> 0 then begin
+          t.watches <- List.filter (fun w2 -> w2.wd <> wd) t.watches;
+          (try
+             let new_wd = inotify_add_watch t.ifd w.path file_mask in
+             t.watches <-
+               { wd = new_wd; path = w.path; kind = WatchFile }
+               :: t.watches
+           with _ -> ())
+        end;
+        push (FileChanged w.path)
+      | WatchDir ->
+        if emask land mask_ignored <> 0 then
+          (* Directory gone (deleted / unmounted) — GC the entry. *)
+          t.watches <- List.filter (fun w2 -> w2.wd <> wd) t.watches
+        else begin
           let is_dir = emask land mask_isdir <> 0 in
           let added =
             emask land mask_create <> 0
@@ -142,6 +149,7 @@ let poll t =
             push (DirEntryAdded { dir = w.path; name; is_dir })
           else if removed then
             push (DirEntryRemoved { dir = w.path; name; is_dir })
+        end
   ) raw;
   List.rev !events
 

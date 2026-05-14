@@ -104,6 +104,50 @@ let test_file_watch_close_write () =
   File_watch.close w;
   rm_rf dir
 
+(* Atomic-rename saves over a file-watched path (open buffer scenario).
+   The kernel emits MOVE_SELF/DELETE_SELF and IN_IGNORED on the dying
+   inode; on some orderings (Claude Code's Edit tool: IGNORED first)
+   the IGNORED event must NOT GC the entry before re-attach runs, or
+   the next edit goes undetected. Regression for the May 13 dir-watch
+   commit. *)
+let test_file_watch_atomic_rename () =
+  let dir = mkdtemp "rocqtui_fw_atomic_file_" in
+  let target = Filename.concat dir "buf.v" in
+  let tmp1 = Filename.concat dir "buf.v.tmp1" in
+  let tmp2 = Filename.concat dir "buf.v.tmp2" in
+  let write_then_rename src content =
+    let oc = open_out src in
+    output_string oc content;
+    close_out oc;
+    Sys.rename src target
+  in
+  write_then_rename tmp1 "v0\n";
+  let w = File_watch.create () in
+  File_watch.add_watch w target;
+  (* First atomic rename — old inode dies, watch must re-attach. *)
+  write_then_rename tmp1 "v1\n";
+  wait ();
+  let events1 = File_watch.poll w in
+  let saw1 = any_match events1 (function
+    | File_watch.FileChanged p when p = target -> true
+    | _ -> false)
+  in
+  check "first atomic rename of file-watched path yields FileChanged"
+    saw1;
+  (* Second atomic rename — only fires if the watch was re-attached. *)
+  write_then_rename tmp2 "v2\n";
+  wait ();
+  let events2 = File_watch.poll w in
+  let saw2 = any_match events2 (function
+    | File_watch.FileChanged p when p = target -> true
+    | _ -> false)
+  in
+  check
+    "second atomic rename of file-watched path also yields FileChanged"
+    saw2;
+  File_watch.close w;
+  rm_rf dir
+
 (* Atomic-rename saves (vim, many editors) swap a tmp file onto the
    target inode. This both kills the old file-watch (IN_DELETE_SELF)
    and fires a dir-event (IN_MOVED_TO). Either is enough for one
@@ -174,5 +218,6 @@ let () =
   test_dir_watch_delete ();
   test_dir_watch_subdir_create ();
   test_file_watch_close_write ();
+  test_file_watch_atomic_rename ();
   test_project_file_content_change ();
   test_project_file_atomic_rename ()
