@@ -318,6 +318,125 @@ let test_is_case_insensitive () =
     ~got:(Search.is_case_insensitive ~query:"foo" ~flags:f)
     string_of_bool
 
+(* --- New state model: query_state + buffer_matches --- *)
+
+let q ?(flags=Search.empty_flags) query =
+  { Search.query; flags; replacement = ""; focus = Find }
+
+let test_bm_empty_query () =
+  let buf = load "hello world" in
+  let qs = q "" in
+  let bm = Search.recompute_buffer_matches qs buf
+    ~anchor:(p 0 0) ~saved_cursor:(p 0 0) in
+  check_eq "bm empty query: no matches"
+    ~expected:0 ~got:(Array.length bm.matches) show_int;
+  check_eq "bm empty query: current = -1"
+    ~expected:(-1) ~got:bm.current show_int
+
+let test_bm_anchor_picks_at_or_after () =
+  let buf = load "foo bar foo baz foo" in
+  let qs = q "foo" in
+  let bm = Search.recompute_buffer_matches qs buf
+    ~anchor:(p 0 4) ~saved_cursor:(p 0 0) in
+  (* anchor (0,4) is after the first match (0,0–0,3). First match at-or-
+     after is the second one (0,8). *)
+  check_eq "bm anchor: picks first match at-or-after"
+    ~expected:1 ~got:bm.current show_int
+
+let test_bm_anchor_wraps () =
+  let buf = load "foo bar foo" in
+  let qs = q "foo" in
+  let bm = Search.recompute_buffer_matches qs buf
+    ~anchor:(p 9 99) ~saved_cursor:(p 0 0) in
+  check_eq "bm anchor past end: wraps to 0"
+    ~expected:0 ~got:bm.current show_int
+
+let test_bm_saved_cursor_preserved () =
+  let buf = load "foo" in
+  let qs = q "foo" in
+  let sc = p 5 2 in
+  let bm = Search.recompute_buffer_matches qs buf ~anchor:(p 0 0) ~saved_cursor:sc in
+  check_eq "bm: saved_cursor preserved from caller"
+    ~expected:sc ~got:bm.saved_cursor show_pos
+
+let test_bm_anchor_of () =
+  (* When current is valid, anchor_of returns its start. *)
+  let buf = load "foo bar foo" in
+  let qs = q "foo" in
+  let bm = Search.recompute_buffer_matches qs buf
+    ~anchor:(p 0 0) ~saved_cursor:(p 0 0) in
+  bm.current <- 1;
+  check_eq "anchor_of: previous current's start"
+    ~expected:(p 0 8) ~got:(Search.anchor_of bm) show_pos;
+  (* When current is -1, anchor_of returns saved_cursor. *)
+  bm.current <- -1;
+  check_eq "anchor_of: falls back to saved_cursor"
+    ~expected:(p 0 0) ~got:(Search.anchor_of bm) show_pos
+
+let test_bm_recompute_preserves_location () =
+  (* On match 1 (line 0 col 8). Recompute the same query — the same
+     match should still be there, and current should still be on it. *)
+  let buf = load "foo bar foo baz foo" in
+  let qs = q "foo" in
+  let bm = Search.recompute_buffer_matches qs buf
+    ~anchor:(p 0 0) ~saved_cursor:(p 0 0) in
+  bm.current <- 1;
+  let bm2 = Search.recompute_buffer_matches qs buf
+    ~anchor:(Search.anchor_of bm) ~saved_cursor:bm.saved_cursor in
+  check_eq "recompute preserves location: still on (0,8)"
+    ~expected:(p 0 8) ~got:bm2.matches.(bm2.current).start_ show_pos
+
+let test_bm_recompute_match_dropped () =
+  (* On match 1. Refine query so match 0 is dropped. The location at
+     line 0 col 8 still matches. New current should still point to
+     that location (now at index 0). *)
+  let buf = load "foo bar fooX baz" in
+  let qs = q "foo" in
+  let bm = Search.recompute_buffer_matches qs buf
+    ~anchor:(p 0 0) ~saved_cursor:(p 0 0) in
+  bm.current <- 1;
+  (* Refine to "fooX" — only the second match survives. *)
+  let qs2 = q "fooX" in
+  let bm2 = Search.recompute_buffer_matches qs2 buf
+    ~anchor:(Search.anchor_of bm) ~saved_cursor:bm.saved_cursor in
+  check_eq "recompute drop earlier: location preserved"
+    ~expected:(p 0 8) ~got:bm2.matches.(bm2.current).start_ show_pos;
+  check_eq "recompute drop earlier: now index 0"
+    ~expected:0 ~got:bm2.current show_int
+
+let test_bm_nav_wrap () =
+  let buf = load "foo foo foo" in
+  let qs = q "foo" in
+  let bm = Search.recompute_buffer_matches qs buf
+    ~anchor:(p 0 0) ~saved_cursor:(p 0 0) in
+  Search.bm_next bm;
+  check_eq "bm_next from 0: → 1" ~expected:1 ~got:bm.current show_int;
+  Search.bm_next bm;
+  Search.bm_next bm;
+  check_eq "bm_next wraps: 2 → 0" ~expected:0 ~got:bm.current show_int;
+  Search.bm_prev bm;
+  check_eq "bm_prev wraps: 0 → 2" ~expected:2 ~got:bm.current show_int
+
+let test_bm_set_current_clamps () =
+  let buf = load "foo foo" in
+  let qs = q "foo" in
+  let bm = Search.recompute_buffer_matches qs buf
+    ~anchor:(p 0 0) ~saved_cursor:(p 0 0) in
+  Search.bm_set_current bm 99;
+  check_eq "bm_set_current clamps to last"
+    ~expected:1 ~got:bm.current show_int;
+  Search.bm_set_current bm (-5);
+  check_eq "bm_set_current clamps to 0"
+    ~expected:0 ~got:bm.current show_int
+
+let test_empty_query_constant () =
+  check_eq "empty_query: empty query string"
+    ~expected:"" ~got:Search.empty_query.query (fun s -> s);
+  check_eq "empty_query: empty replacement"
+    ~expected:"" ~got:Search.empty_query.replacement (fun s -> s);
+  check_eq "empty_query: focus = Find"
+    ~expected:true ~got:(Search.empty_query.focus = Find) string_of_bool
+
 let () =
   test_empty_query ();
   test_basic_literal ();
@@ -343,6 +462,16 @@ let () =
   test_substitute_regex ();
   test_set_replacement_focus ();
   test_is_case_insensitive ();
+  test_bm_empty_query ();
+  test_bm_anchor_picks_at_or_after ();
+  test_bm_anchor_wraps ();
+  test_bm_saved_cursor_preserved ();
+  test_bm_anchor_of ();
+  test_bm_recompute_preserves_location ();
+  test_bm_recompute_match_dropped ();
+  test_bm_nav_wrap ();
+  test_bm_set_current_clamps ();
+  test_empty_query_constant ();
   Printf.printf "\n%d passed, %d failed\n" !pass !fail;
   if !fail > 0 then exit 1;
   ignore show_matches

@@ -31,7 +31,29 @@ type state = private {
   focus : focus;           (** Which field receives typing. *)
 }
 
+(** New state model (see [docs/SEARCH_STATE_REFACTOR.md]). Coexists
+    with [state] during the phased migration; [state] is retired in
+    Phase 2. *)
+
+(** Global "what we're searching for" — one instance lives in
+    [Editor_context]. *)
+type query_state = {
+  query : string;
+  flags : flags;
+  replacement : string;
+  focus : focus;
+}
+
+(** Per-buffer matches plus the user's cursor (the "active match")
+    within them. *)
+type buffer_matches = {
+  matches : match_ array;
+  mutable current : int;
+  saved_cursor : pos;
+}
+
 val empty_flags : flags
+val empty_query : query_state
 
 (** Empty state anchored at the buffer's current cursor. *)
 val create : Buffer.t -> state
@@ -49,6 +71,26 @@ val recompute : Buffer.t -> string -> flags -> match_ array
 (** Like [recompute] but on a raw text string. Used by the project-wide
     scanner so each file doesn't have to be wrapped in a [Buffer.t]. *)
 val recompute_in_text : string -> string -> flags -> match_ array
+
+(** Build a [buffer_matches] for [buf] using the given [query_state].
+    [anchor] picks the new [current] — typically the previous current's
+    start_ (preserving location across a recompute), or
+    [saved_cursor] when there was no previous current. *)
+val recompute_buffer_matches :
+  query_state -> Buffer.t ->
+  anchor:pos -> saved_cursor:pos -> buffer_matches
+
+(** Previous-current's start_ when valid, else [m.saved_cursor]. The
+    natural anchor for a recompute that wants to "stick to where the
+    user was looking". *)
+val anchor_of : buffer_matches -> pos
+
+(** Mutating navigation on a [buffer_matches]. *)
+val bm_next : buffer_matches -> unit
+val bm_prev : buffer_matches -> unit
+val bm_set_current : buffer_matches -> int -> unit
+
+val bm_current_match : buffer_matches -> match_ option
 
 (** Replace [query] and recompute. Picks the first match at or after the
     saved cursor as the new [current]. *)
@@ -82,6 +124,10 @@ val substitute :
     no matches. *)
 val next : state -> state
 val prev : state -> state
+
+(** Set the current match index directly. Clamps to [\[0, n)] when
+    there are matches, sets to [-1] when there are none. *)
+val set_current : state -> int -> state
 
 (** The current match, or [None] when there are no matches. *)
 val current_match : state -> match_ option
