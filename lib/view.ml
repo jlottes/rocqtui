@@ -342,18 +342,28 @@ let update_msg_tabs (ctx : Editor_context.t) r (tab : Tab.t) =
     if not was_present then
       Msg_pane.activate_unless_terminal Msg_pane.Search;
     (* Auto-scroll to keep the active match visible whenever the
-       active row changes. Mirrors Build_errors's behavior for the
-       Errors tab. *)
+       active row changes. The search prompt's panel overlays the
+       bottom row of the messages pane; subtract that overlay from
+       the available rows. We query the modal stack rather than
+       [Render.panel_rows] because [set_panel_rows] runs in
+       [update_status], which is AFTER us in the render order — so
+       the cached value is one frame stale on the prompt's first
+       frame. *)
     if active_row <> !search_last_active && active_row <> None then begin
       search_last_active := active_row;
       match active_row with
       | None -> ()
       | Some ar ->
         let (rows, _) = Render.pane_dims r Render.PMessages in
+        let prompt_overlay = match Modal.top ctx.modal with
+          | Some Modal.SearchPrompt -> 1
+          | _ -> 0
+        in
+        let visible_rows = max 1 (rows - prompt_overlay) in
         let scroll = st.scroll in
         if ar < scroll then st.scroll <- ar
-        else if ar >= scroll + rows then
-          st.scroll <- max 0 (ar - rows + 1)
+        else if ar >= scroll + visible_rows then
+          st.scroll <- max 0 (ar - visible_rows + 1)
     end else if active_row = None then
       search_last_active := None
   end;

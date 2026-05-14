@@ -521,12 +521,10 @@ let handle_search_prompt (ctx : Editor_context.t) ev (tab : Tab.t) =
     project_search_kick ctx tab;
     Some Continue
 
-  (* Scroll wheel falls through to the normal mouse path so the user
-     can scroll the buffer while the prompt is open. Clicks and other
-     mouse events stay absorbed so they don't move the cursor or
-     start a selection mid-search. *)
-  | Input.Mouse mev
-    when mev.button = Input.ScrollUp || mev.button = Input.ScrollDown ->
+  (* Mouse events fall through to the normal handler so the user can
+     scroll, click match rows in the Search tab, switch sub-tabs in
+     the messages pane, etc. while the prompt is open. *)
+  | Input.Mouse _ ->
     None
 
   | _ -> Some Continue
