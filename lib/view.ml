@@ -319,6 +319,31 @@ let update_msg_tabs (ctx : Editor_context.t) r (tab : Tab.t) =
     end else if cur = None then
       errors_last_active := None
   end;
+  (* Snapshot ctx.search from whichever source ctx.project_mode picks.
+     Drives both the messages tab below and F3/Shift+F3 stepping.
+     Inlined here (not in modals.ml) because view.ml can't depend on
+     the editor subdir without creating a dependency cycle. *)
+  ctx.search <-
+    (if ctx.project_mode then
+       Project_search.results ctx.project_search
+     else
+       match Tab.search_state tab, Buffer.filename tab.buf with
+       | Some s, Some path when s.query <> "" ->
+         let project_dir = match
+           Project.find_project_file (Filename.dirname path) with
+           | Some (pd, _) -> pd
+           | None -> Filename.dirname path
+         in
+         let prefix = project_dir ^ "/" in
+         let plen = String.length prefix in
+         let rel_path =
+           if String.length path > plen
+              && String.sub path 0 plen = prefix
+           then String.sub path plen (String.length path - plen)
+           else ""
+         in
+         Some (Search_results.of_single_file ~path ~rel_path s tab.buf)
+       | _ -> None);
   (* Search tab: ensure when ctx.search has any matches (or a scan is
      active so the placeholder "scanning…" header can show); remove
      when neither. *)
@@ -632,6 +657,7 @@ let render_search_panel (ctx : Editor_context.t) (tab : Tab.t) r =
   in
   let case_ind = if case_insensitive then "[aa]" else "[Aa]" in
   let regex_ind = if regex then "[.*]" else "[..]" in
+  let proj_ind = if ctx.project_mode then "[proj]" else "[file]" in
   let compose_ind =
     match ctx.compose with
     | Some cs when Compose.active cs ->
@@ -648,10 +674,11 @@ let render_search_panel (ctx : Editor_context.t) (tab : Tab.t) r =
   let replace_text =
     if focus = Search.Replace then replacement ^ caret else replacement in
   let find_row =
-    Printf.sprintf "Find:    %s%s  %s %s  %s %s%s"
+    Printf.sprintf "Find:    %s%s  %s %s  %s %s  %s %s%s"
       find_text counter
       Keys.search_toggle_case.display case_ind
       Keys.search_toggle_regex.display regex_ind
+      Keys.search_toggle_project.display proj_ind
       compose_ind in
   let trailer =
     if ctx.search_panel_msg <> "" then "  " ^ ctx.search_panel_msg

@@ -59,6 +59,7 @@ val search_toggle_regex : binding
 val search_field_toggle : binding
 val search_replace_one : binding
 val search_replace_all : binding
+val search_toggle_project : binding
 val next_error : binding
 val prev_error : binding
 val cut : binding

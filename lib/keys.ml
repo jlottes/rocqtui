@@ -176,6 +176,11 @@ let search_replace_all = {
   display = "Alt+A"; context = Global;
   description = "Replace all matches (in prompt)" }
 
+let search_toggle_project = {
+  name = "search_toggle_project"; codes = []; kitty_codes = [(112, 3)];
+  display = "Alt+P"; context = Global;
+  description = "Toggle project-wide search (in prompt)" }
+
 let next_error = {
   name = "next_error"; codes = [273]; kitty_codes = [];
   display = "F9"; context = Global; description = "Next build error" }

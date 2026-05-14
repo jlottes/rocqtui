@@ -346,6 +346,8 @@ let () =
     (* Poll the dep runner; a fresh graph triggers a re-render so the
        panel header transitions from "computing…" to the new state. *)
     if Dep_runner.poll dr then Render_need.request ();
+    (* Step the project-wide search scanner. Cheap when idle. *)
+    if Project_search.step ctx.project_search then Render_need.request ();
     (* Poll file manager *)
     List.iter (fun ev ->
       match ev with

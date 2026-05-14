@@ -103,6 +103,7 @@ See `lib/keys.ml` for the source of truth. Summary:
 | Tab | Toggle Find / Replace field (in panel) |
 | Alt+Enter | Replace current match, advance (in panel) |
 | Alt+A | Replace all matches (in panel) |
+| Alt+P | Toggle project-wide search (in panel); auto-opens "Search" messages tab |
 | F9 / Shift+F9 | Next / previous build error / warning |
 | ^B | Jump back |
 | ^L | Jump to definition |

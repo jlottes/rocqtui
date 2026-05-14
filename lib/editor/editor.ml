@@ -229,10 +229,10 @@ let handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r =
       Some Continue
     end
     else if Keymatch.match_binding ev Keys.search_next then begin
-      Modals.search_advance tab `Next; Some Continue
+      Modals.dispatched_advance ctx tab `Next
     end
     else if Keymatch.match_binding ev Keys.search_prev then begin
-      Modals.search_advance tab `Prev; Some Continue
+      Modals.dispatched_advance ctx tab `Prev
     end
     else if Keymatch.match_binding ev Keys.interrupt then begin
       (match session with

@@ -53,6 +53,20 @@ val handle_search_prompt :
     by both the search prompt and the global F3 / Shift+F3 bindings. *)
 val search_advance : Tab.t -> [ `Next | `Prev ] -> unit
 
+(** F3 / Shift+F3 dispatcher honouring [ctx.project_mode]. In single-
+    file mode this is [search_advance] returning [Continue]. In project
+    mode it walks the project results; when the next match is in a
+    different file, returns [Open_file] so the editor opens (or
+    switches to) that file before jumping to the match. *)
+val dispatched_advance :
+  Editor_context.t -> Tab.t -> [ `Next | `Prev ] ->
+  Action.action option
+
+(** (Re)start the project-wide scanner with the prompt's current
+    query and flags. Cancels the scanner when [project_mode] is off,
+    no project is found, or the query is empty. *)
+val project_search_kick : Editor_context.t -> Tab.t -> unit
+
 (** Append text to whichever prompt field has focus. Find re-runs the
     matcher; Replace just stores. Used by both the printable-character
     handler in the prompt and the compose layer. *)

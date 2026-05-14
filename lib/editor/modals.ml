@@ -264,6 +264,58 @@ let search_advance (tab : Tab.t) dir =
     move_cursor_to_current tab
   | None -> ()
 
+(* Restart (or cancel) the project-wide scanner so its results
+   reflect the current query/flags. Called whenever the prompt's
+   state changes while [project_mode] is on. *)
+let project_search_kick (ctx : Editor_context.t) (tab : Tab.t) =
+  if not ctx.project_mode then
+    Project_search.cancel ctx.project_search
+  else
+    match Buffer.filename tab.buf with
+    | None -> Project_search.cancel ctx.project_search
+    | Some fname ->
+      (match Project.find_project_file (Filename.dirname fname) with
+       | None -> Project_search.cancel ctx.project_search
+       | Some (project_dir, project_file) ->
+         let (query, flags) = match Tab.search_state tab with
+           | Some s -> s.query, s.flags
+           | None -> "", Search.empty_flags
+         in
+         if query = "" then
+           Project_search.cancel ctx.project_search
+         else
+           Project_search.start ctx.project_search
+             ~project_dir ~project_file ~query ~flags)
+
+(* F3 / Shift+F3 dispatcher. In single-file mode delegates to the
+   per-tab [search_advance]. In project mode, advances through the
+   project-wide results, opening the next file via Open_file when
+   the match isn't in the current buffer. *)
+let dispatched_advance (ctx : Editor_context.t) (tab : Tab.t) dir
+  : Action.action option =
+  if not ctx.project_mode then begin
+    search_advance tab dir;
+    Some Action.Continue
+  end
+  else
+    match Project_search.results ctx.project_search with
+    | None -> Some Action.Continue
+    | Some sr ->
+      let forward = (dir = `Next) in
+      match Search_results.advance sr ~forward with
+      | None -> Some Action.Continue
+      | Some (path, m) ->
+        let target_line = m.ml_line - 1 in
+        let target_col = m.ml_col_start in
+        (match Buffer.filename tab.buf with
+         | Some f when f = path ->
+           Buffer.move_to tab.buf target_line target_col;
+           Some Action.Continue
+         | _ ->
+           Jump.push ctx tab;
+           ctx.jump_target <- Some (target_line, target_col);
+           Some (Action.Open_file path))
+
 (* Byte offset of (line, col) within [Buffer.text buf]. *)
 let pos_to_byte (buf : Buffer.t) (p : Search.pos) =
   let off = ref 0 in
@@ -332,11 +384,18 @@ let logical_escape (ctx : Editor_context.t) (tab : Tab.t) =
        Buffer.move_to tab.buf s.saved_cursor.line s.saved_cursor.col
      | None -> ());
     Tab.set_search tab None;
+    (* Also drop any project search — ESC is the global "clear" key. *)
+    ctx.project_mode <- false;
+    Project_search.cancel ctx.project_search;
     Modal.pop ctx.modal;
     true
   | _ ->
     (match Tab.search_state tab with
-     | Some _ -> Tab.set_search tab None; true
+     | Some _ ->
+       Tab.set_search tab None;
+       ctx.project_mode <- false;
+       Project_search.cancel ctx.project_search;
+       true
      | None -> false)
 
 let handle_search_prompt (ctx : Editor_context.t) ev (tab : Tab.t) =
@@ -369,13 +428,29 @@ let handle_search_prompt (ctx : Editor_context.t) ev (tab : Tab.t) =
     Some Continue
 
   | Input.Special (Input.Backspace, _) ->
-    backspace_focused tab; Some Continue
+    backspace_focused tab;
+    project_search_kick ctx tab;
+    Some Continue
 
   | ev when Keymatch.match_binding ev Keys.search_toggle_case ->
-    with_state Search.toggle_case
+    let r = with_state Search.toggle_case in
+    project_search_kick ctx tab;
+    r
 
   | ev when Keymatch.match_binding ev Keys.search_toggle_regex ->
-    with_state Search.toggle_regex
+    let r = with_state Search.toggle_regex in
+    project_search_kick ctx tab;
+    r
+
+  | ev when Keymatch.match_binding ev Keys.search_toggle_project ->
+    ctx.project_mode <- not ctx.project_mode;
+    if ctx.project_mode then begin
+      project_search_kick ctx tab;
+      Msg_pane.activate_unless_terminal Msg_pane.Search
+    end
+    else
+      Project_search.cancel ctx.project_search;
+    Some Continue
 
   | ev when Keymatch.match_binding ev Keys.search_field_toggle ->
     (match Tab.search_state tab with
@@ -403,15 +478,16 @@ let handle_search_prompt (ctx : Editor_context.t) ev (tab : Tab.t) =
     Some Continue
 
   | ev when Keymatch.match_binding ev Keys.search_next ->
-    search_advance tab `Next; Some Continue
+    dispatched_advance ctx tab `Next
 
   | ev when Keymatch.match_binding ev Keys.search_prev ->
-    search_advance tab `Prev; Some Continue
+    dispatched_advance ctx tab `Prev
 
   (* Printable codepoint (ASCII or UTF-8): append to the focused field. *)
   | Input.Key (cp, m)
     when not m.ctrl && not m.alt && cp >= 32 && cp <> 127 ->
     append_to_field tab (Utf8.encode cp);
+    project_search_kick ctx tab;
     Some Continue
 
   (* Scroll wheel falls through to the normal mouse path so the user
