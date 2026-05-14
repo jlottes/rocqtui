@@ -23,12 +23,16 @@
 
 ## Per-tab State Refactor (Phase 9 remaining)
 
-- [x] Move `goals_scroll`, `messages_scroll`, `focused_pane`, `show_all_hyps`
-      from editor.ml globals into Tab.t
+- [x] Move `goals_scroll`, `messages_scroll`, `show_all_hyps` from
+      editor.ml globals into Tab.t
 - [x] Move `goals_sel`, `messages_sel`, `goals_lines_cache`, `messages_lines_cache`
       into Tab.t
 - [x] Move `mouse_selecting`, `suppress_ensure_visible` into Tab.t
 - [x] Editor.handle_key takes Tab.t instead of separate buf + session
+- [x] **Reverse direction**: `focused_pane` moved back out of Tab.t to
+      `Editor_context.focus`, unified with file-tree focus into a
+      single 4-way variant (`FScript | FGoals | FMessages |
+      FFileTree`). Pane focus is global UI state, not per-buffer.
 - Note: `dragging` and `clipboard` remain global (display-level / shared)
 
 ## Bug Fixes
@@ -40,7 +44,9 @@
 
 - [x] Search (^F) — incremental find with match highlighting,
       F3/Shift+F3 to step, scroll wheel passes through prompt
-- [ ] Search and replace
+- [x] Search and replace — two-field panel inside the search prompt
+      (Tab toggles focus, Alt+Enter replaces current, Alt+A replaces
+      all; regex back-references $1..$9, $&, $$). See REPLACE_PLAN.md.
 - [x] Line numbers gutter in the script pane (Alt+L to toggle;
       reserved marker column for upcoming error/warning/git markers)
 - [x] Tab/indent support (Tab key inserts spaces or tab character)
@@ -86,18 +92,52 @@ or hand-written).
       Visual indicator in tab bar or status bar for files not in _RocqProject
 - [x] External modification detection: inotify watches on open files.
       Clean buffer auto-reloads; dirty buffer shows warning in status bar.
+- [x] Project-tree watching: recursive inotify dir-watches under the
+      project root, with auto-add of new subdirectories. Edits to
+      _RocqProject (including atomic-rename saves) surface as
+      `ProjectChanged` events that re-run `rocq dep` and refresh the
+      file-tree panel.
 - [ ] Rename file (update _RocqProject entry, update tab, save)
+
+## File Tree Panel (`docs/FILE_TREE_PLAN.md`, `docs/DEP_VIEW_PLAN.md`)
+
+- [x] Persistent left-side panel toggled with F8. Coexists with the
+      modal ^O picker — both share `lib/file_listing.ml` for the
+      enumeration.
+- [x] Tree view: expandable directories, project/all .v scope toggle
+      via ^T, transient `/`-to-filter mode.
+- [x] Per-file status glyphs: `*` (dirty), `⟳` (changed on disk),
+      `•` (open with no special state). Matches tab-bar convention.
+      Locked indicator deliberately omitted — caused tab-width
+      flicker in the past from rapid MCP-driven cycling; revisit
+      once we have a debounce layer.
+- [x] Snap to current tab on initial F8 show (`.` re-snaps once
+      the user has wandered).
+- [x] Drag-to-resize on the panel's right edge (`PBorderFileTree`,
+      `DragFileTree`).
+- [x] Dependency-order view (`v` cycles). Files listed in `rocq dep`
+      topological order; current selection's bidirectional closure
+      (ancestors ∪ descendants) is highlighted, everything else
+      dimmed. Async runner so the UI never blocks on `rocq dep`.
+      Left/Right step through the closure (skip dimmed); Up/Down
+      step linearly.
+- [ ] Persist expansion state / view / panel visibility across
+      sessions (small dotfile next to `_RocqProject`).
+- [ ] Drag-to-resize persistence across sessions.
+- [ ] Git status as a third view (after the dep view stabilises;
+      pattern in `DEP_VIEW_PLAN.md` extends naturally).
 
 ## Display / UX
 
 - [ ] Vertical scroll bar in script pane
 - [ ] Better horizontal scroll (scroll follows cursor more smoothly)
-- [x] Minimap (F2): braille overview, own curses window, draggable border,
-      click to scroll, adaptive compression, region coloring, viewport bracket
+- [x] Minimap (^M, Kitty protocol only): braille overview, draggable
+      border, click to scroll, adaptive compression, region coloring,
+      viewport bracket
 - [ ] Configurable pane layout (e.g., goals below script, messages on right)
 - [ ] Remember pane split positions across sessions
 - [ ] Remember window size across sessions
-- [x] Color theme hot-switch (F3): live theme picker, no restart needed
+- [x] Color theme hot-switch (F7): live theme picker, no restart needed
 
 ## Async / Performance
 
