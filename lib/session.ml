@@ -627,6 +627,43 @@ let advance_op t = function
   | Op_fetch_goals fos -> advance_fetch_goals_op t fos
   | Op_rewinding r -> advance_rewinding_op t r
 
+(* Dispatch the next intent in priority order. Caller must have
+   verified that [current_op = None] and the rocq queue is idle. *)
+let dispatch_idle_work t =
+  (* Handle deferred rewind from callback *)
+  (match t.needs_rewind with
+   | Some safe_id ->
+     t.needs_rewind <- None;
+     rewind_to_state t safe_id
+   | None -> ());
+  let has_error = List.exists (fun si ->
+    match si.status with Error _ -> true | _ -> false
+  ) t.sentences in
+  if has_error then
+    start_rewind_errors_op t
+  else if verified_end t > t.target_end then
+    (* Deferred rewind from step_backward / go_to_cursor / etc. *)
+    start_rewinding t (target_id_for_target_end t)
+  else begin
+    let vend = verified_end t in
+    if vend < t.target_end then
+      start_verify t
+    else if t.goals_dirty then begin
+      t.goals_dirty <- false;
+      start_refresh_goals t
+    end
+    else match t.pending_query with
+      | Some pq ->
+        t.pending_query <- None;
+        start_query t pq
+      | None ->
+        match t.pending_fetch with
+        | Some pf ->
+          t.pending_fetch <- None;
+          start_fetch_goals t pf
+        | None -> ()
+  end
+
 (* Poll: process feedback and drive async stepping.
    Returns true if state changed. *)
 let poll t =
@@ -634,42 +671,16 @@ let poll t =
   process_feedback t;
   (match t.current_op with
    | Some op -> advance_op t op
-   | None ->
-     if not (Rocq_protocol.is_busy t.rocq) then begin
-       (* Handle deferred rewind from callback *)
-       (match t.needs_rewind with
-        | Some safe_id ->
-          t.needs_rewind <- None;
-          rewind_to_state t safe_id
-        | None -> ());
-       let has_error = List.exists (fun si ->
-         match si.status with Error _ -> true | _ -> false
-       ) t.sentences in
-       if has_error then
-         start_rewind_errors_op t
-       else if verified_end t > t.target_end then
-         (* Deferred rewind from step_backward / go_to_cursor / etc. *)
-         start_rewinding t (target_id_for_target_end t)
-       else if not (Rocq_protocol.is_busy t.rocq) then begin
-         let vend = verified_end t in
-         if vend < t.target_end then
-           start_verify t
-         else if t.goals_dirty then begin
-           t.goals_dirty <- false;
-           start_refresh_goals t
-         end
-         else match t.pending_query with
-           | Some pq ->
-             t.pending_query <- None;
-             start_query t pq
-           | None ->
-             match t.pending_fetch with
-             | Some pf ->
-               t.pending_fetch <- None;
-               start_fetch_goals t pf
-             | None -> ()
-       end
-     end);
+   | None -> ());
+  (* Re-check after advance_op: it may have cleared current_op. We
+     dispatch the next intent in the same poll cycle so [is_busy]
+     doesn't briefly drop to false between an op finishing and the
+     next intent firing — bridge polls would otherwise observe stale
+     state in that window (e.g. an Error feedback that arrived during
+     the previous op needs to trigger [start_rewind_errors_op] before
+     anyone sees [is_busy = false]). *)
+  if t.current_op = None && not (Rocq_protocol.is_busy t.rocq) then
+    dispatch_idle_work t;
   let changed = t.state_changed in
   t.state_changed <- false;
   changed
