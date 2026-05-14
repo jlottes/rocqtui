@@ -60,9 +60,16 @@ type verifying_op_state = {
   vos_pending : Interface.add_rty Rocq_protocol.handle;
 }
 
+(* Phases of the post-step goals refresh: send the current Printopts
+   via set_options, then fetch goals at the new tip. *)
+type refresh_phase =
+  | Rp_set_options of unit Rocq_protocol.handle
+  | Rp_fetch of Interface.goals option Rocq_protocol.handle
+
 type op_state =
   | Op_query of query_op_state
   | Op_verifying of verifying_op_state
+  | Op_refreshing_goals of refresh_phase
 
 type t = {
   rocq : Rocq_protocol.t;
@@ -451,6 +458,40 @@ let advance_query_op t qos =
        t.current_op <- None;
        t.state_changed <- true)
 
+(* Begin a goals-refresh op: send Printopts, then queue the goals
+   fetch in the second phase. Caller has already cleared
+   [goals_dirty]. *)
+let start_refresh_goals t =
+  let opts = Printopts.to_set_options () in
+  let pending = Rocq_protocol.submit t.rocq (Xmlprotocol.set_options opts) in
+  t.current_op <- Some (Op_refreshing_goals (Rp_set_options pending));
+  t.state_changed <- true
+
+let advance_refreshing_goals_op t = function
+  | Rp_set_options p ->
+    (match Rocq_protocol.poll_response p with
+     | None -> ()
+     | Some _ ->
+       process_feedback t;
+       let pending = Rocq_protocol.submit t.rocq (Xmlprotocol.goals ()) in
+       t.current_op <- Some (Op_refreshing_goals (Rp_fetch pending));
+       t.state_changed <- true)
+  | Rp_fetch p ->
+    (match Rocq_protocol.poll_response p with
+     | None -> ()
+     | Some result ->
+       process_feedback t;
+       (match result with
+        | Interface.Good (Some gs) ->
+          t.goals_cache <- Some gs
+        | Interface.Good None ->
+          t.goals_cache <- None
+        | Interface.Fail (_, _, msg) ->
+          t.msgs <- t.msgs @ [msg];
+          t.goals_cache <- None);
+       t.current_op <- None;
+       t.state_changed <- true)
+
 let advance_verifying_op t v =
   match Rocq_protocol.poll_response v.vos_pending with
   | None -> ()
@@ -488,6 +529,7 @@ let advance_verifying_op t v =
 let advance_op t = function
   | Op_query qos -> advance_query_op t qos
   | Op_verifying v -> advance_verifying_op t v
+  | Op_refreshing_goals phase -> advance_refreshing_goals_op t phase
 
 (* Poll: process feedback and drive async stepping.
    Returns true if state changed. *)
@@ -520,24 +562,7 @@ let poll t =
            start_verify t
          else if t.goals_dirty then begin
            t.goals_dirty <- false;
-           let opts = Printopts.to_set_options () in
-           Rocq_protocol.send_call t.rocq
-             (Xmlprotocol.set_options opts)
-             (fun _result ->
-                process_feedback t;
-                Rocq_protocol.send_call t.rocq
-                  (Xmlprotocol.goals ())
-                  (fun result ->
-                     process_feedback t;
-                     (match result with
-                      | Interface.Good (Some gs) ->
-                        t.goals_cache <- Some gs
-                      | Interface.Good None ->
-                        t.goals_cache <- None
-                      | Interface.Fail (_, _, msg) ->
-                        t.msgs <- t.msgs @ [msg];
-                        t.goals_cache <- None);
-                     t.state_changed <- true))
+           start_refresh_goals t
          end
          else match t.pending_query with
            | Some pq ->
