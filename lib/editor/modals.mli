@@ -48,16 +48,14 @@ val handle_help :
 val handle_search_prompt :
   Editor_context.t -> Input.event -> Tab.t -> Action.action option
 
-(** Advance the tab's current match in the given direction and move the
-    buffer cursor to it. No-op if search is inactive on this tab. Used
-    by both the search prompt and the global F3 / Shift+F3 bindings. *)
-val search_advance : Tab.t -> [ `Next | `Prev ] -> unit
+(** Advance the active tab's [current] match by one and move the
+    buffer cursor to it. No-op when no search is active. *)
+val search_advance :
+  Editor_context.t -> Tab.t -> [ `Next | `Prev ] -> unit
 
-(** F3 / Shift+F3 dispatcher honouring [ctx.project_mode]. In single-
-    file mode this is [search_advance] returning [Continue]. In project
-    mode it walks the project results; when the next match is in a
-    different file, returns [Open_file] so the editor opens (or
-    switches to) that file before jumping to the match. *)
+(** F3 / Shift+F3 dispatcher honouring [ctx.project_mode]. Phase 2:
+    always single-file. Phase 3 reintroduces cross-file stepping
+    in project mode. *)
 val dispatched_advance :
   Editor_context.t -> Tab.t -> [ `Next | `Prev ] ->
   Action.action option
@@ -70,7 +68,7 @@ val project_search_kick : Editor_context.t -> Tab.t -> unit
 (** Append text to whichever prompt field has focus. Find re-runs the
     matcher; Replace just stores. Used by both the printable-character
     handler in the prompt and the compose layer. *)
-val append_to_field : Tab.t -> string -> unit
+val append_to_field : Editor_context.t -> Tab.t -> string -> unit
 
 (** Logical-ESC handler. If the search prompt is open, restores the cursor
     to the position saved when the prompt opened, drops search state, and

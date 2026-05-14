@@ -210,63 +210,68 @@ let handle_query (ctx : Editor_context.t) ev (tab : Tab.t) =
     in
     if handled then Some Continue else None
 
-(* Move the buffer cursor to the current match, if any. Called after
-   any operation that changes [current] so the user sees where the
-   match is. *)
-let move_cursor_to_current (tab : Tab.t) =
-  match Tab.search_state tab with
-  | Some s ->
-    (match Search.current_match s with
+(* Move the buffer cursor to the active match in [tab], if any. *)
+let move_cursor_to_current (ctx : Editor_context.t) (tab : Tab.t) =
+  match Editor_context.tab_matches ctx tab with
+  | None -> ()
+  | Some bm ->
+    (match Search.bm_current_match bm with
      | Some m -> Buffer.move_to tab.buf m.start_.line m.start_.col
      | None -> ())
-  | None -> ()
 
-(* Append a string to the focused prompt field. For Find this re-runs the
-   matcher; for Replace it just stores the text. Initializes a fresh state
-   if search wasn't active. *)
-let append_to_field (tab : Tab.t) text =
-  let buf = tab.buf in
-  let s = match Tab.search_state tab with
-    | Some s -> s
-    | None -> Search.create buf
-  in
-  let s' = match s.focus with
-    | Search.Find -> Search.update_query s buf (s.query ^ text)
-    | Search.Replace -> Search.set_replacement s (s.replacement ^ text)
-  in
-  Tab.set_search tab (Some s');
-  if s.focus = Search.Find then move_cursor_to_current tab
+(* Make sure ctx.search_query is allocated. Returns the (now-present)
+   query_state. *)
+let ensure_search_query (ctx : Editor_context.t) : Search.query_state =
+  match ctx.search_query with
+  | Some q -> q
+  | None ->
+    let q = Search.empty_query in
+    ctx.search_query <- Some q;
+    Editor_context.bump_search_gen ctx;
+    q
 
-(* Pop one codepoint from the focused field. *)
-let backspace_focused (tab : Tab.t) =
-  let buf = tab.buf in
-  match Tab.search_state tab with
+(* Append text to the focused field; bump the gen so per-tab matches
+   refresh on next access; move the cursor to the new current match
+   when typing in Find. *)
+let append_to_field (ctx : Editor_context.t) (tab : Tab.t) text =
+  let q = ensure_search_query ctx in
+  let q' = match q.focus with
+    | Search.Find -> { q with query = q.query ^ text }
+    | Search.Replace -> { q with replacement = q.replacement ^ text }
+  in
+  ctx.search_query <- Some q';
+  Editor_context.bump_search_gen ctx;
+  if q.focus = Search.Find then move_cursor_to_current ctx tab
+
+let backspace_focused (ctx : Editor_context.t) (tab : Tab.t) =
+  match ctx.search_query with
   | None -> ()
-  | Some s ->
+  | Some q ->
     let pop str =
       if str = "" then str
       else String.sub str 0 (Utf8.prev str (String.length str)) in
-    let s' = match s.focus with
-      | Search.Find -> Search.update_query s buf (pop s.query)
-      | Search.Replace -> Search.set_replacement s (pop s.replacement)
+    let q' = match q.focus with
+      | Search.Find -> { q with query = pop q.query }
+      | Search.Replace -> { q with replacement = pop q.replacement }
     in
-    Tab.set_search tab (Some s');
-    if s.focus = Search.Find then move_cursor_to_current tab
+    ctx.search_query <- Some q';
+    Editor_context.bump_search_gen ctx;
+    if q.focus = Search.Find then move_cursor_to_current ctx tab
 
-let search_advance (tab : Tab.t) dir =
-  match Tab.search_state tab with
-  | Some s ->
-    let s' = match dir with
-      | `Next -> Search.next s
-      | `Prev -> Search.prev s
-    in
-    Tab.set_search tab (Some s');
-    move_cursor_to_current tab
+(* In-place advance the active tab's [current], then move the buffer
+   cursor. Single-file F3/Shift+F3; Phase 3 re-introduces cross-file
+   stepping in project mode. *)
+let search_advance (ctx : Editor_context.t) (tab : Tab.t) dir =
+  match Editor_context.tab_matches ctx tab with
   | None -> ()
+  | Some bm ->
+    (match dir with
+     | `Next -> Search.bm_next bm
+     | `Prev -> Search.bm_prev bm);
+    move_cursor_to_current ctx tab
 
-(* Restart (or cancel) the project-wide scanner so its results
-   reflect the current query/flags. Called whenever the prompt's
-   state changes while [project_mode] is on. *)
+(* Restart (or cancel) the project-wide scanner. Reads the query
+   from the global ctx.search_query. *)
 let project_search_kick (ctx : Editor_context.t) (tab : Tab.t) =
   if not ctx.project_mode then
     Project_search.cancel ctx.project_search
@@ -277,8 +282,8 @@ let project_search_kick (ctx : Editor_context.t) (tab : Tab.t) =
       (match Project.find_project_file (Filename.dirname fname) with
        | None -> Project_search.cancel ctx.project_search
        | Some (project_dir, project_file) ->
-         let (query, flags) = match Tab.search_state tab with
-           | Some s -> s.query, s.flags
+         let (query, flags) = match ctx.search_query with
+           | Some q -> q.query, q.flags
            | None -> "", Search.empty_flags
          in
          if query = "" then
@@ -287,34 +292,12 @@ let project_search_kick (ctx : Editor_context.t) (tab : Tab.t) =
            Project_search.start ctx.project_search
              ~project_dir ~project_file ~query ~flags)
 
-(* F3 / Shift+F3 dispatcher. In single-file mode delegates to the
-   per-tab [search_advance]. In project mode, advances through the
-   project-wide results, opening the next file via Open_file when
-   the match isn't in the current buffer. *)
+(* F3 / Shift+F3 dispatcher. Phase 2: always single-file (project F3
+   reintroduces in Phase 3). *)
 let dispatched_advance (ctx : Editor_context.t) (tab : Tab.t) dir
   : Action.action option =
-  if not ctx.project_mode then begin
-    search_advance tab dir;
-    Some Action.Continue
-  end
-  else
-    match Project_search.results ctx.project_search with
-    | None -> Some Action.Continue
-    | Some sr ->
-      let forward = (dir = `Next) in
-      match Search_results.advance sr ~forward with
-      | None -> Some Action.Continue
-      | Some (path, m) ->
-        let target_line = m.ml_line - 1 in
-        let target_col = m.ml_col_start in
-        (match Buffer.filename tab.buf with
-         | Some f when f = path ->
-           Buffer.move_to tab.buf target_line target_col;
-           Some Action.Continue
-         | _ ->
-           Jump.push ctx tab;
-           ctx.jump_target <- Some (target_line, target_col);
-           Some (Action.Open_file path))
+  search_advance ctx tab dir;
+  Some Action.Continue
 
 (* Byte offset of (line, col) within [Buffer.text buf]. *)
 let pos_to_byte (buf : Buffer.t) (p : Search.pos) =
@@ -324,88 +307,98 @@ let pos_to_byte (buf : Buffer.t) (p : Search.pos) =
   done;
   !off + p.col
 
-(* Compute the replacement text for [m] under the active search. *)
-let substitute_for_match (s : Search.state) (buf : Buffer.t) (m : Search.match_) =
+(* Compute the replacement text for [m] under the active query. *)
+let substitute_for_match (q : Search.query_state) (buf : Buffer.t)
+    (m : Search.match_) =
   let start = pos_to_byte buf m.start_ in
   let old_end = pos_to_byte buf m.end_ in
   let matched = String.sub (Buffer.text buf) start (old_end - start) in
   let new_text = Search.substitute
-    ~query:s.query ~flags:s.flags
-    ~replacement:s.replacement ~matched in
+    ~query:q.query ~flags:q.flags
+    ~replacement:q.replacement ~matched in
   (start, old_end, new_text)
 
 (* Replace the current match and advance to the next. Skip-advances on
-   region-invariant rejection so a verified-region match doesn't stall
-   the user. *)
-let replace_current (tab : Tab.t) =
-  match Tab.search_state tab with
-  | None -> ()
-  | Some s ->
-    (match Search.current_match s with
+   region-invariant rejection. *)
+let replace_current (ctx : Editor_context.t) (tab : Tab.t) =
+  match ctx.search_query, Editor_context.tab_matches ctx tab with
+  | Some q, Some bm ->
+    (match Search.bm_current_match bm with
      | None -> ()
      | Some m ->
-       let (start, old_end, new_text) = substitute_for_match s tab.buf m in
+       let (start, old_end, new_text) = substitute_for_match q tab.buf m in
        (match Region_buffer.try_replace tab.rb ~start ~old_end new_text with
         | Region_buffer.Applied ->
-          (* Refresh search state (lazy via Tab.search_state), then advance
+          (* Buffer revision changed; lazy accessor refreshes. Advance
              past the replacement so a self-matching replacement (e.g.
              "foo" → "foofoo") doesn't pin the cursor. *)
-          (match Tab.search_state tab with
-           | Some s' -> Tab.set_search tab (Some (Search.next s'))
+          (match Editor_context.tab_matches ctx tab with
+           | Some bm' -> Search.bm_next bm'
            | None -> ());
-          move_cursor_to_current tab
+          move_cursor_to_current ctx tab
         | Region_buffer.Rejected _ ->
-          search_advance tab `Next))
+          search_advance ctx tab `Next))
+  | _ -> ()
 
-(* Replace every match in the current match list. Iterates end-to-start so
-   earlier offsets remain valid as edits land. Returns (applied, skipped). *)
-let replace_all (tab : Tab.t) =
-  match Tab.search_state tab with
-  | None -> (0, 0)
-  | Some s ->
+(* Replace every match in the current tab's match list. *)
+let replace_all (ctx : Editor_context.t) (tab : Tab.t) =
+  match ctx.search_query, Editor_context.tab_matches ctx tab with
+  | Some q, Some bm ->
     let applied = ref 0 in
     let skipped = ref 0 in
-    let n = Array.length s.matches in
+    let n = Array.length bm.matches in
     for i = n - 1 downto 0 do
       let (start, old_end, new_text) =
-        substitute_for_match s tab.buf s.matches.(i) in
+        substitute_for_match q tab.buf bm.matches.(i) in
       (match Region_buffer.try_replace tab.rb ~start ~old_end new_text with
        | Region_buffer.Applied -> incr applied
        | Region_buffer.Rejected _ -> incr skipped)
     done;
-    ignore (Tab.search_state tab);  (* trigger lazy refresh *)
+    ignore (Editor_context.tab_matches ctx tab);  (* trigger refresh *)
     (!applied, !skipped)
+  | _ -> (0, 0)
 
 let logical_escape (ctx : Editor_context.t) (tab : Tab.t) =
+  let restore_active_tab_cursor () =
+    match Editor_context.tab_matches ctx tab with
+    | Some bm ->
+      Buffer.move_to tab.buf bm.saved_cursor.line bm.saved_cursor.col
+    | None -> ()
+  in
   match Modal.top ctx.modal with
   | Some Modal.SearchPrompt ->
-    (match Tab.search_state tab with
-     | Some s ->
-       Buffer.move_to tab.buf s.saved_cursor.line s.saved_cursor.col
-     | None -> ());
-    Tab.set_search tab None;
-    (* Also drop any project search — ESC is the global "clear" key. *)
-    ctx.project_mode <- false;
-    Project_search.cancel ctx.project_search;
+    restore_active_tab_cursor ();
+    Editor_context.clear_search ctx;
     Modal.pop ctx.modal;
     true
   | _ ->
-    (match Tab.search_state tab with
+    (match ctx.search_query with
      | Some _ ->
-       Tab.set_search tab None;
-       ctx.project_mode <- false;
-       Project_search.cancel ctx.project_search;
+       Editor_context.clear_search ctx;
        true
      | None -> false)
 
 let handle_search_prompt (ctx : Editor_context.t) ev (tab : Tab.t) =
-  let buf = tab.buf in
-  let with_state f =
-    (match Tab.search_state tab with
-     | Some s -> Tab.set_search tab (Some (f s buf))
-     | None -> ());
-    move_cursor_to_current tab;
+  (* Toggle a query-state flag in-place: mutate ctx.search_query, bump
+     the gen, kick project search if active, move cursor to the (new)
+     current match. *)
+  let toggle_flag f =
+    let q = ensure_search_query ctx in
+    let new_flags = f q.flags in
+    ctx.search_query <- Some { q with flags = new_flags };
+    Editor_context.bump_search_gen ctx;
+    project_search_kick ctx tab;
+    move_cursor_to_current ctx tab;
     Some Continue
+  in
+  let toggle_case (fs : Search.flags) : Search.flags =
+    let case = match fs.case with
+      | Search.Smart -> Search.Sensitive
+      | Search.Sensitive -> Search.Smart in
+    { fs with case }
+  in
+  let toggle_regex (fs : Search.flags) : Search.flags =
+    { fs with regex = not fs.regex }
   in
   (* Any user interaction (other than passthrough scroll) clears the
      transient panel message. The replace paths re-set it afterwards. *)
@@ -419,28 +412,21 @@ let handle_search_prompt (ctx : Editor_context.t) ev (tab : Tab.t) =
     Some Continue
 
   | Input.Special (Input.Escape, _) ->
-    (* Compose mode: ESC starts compose; ESC ESC drops to the editor's
-       compose-NoMatch path which calls [logical_escape]. Without compose:
-       ESC cancels here directly. *)
     (match ctx.compose with
      | Some cs -> Compose.start cs
      | None -> ignore (logical_escape ctx tab));
     Some Continue
 
   | Input.Special (Input.Backspace, _) ->
-    backspace_focused tab;
+    backspace_focused ctx tab;
     project_search_kick ctx tab;
     Some Continue
 
   | ev when Keymatch.match_binding ev Keys.search_toggle_case ->
-    let r = with_state Search.toggle_case in
-    project_search_kick ctx tab;
-    r
+    toggle_flag toggle_case
 
   | ev when Keymatch.match_binding ev Keys.search_toggle_regex ->
-    let r = with_state Search.toggle_regex in
-    project_search_kick ctx tab;
-    r
+    toggle_flag toggle_regex
 
   | ev when Keymatch.match_binding ev Keys.search_toggle_project ->
     ctx.project_mode <- not ctx.project_mode;
@@ -453,20 +439,21 @@ let handle_search_prompt (ctx : Editor_context.t) ev (tab : Tab.t) =
     Some Continue
 
   | ev when Keymatch.match_binding ev Keys.search_field_toggle ->
-    (match Tab.search_state tab with
-     | Some s ->
-       let other = match s.focus with
-         | Search.Find -> Search.Replace | Search.Replace -> Search.Find in
-       Tab.set_search tab (Some (Search.set_focus s other))
+    (match ctx.search_query with
+     | Some q ->
+       let other = match q.focus with
+         | Search.Find -> Search.Replace
+         | Search.Replace -> Search.Find in
+       ctx.search_query <- Some { q with focus = other }
      | None -> ());
     Some Continue
 
   | ev when Keymatch.match_binding ev Keys.search_replace_one ->
-    replace_current tab;
+    replace_current ctx tab;
     Some Continue
 
   | ev when Keymatch.match_binding ev Keys.search_replace_all ->
-    let (applied, skipped) = replace_all tab in
+    let (applied, skipped) = replace_all ctx tab in
     ctx.search_panel_msg <-
       (if applied = 0 && skipped = 0 then "No matches to replace"
        else if skipped > 0 then
@@ -486,7 +473,7 @@ let handle_search_prompt (ctx : Editor_context.t) ev (tab : Tab.t) =
   (* Printable codepoint (ASCII or UTF-8): append to the focused field. *)
   | Input.Key (cp, m)
     when not m.ctrl && not m.alt && cp >= 32 && cp <> 127 ->
-    append_to_field tab (Utf8.encode cp);
+    append_to_field ctx tab (Utf8.encode cp);
     project_search_kick ctx tab;
     Some Continue
 

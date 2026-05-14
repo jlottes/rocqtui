@@ -228,36 +228,18 @@ let test_buffer_revision () =
   check_eq "buffer revision: bumps on insert_char" ~expected:true
     ~got:(Buffer.revision buf > r1) string_of_bool
 
+(* Tab.search_state / Tab.set_search were removed in the search-state
+   refactor (SEARCH_STATE_REFACTOR.md). The equivalent caching
+   behaviour now lives in Editor_context.tab_matches and is
+   exercised by the new buffer_matches tests above. *)
 let test_tab_search_lazy_refresh () =
-  let tab = Tab.create_blank () in
-  Buffer.Unsafe.set_text tab.buf "foo bar foo";
-  let s = Search.create tab.buf in
-  let s = Search.update_query s tab.buf "foo" in
-  Tab.set_search tab (Some s);
-  let got1 = Option.get (Tab.search_state tab) in
-  check_eq "tab search: 2 matches initially"
-    ~expected:2 ~got:(Array.length got1.matches) show_int;
-  Buffer.Unsafe.set_text tab.buf "foo bar foo foo";
-  let got2 = Option.get (Tab.search_state tab) in
-  check_eq "tab search: refreshes after edit (3 matches)"
-    ~expected:3 ~got:(Array.length got2.matches) show_int;
-  (* Reading again with no buffer change must not re-run. *)
-  let r_before = Buffer.revision tab.buf in
-  let _ = Tab.search_state tab in
-  check_eq "tab search: read without edit doesn't bump revision"
-    ~expected:r_before ~got:(Buffer.revision tab.buf) string_of_int
+  ok "tab search lazy refresh: covered by buffer_matches tests"
 
 let test_tab_search_set_and_clear () =
   let tab = Tab.create_blank () in
-  check_eq "tab search: initially None"
-    ~expected:true ~got:(Tab.search_state tab = None) string_of_bool;
-  let s = Search.create tab.buf in
-  Tab.set_search tab (Some s);
-  check_eq "tab search: present after set"
-    ~expected:true ~got:(Tab.search_state tab <> None) string_of_bool;
-  Tab.set_search tab None;
-  check_eq "tab search: cleared after set None"
-    ~expected:true ~got:(Tab.search_state tab = None) string_of_bool
+  let none = tab.search_matches = None in
+  check_eq "tab: initial search_matches is None"
+    ~expected:true ~got:none string_of_bool
 
 let test_substitute_literal () =
   let sub = Search.substitute

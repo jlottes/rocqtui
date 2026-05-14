@@ -29,16 +29,18 @@ type t = {
   mutable jump_stack : jump_point list;
   mutable jump_target : (int * int) option;
   mutable search_panel_msg : string;
-  (** Whether the search prompt is scanning the whole project rather
-      than just the active buffer. Toggled by [Alt+P] inside the
-      prompt. *)
+  (** Global "what we're searching for" — the single source of truth
+      for the search prompt's Find / Replace / flags / focus. None
+      when no search is active. *)
+  mutable search_query : Search.query_state option;
+  (** Bumped on every prompt mutation that affects matches. Per-tab
+      [Tab.search_matches] caches stamp this; mismatch = stale. *)
+  mutable search_query_gen : int;
+  (** Whether the search is project-wide. Affects (a) what the
+      Search messages tab renders and (b) whether F3/Shift+F3 can
+      cross file boundaries. Toggled by [Alt+P] inside the prompt. *)
   mutable project_mode : bool;
-  (** Latest Search_results snapshot — single-file when
-      [project_mode = false], project-wide when true. Read by the
-      Search messages tab and by F3 / Shift+F3 stepping. *)
-  mutable search : Search_results.t option;
-  (** Async project-wide scanner; results land here when
-      [project_mode] is on. *)
+  (** Async project-wide scanner; populated when [project_mode] is on. *)
   project_search : Project_search.t;
   mutable focus : focus;
   mutable file_tree : File_tree.t option;
@@ -50,3 +52,18 @@ val create :
   ?set_project_dir:(string -> unit) ->
   ?dep_state:(unit -> Dep_graph.t option * bool) ->
   unit -> t
+
+(** Tab's matches, lazily refreshed if either the global query gen or
+    the tab's buffer revision has changed. Returns [None] when no
+    search is active. Single accessor for the entire codebase — do
+    not read [tab.search_matches] directly when a recompute might be
+    needed. *)
+val tab_matches : t -> Tab.t -> Search.buffer_matches option
+
+(** Bump the global generation counter. Call after any mutation to
+    [ctx.search_query]. *)
+val bump_search_gen : t -> unit
+
+(** Drop the global search state and invalidate all tabs. Called on
+    ESC. *)
+val clear_search : t -> unit

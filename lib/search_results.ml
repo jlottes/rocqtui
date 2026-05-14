@@ -174,6 +174,30 @@ let advance t ~forward =
    underlying buffer (whose [get_line] we use to materialize each
    match's source line). For multi-line matches the line_text is the
    start line; ml_col_end is clamped to the start line's length. *)
+let of_buffer_matches ~path ~rel_path
+    (q : Search.query_state) (bm : Search.buffer_matches) buf =
+  let mls = Array.map (fun (m : Search.match_) ->
+    let line = m.start_.line in
+    let line_text = Buffer.get_line buf line in
+    {
+      ml_line = line + 1;
+      ml_col_start = m.start_.col;
+      ml_col_end =
+        if m.end_.line = line then m.end_.col
+        else String.length line_text;
+      ml_line_text = line_text;
+    }
+  ) bm.matches in
+  let fm = { fm_path = path; fm_rel_path = rel_path; fm_matches = mls } in
+  let t = empty ~query:q.query ~flags:q.flags in
+  if Array.length mls > 0 then begin
+    t.files <- [fm];
+    t.total <- Array.length mls;
+    if bm.current >= 0 && bm.current < Array.length mls then
+      t.current <- Some (path, bm.current)
+  end;
+  t
+
 let of_single_file ~path ~rel_path (s : Search.state) buf =
   let mls = Array.map (fun (m : Search.match_) ->
     let line = m.start_.line in

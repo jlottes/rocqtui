@@ -49,3 +49,9 @@ val advance : t -> forward:bool -> (string * match_loc) option
 val of_single_file :
   path:string -> rel_path:string ->
   Search.state -> Buffer.t -> t
+
+(** Same shape as [of_single_file] but using the new state model:
+    a global [query_state] + per-tab [buffer_matches]. *)
+val of_buffer_matches :
+  path:string -> rel_path:string ->
+  Search.query_state -> Search.buffer_matches -> Buffer.t -> t

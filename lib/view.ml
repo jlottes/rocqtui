@@ -322,36 +322,37 @@ let update_msg_tabs (ctx : Editor_context.t) r (tab : Tab.t) =
     end else if cur = None then
       errors_last_active := None
   end;
-  (* Snapshot ctx.search from whichever source ctx.project_mode picks.
-     Drives both the messages tab below and F3/Shift+F3 stepping.
-     Inlined here (not in modals.ml) because view.ml can't depend on
-     the editor subdir without creating a dependency cycle. *)
-  ctx.search <-
-    (if ctx.project_mode then
-       Project_search.results ctx.project_search
-     else
-       match Tab.search_state tab, Buffer.filename tab.buf with
-       | Some s, Some path when s.query <> "" ->
-         let project_dir = match
-           Project.find_project_file (Filename.dirname path) with
-           | Some (pd, _) -> pd
-           | None -> Filename.dirname path
-         in
-         let prefix = project_dir ^ "/" in
-         let plen = String.length prefix in
-         let rel_path =
-           if String.length path > plen
-              && String.sub path 0 plen = prefix
-           then String.sub path plen (String.length path - plen)
-           else ""
-         in
-         Some (Search_results.of_single_file ~path ~rel_path s tab.buf)
-       | _ -> None);
-  (* Search tab: ensure when ctx.search has any matches (or a scan is
-     active so the placeholder "scanning…" header can show); remove
-     when neither. *)
+  (* Build the Search_results.t for the messages tab from the new
+     state model. Phase 2: single-file only. Phase 3 will merge in
+     project_search.results for cross-file rendering. *)
+  let search_snapshot : Search_results.t option =
+    match ctx.search_query with
+    | None -> None
+    | Some q ->
+      if q.query = "" then None
+      else
+        match Buffer.filename tab.buf,
+              Editor_context.tab_matches ctx tab with
+        | Some path, Some bm ->
+          let project_dir = match
+            Project.find_project_file (Filename.dirname path) with
+            | Some (pd, _) -> pd
+            | None -> Filename.dirname path
+          in
+          let prefix = project_dir ^ "/" in
+          let plen = String.length prefix in
+          let rel_path =
+            if String.length path > plen
+               && String.sub path 0 plen = prefix
+            then String.sub path plen (String.length path - plen)
+            else ""
+          in
+          Some (Search_results.of_buffer_matches
+                  ~path ~rel_path q bm tab.buf)
+        | _ -> None
+  in
   let search_active =
-    match ctx.Editor_context.search with
+    match search_snapshot with
     | Some r ->
       Search_results.total r > 0 || Search_results.scanning r
     | None -> false
@@ -359,14 +360,9 @@ let update_msg_tabs (ctx : Editor_context.t) r (tab : Tab.t) =
   if not search_active then
     Msg_pane.remove Msg_pane.Search
   else begin
-    (* Auto-pop the Search tab the first time it appears for a given
-       search session (single-file or project). Once the user has
-       clicked away to another tab they stay there; the next ESC →
-       new ^F cycle removes and re-creates the tab, re-triggering
-       the auto-pop. *)
     let was_present = Msg_pane.find Msg_pane.Search <> None in
     let st = Msg_pane.ensure Msg_pane.Search in
-    let (lines, _active_row) = Search_tab.render ctx.search in
+    let (lines, _active_row) = Search_tab.render search_snapshot in
     if lines <> st.lines then st.lines <- lines;
     if not was_present then
       Msg_pane.activate_unless_terminal Msg_pane.Search
@@ -575,8 +571,8 @@ let render_script (ctx : Editor_context.t) r (tab : Tab.t) =
    | None -> ());
   (* Overlay search matches: all matches with the subtle attr first,
      then the current match on top with the high-contrast attr. *)
-  (match Tab.search_state tab with
-   | Some s when Array.length s.matches > 0 ->
+  (match Editor_context.tab_matches ctx tab with
+   | Some bm when Array.length bm.matches > 0 ->
      let overlay_match (m : Search.match_) attr =
        let row = m.start_.line - scroll in
        if row >= 0 && row < rows
@@ -586,8 +582,8 @@ let render_script (ctx : Editor_context.t) r (tab : Tab.t) =
            (Buffer.get_line buf m.start_.line)
            row hscroll content_cols gw m.start_.col m.end_.col attr
      in
-     Array.iter (fun m -> overlay_match m a.ga_search_match) s.matches;
-     (match Search.current_match s with
+     Array.iter (fun m -> overlay_match m a.ga_search_match) bm.matches;
+     (match Search.bm_current_match bm with
       | Some m -> overlay_match m a.ga_search_current
       | None -> ())
    | _ -> ());
@@ -658,16 +654,22 @@ let render_build_bar r =
 
 let render_search_panel (ctx : Editor_context.t) (tab : Tab.t) r =
   Render.set_panel_rows r 1;
-  let s = Tab.search_state tab in
+  let q = ctx.search_query in
+  let bm = Editor_context.tab_matches ctx tab in
   let query, replacement, focus, count, idx, case_insensitive, regex =
-    match s with
+    match q with
     | None -> "", "", Search.Find, 0, 0, true, false
-    | Some s ->
-      s.query, s.replacement, s.focus,
-      Array.length s.matches,
-      (if s.current >= 0 then s.current + 1 else 0),
-      Search.is_case_insensitive ~query:s.query ~flags:s.flags,
-      s.flags.regex
+    | Some q ->
+      let count, idx = match bm with
+        | None -> 0, 0
+        | Some bm ->
+          Array.length bm.matches,
+          (if bm.current >= 0 then bm.current + 1 else 0)
+      in
+      q.query, q.replacement, q.focus,
+      count, idx,
+      Search.is_case_insensitive ~query:q.query ~flags:q.flags,
+      q.flags.regex
   in
   let counter =
     if count = 0 && query = "" then "       "  (* keep alignment *)
@@ -821,12 +823,16 @@ let update_status (ctx : Editor_context.t) r (tab : Tab.t) =
       else ""
     in
     let extra = if ctx.status_extra <> "" then "  " ^ ctx.status_extra else "" in
-    let search_info = match Tab.search_state tab with
+    let search_info = match ctx.search_query with
       | None -> ""
-      | Some s ->
-        let count = Array.length s.matches in
-        let idx = if s.current >= 0 then s.current + 1 else 0 in
-        Printf.sprintf "  Search: %s %d/%d" s.query idx count
+      | Some q ->
+        let count, idx = match Editor_context.tab_matches ctx tab with
+          | Some bm ->
+            Array.length bm.matches,
+            (if bm.current >= 0 then bm.current + 1 else 0)
+          | None -> 0, 0
+        in
+        Printf.sprintf "  Search: %s %d/%d" q.query idx count
     in
     let status = Printf.sprintf "%s%s  Ln %d, Col %d%s%s%s%s%s"
       fname mod_flag (cl + 1) (vcol + 1) rocq_status search_info extra hscroll_ind focus_info

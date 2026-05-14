@@ -60,10 +60,12 @@ type t = {
   goals_sel : pane_selection;
   mutable goals_lines_cache : Styled.line list;
   rocq_msg : rocq_msg_state;
-  mutable search : Search.state option;
-  (* [Buffer.revision buf] when [search] was last refreshed; only
-     meaningful when [search <> None]. *)
-  mutable search_revision : int;
+  (* Per-buffer matches for the global query. Lazily refreshed when
+     either the query generation or the buffer revision has changed.
+     None when no search is active. *)
+  mutable search_matches : Search.buffer_matches option;
+  mutable search_matches_gen : int option;
+  mutable search_matches_buf_revision : int;
 }
 
 type manager = {
@@ -88,8 +90,9 @@ let make_tab ?(args=[]) buf session =
     goals_sel = fresh_pane_sel ();
     goals_lines_cache = [];
     rocq_msg = fresh_rocq_msg_state ();
-    search = None;
-    search_revision = 0 }
+    search_matches = None;
+    search_matches_gen = None;
+    search_matches_buf_revision = 0 }
 
 let create_blank ?(args=[]) () =
   let buf = Buffer.create () in
@@ -112,26 +115,6 @@ let create_from_file ?(args=[]) filename =
      verified content yet, so the check passes trivially. *)
   ignore (Region_buffer.try_reload_from_disk tab.rb);
   tab
-
-(* Search state with on-demand refresh: if the buffer has changed since
-   the search was last computed, re-run the matcher. Returns the
-   (possibly updated) state stored on the tab. *)
-let search_state tab =
-  match tab.search with
-  | None -> None
-  | Some s ->
-    let rev = Buffer.revision tab.buf in
-    if rev = tab.search_revision then Some s
-    else begin
-      let s' = Search.update_after_edit s tab.buf in
-      tab.search <- Some s';
-      tab.search_revision <- rev;
-      Some s'
-    end
-
-let set_search tab st =
-  tab.search <- st;
-  tab.search_revision <- Buffer.revision tab.buf
 
 let active_tab mgr =
   List.nth mgr.tabs mgr.active

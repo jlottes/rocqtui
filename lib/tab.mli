@@ -32,8 +32,12 @@ type t = {
   goals_sel : pane_selection;
   mutable goals_lines_cache : Styled.line list;
   rocq_msg : rocq_msg_state;
-  mutable search : Search.state option;
-  mutable search_revision : int;
+  (** Per-buffer matches against the global query. Lazily refreshed
+      via [Editor_context.tab_matches]; do not read directly when a
+      recompute might be needed. *)
+  mutable search_matches : Search.buffer_matches option;
+  mutable search_matches_gen : int option;
+  mutable search_matches_buf_revision : int;
 }
 
 type manager = {
@@ -49,16 +53,6 @@ val canonical_path : string -> string
 
 val create_blank : ?args:string list -> unit -> t
 val create_from_file : ?args:string list -> string -> t
-
-(** Tab's search state, refreshed against the buffer if the buffer has
-    been mutated since the matches were last computed. Returns [None]
-    when search is inactive on this tab. Callers should prefer this over
-    reading the [search] field directly. *)
-val search_state : t -> Search.state option
-
-(** Replace the tab's search state. Records the current buffer revision
-    so the next [search_state] read won't refresh unnecessarily. *)
-val set_search : t -> Search.state option -> unit
 
 val active_tab : manager -> t
 val find_by_id : manager -> int -> t option

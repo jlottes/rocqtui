@@ -204,37 +204,25 @@ let handle (ctx : Editor_context.t) (mev : Input.mouse_event) (tab : Tab.t) r
           match Msg_pane.active_kind () with
           | Msg_pane.Terminal _ | Msg_pane.Rocq -> false
           | Msg_pane.Search ->
+            (* Phase 2: single-file only. Match is always in the
+               active tab. Phase 3 reintroduces cross-file via
+               Open_file. *)
             (match Geom.screen_to_pane_pos tab r ~x ~y `Messages with
              | None -> false
              | Some (row, _col) ->
                (match Search_tab.lookup_tab_row row with
                 | None -> false
                 | Some (path, idx) ->
-                  (match ctx.search with
-                   | None -> false
-                   | Some sr ->
-                     (match Search_results.find_match sr path idx with
-                      | None -> false
-                      | Some m ->
-                        (* Update both the project-search-side cursor
-                           (which survives because Project_search.results
-                           returns the same mutable object every frame)
-                           and the per-tab Search.state.current (which is
-                           the source of truth in single-file mode, where
-                           ctx.search is re-derived each frame). *)
-                        Search_results.set_current sr (Some (path, idx));
-                        if not ctx.project_mode then begin
-                          match Tab.search_state tab with
-                          | Some s ->
-                            Tab.set_search tab
-                              (Some (Search.set_current s idx))
-                          | None -> ()
-                        end;
-                        Jump.push ctx tab;
-                        ctx.jump_target <-
-                          Some (m.ml_line - 1, m.ml_col_start);
-                        result := Some (Action.Open_file path);
-                        true))))
+                  (match Buffer.filename tab.buf,
+                         Editor_context.tab_matches ctx tab with
+                   | Some f, Some bm when f = path
+                                          && idx >= 0
+                                          && idx < Array.length bm.matches ->
+                     Search.bm_set_current bm idx;
+                     let m = bm.matches.(idx) in
+                     Buffer.move_to tab.buf m.start_.line m.start_.col;
+                     true
+                   | _ -> false)))
           | Msg_pane.Build | Msg_pane.Errors as ak ->
             (match Geom.screen_to_pane_pos tab r ~x ~y `Messages with
              | None -> false

@@ -57,7 +57,7 @@ let handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r =
              | Some Modal.SearchPrompt ->
                (* Append composed text to the focused prompt field. *)
                ctx.search_panel_msg <- "";
-               Modals.append_to_field tab text
+               Modals.append_to_field ctx tab text
              | _ ->
                if term_focused then begin
                  (match active_term () with
@@ -220,11 +220,18 @@ let handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r =
       Some Continue
     end
     else if Keymatch.match_binding ev Keys.search then begin
-      (* Re-save the cursor on every prompt-open so cancel restores to the
-         pre-prompt position, not the position before search first opened. *)
-      (match Tab.search_state tab with
-       | None -> Tab.set_search tab (Some (Search.create tab.buf))
-       | Some s -> Tab.set_search tab (Some (Search.resave_cursor s tab.buf)));
+      (* Ensure ctx.search_query exists. Re-save the active tab's
+         saved_cursor on every prompt-open so ESC restores to the
+         pre-prompt position. We invalidate the per-tab match cache
+         so the lazy accessor picks up the current cursor as the new
+         saved_cursor. *)
+      if ctx.search_query = None then begin
+        ctx.search_query <- Some Search.empty_query;
+        Editor_context.bump_search_gen ctx
+      end;
+      tab.search_matches <- None;
+      tab.search_matches_gen <- None;
+      ignore (Editor_context.tab_matches ctx tab);
       Modal.push ctx.modal Modal.SearchPrompt;
       Some Continue
     end

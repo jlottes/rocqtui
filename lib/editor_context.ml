@@ -32,8 +32,9 @@ type t = {
      replace-all. Cleared by any other prompt interaction. Stays in the
      panel only — does not leak into the normal status bar. *)
   mutable search_panel_msg : string;
+  mutable search_query : Search.query_state option;
+  mutable search_query_gen : int;
   mutable project_mode : bool;
-  mutable search : Search_results.t option;
   project_search : Project_search.t;
   mutable focus : focus;
   (* File-tree panel: lazily created on first F8. Survives across tabs.
@@ -61,8 +62,48 @@ let create
     jump_stack = [];
     jump_target = None;
     search_panel_msg = "";
+    search_query = None;
+    search_query_gen = 0;
     project_mode = false;
-    search = None;
     project_search = Project_search.create ();
     focus = FScript;
     file_tree = None }
+
+(* Lazy accessor: refresh [tab.search_matches] if either the global
+   generation or the tab's buffer revision has changed. Returns None
+   when no search is active. *)
+let tab_matches t (tab : Tab.t) =
+  match t.search_query with
+  | None -> None
+  | Some q ->
+    let cur_rev = Buffer.revision tab.buf in
+    let gen_ok = tab.search_matches_gen = Some t.search_query_gen in
+    let rev_ok = tab.search_matches_buf_revision = cur_rev in
+    if gen_ok && rev_ok then tab.search_matches
+    else begin
+      let saved_cursor = match tab.search_matches with
+        | Some old -> old.saved_cursor
+        | None ->
+          let (l, c) = Buffer.cursor tab.buf in
+          { Search.line = l; col = c }
+      in
+      let anchor = match tab.search_matches with
+        | Some old -> Search.anchor_of old
+        | None -> saved_cursor
+      in
+      let bm = Search.recompute_buffer_matches q tab.buf
+        ~anchor ~saved_cursor in
+      tab.search_matches <- Some bm;
+      tab.search_matches_gen <- Some t.search_query_gen;
+      tab.search_matches_buf_revision <- cur_rev;
+      Some bm
+    end
+
+let bump_search_gen t =
+  t.search_query_gen <- t.search_query_gen + 1
+
+let clear_search t =
+  t.search_query <- None;
+  t.search_query_gen <- t.search_query_gen + 1;
+  t.project_mode <- false;
+  Project_search.cancel t.project_search

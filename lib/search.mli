@@ -21,14 +21,19 @@ type match_ = { start_ : pos; end_ : pos }
 (** Which prompt field input is currently directed to. *)
 type focus = Find | Replace
 
+(** {b Deprecated.} Combined query+matches record. Superseded by
+    [query_state] (global) and [buffer_matches] (per-buffer). Kept
+    here because the matcher behavior tests in [test/test_search.ml]
+    still drive the matcher through this API; production code no
+    longer uses it. Will be retired in a separate cleanup commit. *)
 type state = private {
   query : string;
   flags : flags;
-  matches : match_ array;  (** Sorted by start position. *)
-  current : int;           (** Index into [matches]; -1 when none. *)
-  saved_cursor : pos;      (** Cursor when search opened (cancel restore). *)
-  replacement : string;    (** Replace-field text (empty in pure-search mode). *)
-  focus : focus;           (** Which field receives typing. *)
+  matches : match_ array;
+  current : int;
+  saved_cursor : pos;
+  replacement : string;
+  focus : focus;
 }
 
 (** New state model (see [docs/SEARCH_STATE_REFACTOR.md]). Coexists
