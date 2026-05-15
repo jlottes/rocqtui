@@ -303,7 +303,10 @@ let test_is_case_insensitive () =
 (* --- New state model: query_state + buffer_matches --- *)
 
 let q ?(flags=Search.empty_flags) query =
-  { Search.query; flags; replacement = ""; focus = Find }
+  { Search.query = Text_field.create ~contents:query ();
+    flags;
+    replacement = Text_field.create ();
+    focus = Find }
 
 let test_bm_empty_query () =
   let buf = load "hello world" in
@@ -412,12 +415,13 @@ let test_bm_set_current_clamps () =
     ~expected:0 ~got:bm.current show_int
 
 let test_empty_query_constant () =
+  let q = Search.empty_query () in
   check_eq "empty_query: empty query string"
-    ~expected:"" ~got:Search.empty_query.query (fun s -> s);
+    ~expected:"" ~got:(Text_field.contents q.query) (fun s -> s);
   check_eq "empty_query: empty replacement"
-    ~expected:"" ~got:Search.empty_query.replacement (fun s -> s);
+    ~expected:"" ~got:(Text_field.contents q.replacement) (fun s -> s);
   check_eq "empty_query: focus = Find"
-    ~expected:true ~got:(Search.empty_query.focus = Find) string_of_bool
+    ~expected:true ~got:(q.focus = Find) string_of_bool
 
 let () =
   test_empty_query ();

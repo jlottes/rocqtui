@@ -301,6 +301,10 @@ let place_cursor t ~row ~col =
 
 let set_cursor_visible t v = t.cursor_visible <- v
 
+let place_cursor_status t ~row_from_bottom ~col =
+  let row = t.term_h - 1 - row_from_bottom in
+  place_cursor t ~row ~col
+
 (* --- Tab bar --- *)
 
 let draw_tab_bar t tabs active =

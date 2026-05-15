@@ -655,9 +655,10 @@ let render_search_panel (ctx : Editor_context.t) (tab : Tab.t) r =
   Render.set_panel_rows r 1;
   let q = ctx.search_query in
   let bm = Editor_context.tab_matches ctx tab in
-  let query, replacement, focus, count, idx, case_insensitive, regex =
+  let query, replacement, focus, focus_cursor,
+      count, idx, case_insensitive, regex =
     match q with
-    | None -> "", "", Search.Find, 0, 0, true, false
+    | None -> "", "", Search.Find, 0, 0, 0, true, false
     | Some q ->
       let count, idx = match bm with
         | None -> 0, 0
@@ -665,9 +666,14 @@ let render_search_panel (ctx : Editor_context.t) (tab : Tab.t) r =
           Array.length bm.matches,
           (if bm.current >= 0 then bm.current + 1 else 0)
       in
-      q.query, q.replacement, q.focus,
+      let q_text = Text_field.contents q.query in
+      let r_text = Text_field.contents q.replacement in
+      let cursor = match q.focus with
+        | Search.Find -> Text_field.cursor q.query
+        | Search.Replace -> Text_field.cursor q.replacement in
+      q_text, r_text, q.focus, cursor,
       count, idx,
-      Search.is_case_insensitive ~query:q.query ~flags:q.flags,
+      Search.is_case_insensitive ~query:q_text ~flags:q.flags,
       q.flags.regex
   in
   (* In project mode, append the global counter "· G/T" after the
@@ -719,14 +725,11 @@ let render_search_panel (ctx : Editor_context.t) (tab : Tab.t) r =
       else Printf.sprintf "  [c: %s]" typed
     | _ -> ""
   in
-  let caret = "\xe2\x96\x88" in  (* █ U+2588 FULL BLOCK *)
-  let find_text =
-    if focus = Search.Find then query ^ caret else query in
-  let replace_text =
-    if focus = Search.Replace then replacement ^ caret else replacement in
+  let find_label = "Find:    " in
+  let replace_label = "Replace: " in
   let find_row =
-    Printf.sprintf "Find:    %s%s  %s %s  %s %s  %s %s%s"
-      find_text counter
+    Printf.sprintf "%s%s%s  %s %s  %s %s  %s %s%s"
+      find_label query counter
       Keys.search_toggle_case.display case_ind
       Keys.search_toggle_regex.display regex_ind
       Keys.search_toggle_project.display proj_ind
@@ -739,9 +742,19 @@ let render_search_panel (ctx : Editor_context.t) (tab : Tab.t) r =
         Keys.search_replace_one.display
         Keys.search_replace_all.display in
   let replace_row =
-    Printf.sprintf "Replace: %s%s" replace_text trailer in
+    Printf.sprintf "%s%s%s" replace_label replacement trailer in
   Render.set_status_line r ~row_from_bottom:1 find_row;
-  Render.set_status_line r ~row_from_bottom:0 replace_row
+  Render.set_status_line r ~row_from_bottom:0 replace_row;
+  (* Hardware cursor: column-1 indent matches set_status_line. *)
+  if q <> None then begin
+    let label, row =
+      match focus with
+      | Search.Find -> find_label, 1
+      | Search.Replace -> replace_label, 0
+    in
+    Render.place_cursor_status r ~row_from_bottom:row
+      ~col:(1 + String.length label + focus_cursor)
+  end
 
 let render_options_bar r =
   let parts = List.map (fun (e : Printopts.entry) ->
@@ -767,18 +780,17 @@ let update_status (ctx : Editor_context.t) r (tab : Tab.t) =
     let attrs = Theme.attrs () in
     let base = attrs.ga_status in
     let dim = { base with Grid.dim = true } in
-    let caret = "\xe2\x96\x88" in  (* █ U+2588 *)
-    let before = String.sub rp.input 0 rp.cursor in
-    let after =
-      String.sub rp.input rp.cursor (String.length rp.input - rp.cursor) in
+    let label = "Rename: " in
     Render.set_status_line_styled r ~row_from_bottom:0 [
-      "Rename: ", base;
-      before, base;
-      caret, base;
-      after, base;
+      label, base;
+      Text_field.contents rp.field, base;
       rp.extension, dim;
       "    Enter:Commit  ESC:Cancel", base;
-    ]
+    ];
+    (* Hardware cursor: column-1 origin matches the indent inside
+       set_status_line_styled. *)
+    Render.place_cursor_status r ~row_from_bottom:0
+      ~col:(1 + String.length label + Text_field.cursor rp.field)
   | _ ->
   if is_help ctx then
     Render.set_status r
@@ -879,7 +891,8 @@ let update_status (ctx : Editor_context.t) r (tab : Tab.t) =
             (if bm.current >= 0 then bm.current + 1 else 0)
           | None -> 0, 0
         in
-        Printf.sprintf "  Search: %s %d/%d" q.query idx count
+        Printf.sprintf "  Search: %s %d/%d"
+          (Text_field.contents q.query) idx count
     in
     let status = Printf.sprintf "%s%s  Ln %d, Col %d%s%s%s%s%s"
       fname mod_flag (cl + 1) (vcol + 1) rocq_status search_info extra hscroll_ind focus_info

@@ -41,11 +41,12 @@ type state = private {
     Phase 2. *)
 
 (** Global "what we're searching for" — one instance lives in
-    [Editor_context]. *)
+    [Editor_context]. The two text fields own their own contents and
+    cursor positions; the modal handler edits them in place. *)
 type query_state = {
-  query : string;
+  query : Text_field.t;
   flags : flags;
-  replacement : string;
+  replacement : Text_field.t;
   focus : focus;
 }
 
@@ -58,7 +59,9 @@ type buffer_matches = {
 }
 
 val empty_flags : flags
-val empty_query : query_state
+
+(** A fresh empty query state with new [Text_field] instances. *)
+val empty_query : unit -> query_state
 
 (** Empty state anchored at the buffer's current cursor. *)
 val create : Buffer.t -> state

@@ -11,8 +11,7 @@ type rename_state = {
   project_dir : string;
   project_file : string;    (** absolute path to _RocqProject *)
   extension : string;       (** locked suffix (always ".v" for now) *)
-  mutable input : string;   (** editable portion (never includes [extension]) *)
-  mutable cursor : int;     (** byte offset within [input] *)
+  field : Text_field.t;     (** editable portion (never includes [extension]) *)
 }
 
 type kind =

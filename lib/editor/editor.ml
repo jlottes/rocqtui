@@ -228,7 +228,7 @@ let handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r =
          buffer_matches cache so the lazy accessor picks up the
          current cursor as saved_cursor too. *)
       if ctx.search_query = None then begin
-        ctx.search_query <- Some Search.empty_query;
+        ctx.search_query <- Some (Search.empty_query ());
         Editor_context.bump_search_gen ctx
       end;
       Editor_context.begin_search_session ctx tab;
@@ -710,8 +710,7 @@ let handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r =
               project_dir = p.project_dir;
               project_file = p.path;
               extension = ext;
-              input = stem;
-              cursor = String.length stem;
+              field = Text_field.create ~contents:stem ();
             });
             Some Continue
           | File_tree.TreeContinue -> Some Continue

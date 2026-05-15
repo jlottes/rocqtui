@@ -189,7 +189,7 @@ let of_buffer_matches ~path ~rel_path
     }
   ) bm.matches in
   let fm = { fm_path = path; fm_rel_path = rel_path; fm_matches = mls } in
-  let t = empty ~query:q.query ~flags:q.flags in
+  let t = empty ~query:(Text_field.contents q.query) ~flags:q.flags in
   if Array.length mls > 0 then begin
     t.files <- [fm];
     t.total <- Array.length mls;

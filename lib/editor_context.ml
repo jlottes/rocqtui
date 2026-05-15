@@ -186,7 +186,7 @@ let rel_under project_dir abs =
 let search_snapshot t (active_tab : Tab.t) : Search_results.t option =
   match t.search_query with
   | None -> None
-  | Some q when q.query = "" -> None
+  | Some q when Text_field.contents q.query = "" -> None
   | Some q ->
     let active_path = Buffer.filename active_tab.buf in
     let project_dir =
@@ -224,7 +224,8 @@ let search_snapshot t (active_tab : Tab.t) : Search_results.t option =
         ) tabs
       in
       let merged =
-        Search_results.empty ~query:q.query ~flags:q.flags in
+        Search_results.empty
+          ~query:(Text_field.contents q.query) ~flags:q.flags in
       let project_paths = ref [] in
       let live_for_open_tab path tab =
         (* Try the open tab's buffer_matches first. *)

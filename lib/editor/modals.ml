@@ -225,38 +225,37 @@ let ensure_search_query (ctx : Editor_context.t) : Search.query_state =
   match ctx.search_query with
   | Some q -> q
   | None ->
-    let q = Search.empty_query in
+    let q = Search.empty_query () in
     ctx.search_query <- Some q;
     Editor_context.bump_search_gen ctx;
     q
+
+(* Field corresponding to the current focus. *)
+let focused_field (q : Search.query_state) =
+  match q.focus with
+  | Search.Find -> q.query
+  | Search.Replace -> q.replacement
 
 (* Append text to the focused field; bump the gen so per-tab matches
    refresh on next access; move the cursor to the new current match
    when typing in Find. *)
 let append_to_field (ctx : Editor_context.t) (tab : Tab.t) text =
   let q = ensure_search_query ctx in
-  let q' = match q.focus with
-    | Search.Find -> { q with query = q.query ^ text }
-    | Search.Replace -> { q with replacement = q.replacement ^ text }
-  in
-  ctx.search_query <- Some q';
+  Text_field.insert (focused_field q) text;
   Editor_context.bump_search_gen ctx;
   if q.focus = Search.Find then move_cursor_to_current ctx tab
 
-let backspace_focused (ctx : Editor_context.t) (tab : Tab.t) =
+(* Dispatch an arbitrary text-edit event to the focused field. Returns
+   true if [Text_field] claimed it. *)
+let dispatch_to_focused (ctx : Editor_context.t) (tab : Tab.t) ev =
   match ctx.search_query with
-  | None -> ()
+  | None -> false
   | Some q ->
-    let pop str =
-      if str = "" then str
-      else String.sub str 0 (Utf8.prev str (String.length str)) in
-    let q' = match q.focus with
-      | Search.Find -> { q with query = pop q.query }
-      | Search.Replace -> { q with replacement = pop q.replacement }
-    in
-    ctx.search_query <- Some q';
-    Editor_context.bump_search_gen ctx;
-    if q.focus = Search.Find then move_cursor_to_current ctx tab
+    if Text_field.handle_key (focused_field q) ev then begin
+      Editor_context.bump_search_gen ctx;
+      if q.focus = Search.Find then move_cursor_to_current ctx tab;
+      true
+    end else false
 
 (* In-place advance the active tab's [current], then move the buffer
    cursor. Single-file F3/Shift+F3; Phase 3 re-introduces cross-file
@@ -283,7 +282,7 @@ let project_search_kick (ctx : Editor_context.t) (tab : Tab.t) =
        | None -> Project_search.cancel ctx.project_search
        | Some p ->
          let (query, flags) = match ctx.search_query with
-           | Some q -> q.query, q.flags
+           | Some q -> Text_field.contents q.query, q.flags
            | None -> "", Search.empty_flags
          in
          if query = "" then
@@ -355,8 +354,8 @@ let substitute_for_match (q : Search.query_state) (buf : Buffer.t)
   let old_end = pos_to_byte buf m.end_ in
   let matched = String.sub (Buffer.text buf) start (old_end - start) in
   let new_text = Search.substitute
-    ~query:q.query ~flags:q.flags
-    ~replacement:q.replacement ~matched in
+    ~query:(Text_field.contents q.query) ~flags:q.flags
+    ~replacement:(Text_field.contents q.replacement) ~matched in
   (start, old_end, new_text)
 
 (* Replace the current match and advance to the next. Skip-advances on
@@ -462,11 +461,6 @@ let handle_search_prompt (ctx : Editor_context.t) ev (tab : Tab.t) =
      | None -> ignore (logical_escape ctx tab));
     Some Continue
 
-  | Input.Special (Input.Backspace, _) ->
-    backspace_focused ctx tab;
-    project_search_kick ctx tab;
-    Some Continue
-
   | ev when Keymatch.match_binding ev Keys.search_toggle_case ->
     toggle_flag toggle_case
 
@@ -515,20 +509,21 @@ let handle_search_prompt (ctx : Editor_context.t) ev (tab : Tab.t) =
   | ev when Keymatch.match_binding ev Keys.search_prev ->
     dispatched_advance ctx tab `Prev
 
-  (* Printable codepoint (ASCII or UTF-8): append to the focused field. *)
-  | Input.Key (cp, m)
-    when not m.ctrl && not m.alt && cp >= 32 && cp <> 127 ->
-    append_to_field ctx tab (Utf8.encode cp);
-    project_search_kick ctx tab;
-    Some Continue
-
   (* Mouse events fall through to the normal handler so the user can
      scroll, click match rows in the Search tab, switch sub-tabs in
      the messages pane, etc. while the prompt is open. *)
   | Input.Mouse _ ->
     None
 
-  | _ -> Some Continue
+  (* Text-field edits (printable chars, Backspace/Delete, Left/Right,
+     Home/End). Anything Text_field doesn't claim falls through to
+     [Some Continue], which absorbs the event so we don't accidentally
+     trigger global hotkeys (modifier combos, etc.) while the prompt
+     is open. *)
+  | ev ->
+    if dispatch_to_focused ctx tab ev then
+      project_search_kick ctx tab;
+    Some Continue
 
 let handle_help (ctx : Editor_context.t) ev r =
   let (rows, _) = Render.pane_dims r Render.PScript in
@@ -635,7 +630,7 @@ let execute_rename (ctx : Editor_context.t) r
      doesn't exist,
    - or execute the rename inline. *)
 let commit_rename_prompt (ctx : Editor_context.t) (rp : Modal.rename_state) r =
-  let final_rel = rp.input ^ rp.extension in
+  let final_rel = Text_field.contents rp.field ^ rp.extension in
   match resolve_in_project ~project_dir:rp.project_dir final_rel with
   | Error msg ->
     Render.set_status r (Printf.sprintf "Rename: %s" msg)
@@ -689,56 +684,13 @@ let commit_rename_prompt (ctx : Editor_context.t) (rp : Modal.rename_state) r =
 let handle_rename_prompt (ctx : Editor_context.t) ev r =
   match Modal.top ctx.modal with
   | Some (Modal.RenamePrompt rp) ->
-    (match ev with
+    if Text_field.handle_key rp.field ev then Some Continue
+    else (match ev with
      | Input.Special (Input.Escape, _) ->
        Modal.pop ctx.modal;
        Some Continue
      | Input.Special (Input.Enter, _) ->
        commit_rename_prompt ctx rp r;
-       Some Continue
-     | Input.Special (Input.Backspace, _) ->
-       if rp.cursor > 0 then begin
-         let before = String.sub rp.input 0 (rp.cursor - 1) in
-         let after =
-           String.sub rp.input rp.cursor
-             (String.length rp.input - rp.cursor) in
-         rp.input <- before ^ after;
-         rp.cursor <- rp.cursor - 1
-       end;
-       Some Continue
-     | Input.Special (Input.Delete, _) ->
-       if rp.cursor < String.length rp.input then begin
-         let before = String.sub rp.input 0 rp.cursor in
-         let after =
-           String.sub rp.input (rp.cursor + 1)
-             (String.length rp.input - rp.cursor - 1) in
-         rp.input <- before ^ after
-       end;
-       Some Continue
-     | Input.Special (Input.Left, _) ->
-       if rp.cursor > 0 then rp.cursor <- rp.cursor - 1;
-       Some Continue
-     | Input.Special (Input.Right, _) ->
-       (* Cursor is capped at end-of-editable; it can't enter the locked
-          extension. *)
-       if rp.cursor < String.length rp.input then rp.cursor <- rp.cursor + 1;
-       Some Continue
-     | Input.Special (Input.Home, _) ->
-       rp.cursor <- 0; Some Continue
-     | Input.Special (Input.End, _) ->
-       rp.cursor <- String.length rp.input; Some Continue
-     | Input.Key (cp, mods)
-       when not mods.ctrl && not mods.alt && not mods.super
-            && cp >= 32 && cp < 127 ->
-       (* Plain printable ASCII (and '/' for path components). Reject
-          embedded NUL/newlines implicitly via the range check. *)
-       let ch = Char.chr cp in
-       let before = String.sub rp.input 0 rp.cursor in
-       let after =
-         String.sub rp.input rp.cursor
-           (String.length rp.input - rp.cursor) in
-       rp.input <- before ^ String.make 1 ch ^ after;
-       rp.cursor <- rp.cursor + 1;
        Some Continue
      | _ -> Some Continue)
   | _ -> None

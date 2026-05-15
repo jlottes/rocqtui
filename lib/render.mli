@@ -66,6 +66,10 @@ val move_file_tree_border : t -> int -> unit
 val place_cursor : t -> row:int -> col:int -> unit
 val set_cursor_visible : t -> bool -> unit
 
+(** Place the hardware cursor on a status row, addressed by
+    [row_from_bottom] (same convention as [set_status_line]). *)
+val place_cursor_status : t -> row_from_bottom:int -> col:int -> unit
+
 (** Tab bar *)
 val draw_tab_bar : t -> (string * bool) list -> int -> unit
 

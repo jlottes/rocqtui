@@ -31,9 +31,9 @@ type state = {
    old type is retired in Phase 2. *)
 
 type query_state = {
-  query : string;
+  query : Text_field.t;
   flags : flags;
-  replacement : string;
+  replacement : Text_field.t;
   focus : focus;
 }
 
@@ -45,10 +45,10 @@ type buffer_matches = {
 
 let empty_flags = { case = Smart; regex = false }
 
-let empty_query = {
-  query = "";
+let empty_query () = {
+  query = Text_field.create ();
   flags = empty_flags;
-  replacement = "";
+  replacement = Text_field.create ();
   focus = Find;
 }
 
@@ -137,7 +137,7 @@ let recompute (buf : Buffer.t) (query : string) (flags : flags) : match_ array =
    verbatim onto the new record. *)
 let recompute_buffer_matches (q : query_state) (buf : Buffer.t)
     ~(anchor : pos) ~(saved_cursor : pos) : buffer_matches =
-  let matches = recompute buf q.query q.flags in
+  let matches = recompute buf (Text_field.contents q.query) q.flags in
   let n = Array.length matches in
   let current =
     if n = 0 then -1
