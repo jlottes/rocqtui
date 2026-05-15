@@ -315,6 +315,11 @@ let ai_dismiss = {
   name = "ai_dismiss"; codes = [27]; kitty_codes = []; display = "Esc";
   context = Script; description = "Dismiss AI suggestion" }
 
+let ai_accept_word = {
+  name = "ai_accept_word"; codes = []; kitty_codes = [(119, 3)];
+  display = "Alt+W"; context = Script;
+  description = "Accept next word of AI suggestion" }
+
 (* --- Grouped for help/status generation --- *)
 
 let navigation_bindings = [step_forward; step_backward; go_to_cursor; step_to_start; step_to_end; cycle_pane]

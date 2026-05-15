@@ -1,8 +1,11 @@
 (* Render AI ghost text in the script pane.
 
    Called from [View.render_all] after the normal render completes.
-   Phase 1 paints a single-line ghost continuation to the right of
-   the cursor, in a dimmed style. Multi-line ghost is Phase 2. *)
+   The first line of the ghost paints at the cursor; subsequent
+   lines paint at column 0 (just past the gutter) of the following
+   rows. Multi-line ghosts overwrite whatever buffer content was
+   rendered there — a Phase-2 simplification; a future revision can
+   push real lines down so they remain visible. *)
 
 let ghost_attr () : Grid.attr =
   let a = Theme.attrs () in
@@ -29,12 +32,7 @@ let draw_overlay ~(state : State.t option) (r : Render.t) (tab : Tab.t) =
     (match pt.ghost with
      | None -> ()
      | Some g ->
-       (* Single-line ghost for Phase 1. *)
-       let text = match String.index_opt g.text '\n' with
-         | Some i -> String.sub g.text 0 i
-         | None -> g.text
-       in
-       if String.length text = 0 then ()
+       if String.length g.text = 0 then ()
        else begin
          let buf = tab.buf in
          let line_text =
@@ -46,9 +44,15 @@ let draw_overlay ~(state : State.t option) (r : Render.t) (tab : Tab.t) =
          let (rows, cols) = Render.pane_dims r Render.PScript in
          let scroll = Buffer.scroll_top buf in
          let hscroll = Buffer.hscroll buf in
-         let row = g.origin_line - scroll in
+         let start_row = g.origin_line - scroll in
          let visual_col = Utf8.byte_to_col line_text g.origin_col in
-         let col = visual_col - hscroll + gw in
-         if row >= 0 && row < rows && col >= gw && col < cols then
-           ignore (Render.put_str r Render.PScript ~row ~col text (ghost_attr ()))
+         let start_col = visual_col - hscroll + gw in
+         let attr = ghost_attr () in
+         let lines = String.split_on_char '\n' g.text in
+         List.iteri (fun i line ->
+           let row = start_row + i in
+           let col = if i = 0 then start_col else gw in
+           if row >= 0 && row < rows && col < cols then
+             ignore (Render.put_str r Render.PScript ~row ~col line attr)
+         ) lines
        end)

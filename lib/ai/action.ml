@@ -18,6 +18,36 @@ let accept (state : State.t) (tab : Tab.t) : bool =
     state.status <- State.Idle;
     true   (* event consumed regardless of whether the buffer accepted *)
 
+(* Accept only the next chunk of the ghost; leave the remainder
+   visible at the new cursor position. *)
+let accept_word_action (state : State.t) (tab : Tab.t) : bool =
+  let pt = State.per_tab state tab.id in
+  match pt.ghost with
+  | None -> false
+  | Some g ->
+    (match Apply.accept_word tab ~text:g.text with
+     | None ->
+       Per_tab.clear pt;
+       state.status <- State.Idle;
+       true
+     | Some consumed ->
+       let rest =
+         String.sub g.text consumed (String.length g.text - consumed)
+       in
+       (if String.trim rest = "" then begin
+          Per_tab.clear pt;
+          state.status <- State.Idle
+        end else begin
+          let (cur_line, cur_col) = Buffer.cursor tab.buf in
+          pt.ghost <- Some {
+            Per_tab.text = rest;
+            origin_line = cur_line;
+            origin_col = cur_col;
+            origin_revision = Buffer.revision tab.buf;
+          }
+        end);
+       true)
+
 let dismiss_active (state : State.t) (tab : Tab.t) : bool =
   let pt = State.per_tab state tab.id in
   match pt.ghost with
@@ -60,6 +90,15 @@ let is_escape ev =
   | Input.Special (Input.Escape, _) -> true
   | _ -> false
 
+(* Alt+W arrives as an Input.Key event with the alt modifier set.
+   We bypass the keys.ml [kitty_codes] machinery and just match the
+   shape directly. *)
+let is_alt_w ev =
+  match ev with
+  | Input.Key (119, m)
+    when m.alt && not m.shift && not m.ctrl && not m.super -> true
+  | _ -> false
+
 (* Main entry. [modal_active] = true means a modal pane has input
    focus; AI consumes nothing in that case. *)
 let try_handle ~state ~modal_active (ev : Input.event) (tab : Tab.t) : bool =
@@ -73,6 +112,8 @@ let try_handle ~state ~modal_active (ev : Input.event) (tab : Tab.t) : bool =
     else if not state.State.enabled then false
     else if is_plain_tab ev then
       accept state tab
+    else if is_alt_w ev then
+      accept_word_action state tab
     else if is_escape ev then
       dismiss_active state tab
     else begin

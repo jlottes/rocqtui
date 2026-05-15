@@ -95,6 +95,7 @@ val open_claude : binding
 val ai_toggle : binding
 val ai_accept : binding
 val ai_dismiss : binding
+val ai_accept_word : binding
 
 (** Binding groups for help/status generation *)
 val navigation_bindings : binding list

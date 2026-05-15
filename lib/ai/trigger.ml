@@ -97,26 +97,15 @@ let send_request (state : State.t) (tab : Tab.t) ~now =
                           | Some s -> Printf.sprintf "%S" s);
       (match shifted with
        | Some text when String.trim text <> "" ->
-         (* Phase 1 renders only the first line of the suggestion.
-            Truncate the stored text to match what's displayed, so
-            Tab-accept inserts exactly what the user sees. Phase 2
-            (multi-line ghost rendering) will lift this. *)
-         let single_line =
-           match String.index_opt text '\n' with
-           | Some i -> String.sub text 0 i
-           | None -> text
-         in
-         if String.trim single_line <> "" then begin
-           let (cur_line, cur_col) = Buffer.cursor buf in
-           let pt = State.per_tab state tab.id in
-           pt.ghost <- Some {
-             Per_tab.text = single_line;
-             origin_line = cur_line;
-             origin_col = cur_col;
-             origin_revision = Buffer.revision buf;
-           };
-           state.status <- State.Ready
-         end
+         let (cur_line, cur_col) = Buffer.cursor buf in
+         let pt = State.per_tab state tab.id in
+         pt.ghost <- Some {
+           Per_tab.text;
+           origin_line = cur_line;
+           origin_col = cur_col;
+           origin_revision = Buffer.revision buf;
+         };
+         state.status <- State.Ready
        | _ -> ())
     | Client.Done_resp when mine ->
       (match state.status with
