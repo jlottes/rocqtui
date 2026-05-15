@@ -320,8 +320,24 @@ let sgr_of_color is_fg = function
     if is_fg then Printf.sprintf "38;2;%d;%d;%d" r g b
     else Printf.sprintf "48;2;%d;%d;%d" r g b
 
+(* Workaround for mosh dropping SGR 2 (dim): substitute a darker fg.
+   Default and palette fgs collapse to a fixed mid-gray since we can't
+   introspect the user's terminal palette; TrueColor scales properly. *)
+let mosh_dim_color = function
+  | Default | Basic _ | Color256 _ -> Color256 244
+  | TrueColor (r, g, b) ->
+    let scale x = (x * 55) / 100 in
+    TrueColor (scale r, scale g, scale b)
+
+let effective_attr attr =
+  if attr.dim && Mosh.is_active () then
+    { attr with dim = false; fg = mosh_dim_color attr.fg }
+  else attr
+
 (* Emit SGR sequence for an attribute change *)
 let emit_attr buf prev_attr attr =
+  let prev_attr = effective_attr prev_attr in
+  let attr = effective_attr attr in
   if prev_attr = attr then ()
   else begin
     let parts = ref [] in
