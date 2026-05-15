@@ -608,12 +608,17 @@ let advance_refreshing_goals_op t = function
      | Some result ->
        process_feedback t;
        (match result with
-        | Interface.Good (Some gs) ->
-          t.goals_cache <- Some gs
-        | Interface.Good None ->
-          t.goals_cache <- None
-        | Interface.Fail (_, _, msg) ->
-          t.msgs <- t.msgs @ [msg];
+        | Interface.Good (Some gs) -> t.goals_cache <- Some gs
+        | Interface.Good None | Interface.Fail _ ->
+          (* Drop goals_cache. Don't surface a Fail msg — this is an
+             internal "couldn't render goals at this state" event, not
+             a user-actionable error. The actual error from the prior
+             Add is already in [t.msgs]; appending the same wording
+             again from the downstream Goals call (e.g. when a
+             post-error rewind leaves rocq in a state where Goals
+             also Fails with the same universe complaint) would be
+             redundant noise. [Rp_set_options] above already ignores
+             its result in the same spirit. *)
           t.goals_cache <- None);
        t.current_op <- None;
        t.state_changed <- true)
