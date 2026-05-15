@@ -95,6 +95,7 @@ let handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r =
   let prompt_action = match Modal.top ctx.modal with
     | Some (Modal.Prompt p) -> Modals.handle_prompt ctx p.handler ev
     | Some Modal.SearchPrompt -> Modals.handle_search_prompt ctx ev tab
+    | Some (Modal.RenamePrompt _) -> Modals.handle_rename_prompt ctx ev r
     | _ -> None
   in
   match prompt_action with
@@ -687,6 +688,31 @@ let handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r =
               | `Added -> "added to" | `Removed -> "removed from" in
             Render.set_status r
               (Printf.sprintf "%s %s _RocqProject" rel verb);
+            Some Continue
+          | File_tree.TreeRename rel ->
+            let project_file = File_tree.project_file ft in
+            let p = Project.read project_file in
+            (* Split off the locked extension; the prompt edits only
+               the stem-plus-path portion. The cursor starts one past
+               the editable text so backspace nibbles from the end of
+               the path and typing extends it (the dimmed extension
+               shifts right). *)
+            let ext = ".v" in
+            let ext_len = String.length ext in
+            let stem =
+              if String.length rel >= ext_len
+                 && String.sub rel (String.length rel - ext_len) ext_len = ext
+              then String.sub rel 0 (String.length rel - ext_len)
+              else rel
+            in
+            Modal.push ctx.modal (Modal.RenamePrompt {
+              old_path = Filename.concat p.project_dir rel;
+              project_dir = p.project_dir;
+              project_file = p.path;
+              extension = ext;
+              input = stem;
+              cursor = String.length stem;
+            });
             Some Continue
           | File_tree.TreeContinue -> Some Continue
           | File_tree.TreeUnhandled -> None))

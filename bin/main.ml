@@ -161,6 +161,7 @@ let () =
     ~set_project_dir:(fun dir ->
       File_manager.set_project_dir fm dir;
       refresh_dep_runner_for_dir dir)
+    ~add_file_watch:(fun p -> File_manager.add_watch fm p)
     ~dep_state:(fun () -> (Dep_runner.graph dr, Dep_runner.running dr))
     () in
   ctx.theme_name <- theme.Theme.name;

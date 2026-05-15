@@ -5,6 +5,16 @@ type prompt_result =
   | Dismissed  (** event didn't match, dismiss and re-process *)
   | Ignored    (** event didn't match, stay in prompt *)
 
+(** Mutable state of the file-tree rename prompt. *)
+type rename_state = {
+  old_path : string;        (** absolute path of file being renamed *)
+  project_dir : string;
+  project_file : string;    (** absolute path to _RocqProject *)
+  extension : string;       (** locked suffix (always ".v" for now) *)
+  mutable input : string;   (** editable portion (never includes [extension]) *)
+  mutable cursor : int;     (** byte offset within [input] *)
+}
+
 type kind =
   | Help of { mutable scroll : int }
   | QueryMenu
@@ -20,6 +30,9 @@ type kind =
     (** The search prompt — incremental search bar at the bottom of the
         screen. The search state itself lives on [Tab.t]. The
         dispatcher is [Editor.Modals.handle_search_prompt]. *)
+  | RenamePrompt of rename_state
+    (** Single-line rename prompt for a file in the file-tree panel.
+        Dispatched via [Editor.Modals.handle_rename_prompt]. *)
 
 type t
 

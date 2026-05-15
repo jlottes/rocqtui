@@ -166,6 +166,44 @@ let test_toggle_preserves_unchanged_lines () =
       theories/Bar.v\n");
   rm_rf dir
 
+let test_rename_active () =
+  let dir = mkdtemp "rocqtui_proj_" in
+  let path = Filename.concat dir "_RocqProject" in
+  write path "-R . Top\ntheories/Foo.v\ntheories/Bar.v\n";
+  let p = Project.read path in
+  let (_, outcome) = Project.rename_member p
+    ~old_rel:"theories/Foo.v" ~new_rel:"theories/Renamed.v" in
+  check "rename_active: outcome=Renamed" (outcome = `Renamed);
+  check "rename_active: file content updated"
+    (read_all path =
+     "-R . Top\ntheories/Renamed.v\ntheories/Bar.v\n");
+  rm_rf dir
+
+let test_rename_commented () =
+  let dir = mkdtemp "rocqtui_proj_" in
+  let path = Filename.concat dir "_RocqProject" in
+  write path "-R . Top\n# theories/Foo.v\n";
+  let p = Project.read path in
+  let (_, outcome) = Project.rename_member p
+    ~old_rel:"theories/Foo.v" ~new_rel:"lib/Bar.v" in
+  check "rename_commented: outcome=Renamed" (outcome = `Renamed);
+  check "rename_commented: comment preserved"
+    (read_all path = "-R . Top\n# lib/Bar.v\n");
+  rm_rf dir
+
+let test_rename_not_listed () =
+  let dir = mkdtemp "rocqtui_proj_" in
+  let path = Filename.concat dir "_RocqProject" in
+  let original = "-R . Top\ntheories/Foo.v\n" in
+  write path original;
+  let p = Project.read path in
+  let (_, outcome) = Project.rename_member p
+    ~old_rel:"theories/Missing.v" ~new_rel:"theories/Other.v" in
+  check "rename_not_listed: outcome=NotListed" (outcome = `NotListed);
+  check "rename_not_listed: file untouched"
+    (read_all path = original);
+  rm_rf dir
+
 let () =
   test_basic_parse ();
   test_membership ();
@@ -175,4 +213,7 @@ let () =
   test_toggle_absent_append ();
   test_toggle_absent_no_v_lines ();
   test_toggle_preserves_unchanged_lines ();
+  test_rename_active ();
+  test_rename_commented ();
+  test_rename_not_listed ();
   print_endline "All tests passed."

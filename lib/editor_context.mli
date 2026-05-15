@@ -26,6 +26,9 @@ type t = {
   switch_to_tab_id : int -> unit;
   open_files : unit -> (string * File_tree.file_status) list;
   set_project_dir : string -> unit;
+  (** Register an inotify watch on a file path. Invoked when a tab
+      starts pointing at a new file (e.g. after a rename). *)
+  add_file_watch : string -> unit;
   (** Snapshot of the dep runner state. Cheap to call every frame. *)
   dep_state : unit -> Dep_graph.t option * bool;
   (** All currently-open tabs. Used by project-search merge to
@@ -67,6 +70,7 @@ val create :
   open_files:(unit -> (string * File_tree.file_status) list) ->
   tabs:(unit -> Tab.t list) ->
   ?set_project_dir:(string -> unit) ->
+  ?add_file_watch:(string -> unit) ->
   ?dep_state:(unit -> Dep_graph.t option * bool) ->
   unit -> t
 

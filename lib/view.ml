@@ -763,6 +763,22 @@ let update_status (ctx : Editor_context.t) r (tab : Tab.t) =
     Render.set_status r p.message
   | Some Modal.SearchPrompt ->
     render_search_panel ctx tab r
+  | Some (Modal.RenamePrompt rp) ->
+    let attrs = Theme.attrs () in
+    let base = attrs.ga_status in
+    let dim = { base with Grid.dim = true } in
+    let caret = "\xe2\x96\x88" in  (* █ U+2588 *)
+    let before = String.sub rp.input 0 rp.cursor in
+    let after =
+      String.sub rp.input rp.cursor (String.length rp.input - rp.cursor) in
+    Render.set_status_line_styled r ~row_from_bottom:0 [
+      "Rename: ", base;
+      before, base;
+      caret, base;
+      after, base;
+      rp.extension, dim;
+      "    Enter:Commit  ESC:Cancel", base;
+    ]
   | _ ->
   if is_help ctx then
     Render.set_status r

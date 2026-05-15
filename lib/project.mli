@@ -64,3 +64,11 @@ type toggle_outcome = [`Added | `Removed]
     The toggled line is re-emitted in canonical form
     (`# rel` / `rel`); all other lines round-trip verbatim. *)
 val toggle_member : t -> rel:string -> t * toggle_outcome
+
+type rename_outcome = [`Renamed | `NotListed]
+
+(** Rename [old_rel] to [new_rel] in the project file. Preserves
+    whether the line was active or commented; updates every matching
+    line. Returns [`NotListed] (no write) if no line references
+    [old_rel]. *)
+val rename_member : t -> old_rel:string -> new_rel:string -> t * rename_outcome

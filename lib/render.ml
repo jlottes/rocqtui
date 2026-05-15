@@ -348,6 +348,17 @@ let set_status_line t ~row_from_bottom text =
     ignore (Grid.put_str t.curr ~row ~col:1 text attr)
   end
 
+let set_status_line_styled t ~row_from_bottom segments =
+  let base_attr = (Theme.attrs ()).ga_status in
+  let row = t.term_h - 1 - row_from_bottom in
+  if row >= 0 && row < t.term_h then begin
+    Grid.fill t.curr ~row ~col:0 ~width:t.term_w ' ' base_attr;
+    let col = ref 1 in
+    List.iter (fun (text, attr) ->
+      col := Grid.put_str t.curr ~row ~col:!col text attr
+    ) segments
+  end
+
 let set_overlay t rect render_fn =
   t.overlay <- Some { rect; render = render_fn }
 

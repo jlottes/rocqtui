@@ -42,6 +42,12 @@ val handle_query :
 val handle_help :
   Editor_context.t -> Input.event -> Render.t -> Action.action option
 
+(** While a RenamePrompt is open: edit the input, Enter to commit,
+    Esc to cancel. The locked extension can't be moved into. Returns
+    [None] only if the modal isn't actually a RenamePrompt. *)
+val handle_rename_prompt :
+  Editor_context.t -> Input.event -> Render.t -> Action.action option
+
 (** While SearchPrompt is open: edit the query, navigate matches, toggle
     flags. ESC (or ESC ESC under compose) cancels via [logical_escape].
     The prompt absorbs every event — caller never needs to fall through. *)

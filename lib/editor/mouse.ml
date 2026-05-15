@@ -351,6 +351,7 @@ let handle (ctx : Editor_context.t) (mev : Input.mouse_event) (tab : Tab.t) r
          (match File_tree.handle_click ft r ~y with
           | File_tree.TreeOpen path -> result := Some (Action.Open_file path)
           | File_tree.TreeContinue | File_tree.TreeToggleProject _
+          | File_tree.TreeRename _
           | File_tree.TreeUnhandled -> ())
        | None -> ())
     end

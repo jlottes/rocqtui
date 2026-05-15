@@ -100,7 +100,12 @@ or hand-written).
       _RocqProject (including atomic-rename saves) surface as
       `ProjectChanged` events that re-run `rocq dep` and refresh the
       file-tree panel.
-- [ ] Rename file (update _RocqProject entry, update tab, save)
+- [x] Rename file (file-tree panel, `r`). Updates `_RocqProject`
+      entry (active or commented preserved), re-points any open tab,
+      and re-adds the inotify watch. Path edits move the file;
+      previously-nonexistent parent dirs require an explicit
+      confirmation. Out of scope: rewriting `Import` directives in
+      `.v` sources — the user can ask Claude for that.
 
 ## File Tree Panel (`docs/FILE_TREE_PLAN.md`, `docs/DEP_VIEW_PLAN.md`)
 

@@ -552,3 +552,193 @@ let handle_help (ctx : Editor_context.t) ev r =
     Modal.pop ctx.modal;
     View.set_help_scroll ctx 0;
     Some Continue
+
+(* --- Rename prompt --- *)
+
+(* Normalize a path by collapsing "." and "..". Returns the canonical
+   form, or [None] if the path escapes its root (more ".." segments
+   than directories). *)
+let normalize_segments segs =
+  let rec walk acc = function
+    | [] -> Some (List.rev acc)
+    | "" :: rest -> walk acc rest          (* "/foo//bar" → drop empties *)
+    | "." :: rest -> walk acc rest
+    | ".." :: rest ->
+      (match acc with
+       | [] -> None                        (* escapes root *)
+       | _ :: tl -> walk tl rest)
+    | seg :: rest -> walk (seg :: acc) rest
+  in
+  walk [] segs
+
+let resolve_in_project ~project_dir rel =
+  match normalize_segments (String.split_on_char '/' rel) with
+  | None -> Error "target escapes the project root"
+  | Some [] -> Error "empty filename"
+  | Some parts ->
+    let rel = String.concat "/" parts in
+    Ok (Filename.concat project_dir rel, rel)
+
+let rec mkdir_p path =
+  if Sys.file_exists path then ()
+  else begin
+    let parent = Filename.dirname path in
+    if parent <> path && not (Sys.file_exists parent) then
+      mkdir_p parent;
+    try Unix.mkdir path 0o755 with Unix.Unix_error (Unix.EEXIST, _, _) -> ()
+  end
+
+(* Carry out the rename: Sys.rename, update any open tab pointing at
+   [old_path], update [_RocqProject] if the file was listed, and add
+   a fresh inotify watch on the new path (the old watch self-cleans
+   via [IN_IGNORED]). Sets a status message describing the result. *)
+let execute_rename (ctx : Editor_context.t) r
+    ~old_path ~new_path ~project_file =
+  match Sys.rename old_path new_path with
+  | exception Sys_error msg ->
+    Render.set_status r (Printf.sprintf "Rename failed: %s" msg)
+  | () ->
+    List.iter (fun (tab : Tab.t) ->
+      match Buffer.filename tab.buf with
+      | Some f when f = old_path ->
+        Buffer.set_filename tab.buf new_path;
+        ctx.add_file_watch new_path
+      | _ -> ()
+    ) (ctx.tabs ());
+    let project = Project.read project_file in
+    let old_rel =
+      let prefix = project.project_dir ^ "/" in
+      let plen = String.length prefix in
+      if String.length old_path > plen
+         && String.sub old_path 0 plen = prefix
+      then String.sub old_path plen (String.length old_path - plen)
+      else old_path
+    in
+    let new_rel =
+      let prefix = project.project_dir ^ "/" in
+      let plen = String.length prefix in
+      if String.length new_path > plen
+         && String.sub new_path 0 plen = prefix
+      then String.sub new_path plen (String.length new_path - plen)
+      else new_path
+    in
+    let _ = Project.rename_member project ~old_rel ~new_rel in
+    let verb =
+      if Filename.dirname old_rel = Filename.dirname new_rel
+      then "Renamed" else "Moved" in
+    Render.set_status r
+      (Printf.sprintf "%s %s \xe2\x86\x92 %s" verb old_rel new_rel)
+
+(* Validate the input + dispatch. Either:
+   - reject with a status message (prompt stays open),
+   - swap to a Modal.Prompt confirmation when the target's parent dir
+     doesn't exist,
+   - or execute the rename inline. *)
+let commit_rename_prompt (ctx : Editor_context.t) (rp : Modal.rename_state) r =
+  let final_rel = rp.input ^ rp.extension in
+  match resolve_in_project ~project_dir:rp.project_dir final_rel with
+  | Error msg ->
+    Render.set_status r (Printf.sprintf "Rename: %s" msg)
+  | Ok (new_path, new_rel) ->
+    if new_path = rp.old_path then begin
+      Modal.pop ctx.modal;
+      Render.set_status r "Rename: unchanged"
+    end
+    else if Sys.file_exists new_path then
+      Render.set_status r
+        (Printf.sprintf "Rename: %s already exists" new_rel)
+    else
+      let parent = Filename.dirname new_path in
+      if Sys.file_exists parent then begin
+        Modal.pop ctx.modal;
+        execute_rename ctx r
+          ~old_path:rp.old_path ~new_path
+          ~project_file:rp.project_file
+      end
+      else begin
+        (* Confirm before creating intermediate directories. *)
+        Modal.pop ctx.modal;
+        let parent_rel =
+          let prefix = rp.project_dir ^ "/" in
+          let plen = String.length prefix in
+          if String.length parent > plen
+             && String.sub parent 0 plen = prefix
+          then String.sub parent plen (String.length parent - plen)
+          else parent
+        in
+        let project_file = rp.project_file in
+        let old_path = rp.old_path in
+        Modal.push ctx.modal (Modal.Prompt {
+          message = Printf.sprintf
+            "Create directory %s/ ? r to confirm, ESC to cancel."
+            parent_rel;
+          handler = (fun ev ->
+            match ev with
+            | Input.Key (114, mods)
+              when not (mods.alt || mods.ctrl || mods.super) ->
+              (try mkdir_p parent with Unix.Unix_error (e, _, _) ->
+                 Render.set_status r
+                   (Printf.sprintf "mkdir: %s" (Unix.error_message e)));
+              if Sys.file_exists parent then
+                execute_rename ctx r ~old_path ~new_path ~project_file;
+              Modal.Handled
+            | _ -> Modal.Dismissed)
+        })
+      end
+
+let handle_rename_prompt (ctx : Editor_context.t) ev r =
+  match Modal.top ctx.modal with
+  | Some (Modal.RenamePrompt rp) ->
+    (match ev with
+     | Input.Special (Input.Escape, _) ->
+       Modal.pop ctx.modal;
+       Some Continue
+     | Input.Special (Input.Enter, _) ->
+       commit_rename_prompt ctx rp r;
+       Some Continue
+     | Input.Special (Input.Backspace, _) ->
+       if rp.cursor > 0 then begin
+         let before = String.sub rp.input 0 (rp.cursor - 1) in
+         let after =
+           String.sub rp.input rp.cursor
+             (String.length rp.input - rp.cursor) in
+         rp.input <- before ^ after;
+         rp.cursor <- rp.cursor - 1
+       end;
+       Some Continue
+     | Input.Special (Input.Delete, _) ->
+       if rp.cursor < String.length rp.input then begin
+         let before = String.sub rp.input 0 rp.cursor in
+         let after =
+           String.sub rp.input (rp.cursor + 1)
+             (String.length rp.input - rp.cursor - 1) in
+         rp.input <- before ^ after
+       end;
+       Some Continue
+     | Input.Special (Input.Left, _) ->
+       if rp.cursor > 0 then rp.cursor <- rp.cursor - 1;
+       Some Continue
+     | Input.Special (Input.Right, _) ->
+       (* Cursor is capped at end-of-editable; it can't enter the locked
+          extension. *)
+       if rp.cursor < String.length rp.input then rp.cursor <- rp.cursor + 1;
+       Some Continue
+     | Input.Special (Input.Home, _) ->
+       rp.cursor <- 0; Some Continue
+     | Input.Special (Input.End, _) ->
+       rp.cursor <- String.length rp.input; Some Continue
+     | Input.Key (cp, mods)
+       when not mods.ctrl && not mods.alt && not mods.super
+            && cp >= 32 && cp < 127 ->
+       (* Plain printable ASCII (and '/' for path components). Reject
+          embedded NUL/newlines implicitly via the range check. *)
+       let ch = Char.chr cp in
+       let before = String.sub rp.input 0 rp.cursor in
+       let after =
+         String.sub rp.input rp.cursor
+           (String.length rp.input - rp.cursor) in
+       rp.input <- before ^ String.make 1 ch ^ after;
+       rp.cursor <- rp.cursor + 1;
+       Some Continue
+     | _ -> Some Continue)
+  | _ -> None

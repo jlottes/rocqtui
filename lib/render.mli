@@ -88,6 +88,13 @@ val panel_rows : t -> int
     [panel_rows]. The cells use the status attribute. *)
 val set_status_line : t -> row_from_bottom:int -> string -> unit
 
+(** Paint a status row from a list of styled segments. The row is first
+    filled with the default status attribute, then segments are placed
+    left-to-right starting at column 1, each with its own [Grid.attr].
+    Useful for prompts that mix normal and dimmed text. *)
+val set_status_line_styled :
+  t -> row_from_bottom:int -> (string * Grid.attr) list -> unit
+
 (** Message tab hit testing *)
 val msg_tab_at_x : t -> x:int -> tab_names:string list -> int option
 

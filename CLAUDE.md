@@ -126,6 +126,7 @@ See `lib/keys.ml` for the source of truth. Summary:
 | . | (in file-tree panel) Snap selection to current tab's file |
 | v | (in file-tree panel) Cycle view: filesystem tree ↔ dependency order |
 | p | (in file-tree panel, tree view) Toggle selected file's `_RocqProject` membership (commented ↔ active, or inserts new entry in sorted position) |
+| r | (in file-tree panel, tree view) Rename selected file. Prompt pre-fills the project-relative path with the `.v` extension locked. Add `/` to move into a different (existing or new) directory; new directories require a confirmation. `_RocqProject` entries (active or commented) are renamed in place. |
 | F12 | Force redraw |
 | ESC | Start XCompose (only if launched with `--xcompose`); otherwise sent to terminal when focused |
 | ESC | Cancel search (prompt: restores cursor; outside prompt: clears highlights). Under `--xcompose`, ESC starts compose so the user-visible cancel is ESC ESC; the second ESC also doubles as "send ESC to terminal" when one is focused and no search is in flight. |

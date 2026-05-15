@@ -73,6 +73,7 @@ rocqtui -theme solarized-dark path/to/file.v
 | `F7` | Theme picker |
 | `F8` | Toggle file-tree panel |
 | `p` | (in file-tree panel) Toggle selected file's `_RocqProject` membership |
+| `r` | (in file-tree panel) Rename selected file (path edits move the file; new dirs require confirmation) |
 | `F12` | Force redraw |
 
 ## Project files

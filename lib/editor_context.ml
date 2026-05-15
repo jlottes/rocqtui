@@ -25,6 +25,9 @@ type t = {
   switch_to_tab_id : int -> unit;
   open_files : unit -> (string * File_tree.file_status) list;
   set_project_dir : string -> unit;
+  add_file_watch : string -> unit;
+    (* Add an inotify watch on the given file path. Called when a tab
+       starts pointing at a new file (e.g. after rename). *)
   dep_state : unit -> Dep_graph.t option * bool;
   tabs : unit -> Tab.t list;
   modal : Modal.t;
@@ -57,12 +60,14 @@ let create
     ~open_files
     ~tabs
     ?(set_project_dir = fun _ -> ())
+    ?(add_file_watch = fun _ -> ())
     ?(dep_state = fun () -> (None, false))
     () =
   { switch_tab;
     switch_to_tab_id;
     open_files;
     set_project_dir;
+    add_file_watch;
     dep_state;
     tabs;
     modal = Modal.create ();

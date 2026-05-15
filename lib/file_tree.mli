@@ -54,6 +54,9 @@ type action =
   | TreeToggleProject of string
       (** Project-relative path. Tree view, on a non-directory entry, [p]
           requests a [_RocqProject] membership toggle for that file. *)
+  | TreeRename of string
+      (** Project-relative path. Tree view, on a non-directory entry, [r]
+          requests that the editor open a rename prompt for that file. *)
   | TreeUnhandled
 
 val handle_key : t -> Render.t -> int -> action

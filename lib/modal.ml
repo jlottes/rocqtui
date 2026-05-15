@@ -1,5 +1,14 @@
 (* Modal manager: replaces scattered boolean refs with a variant stack. *)
 
+type rename_state = {
+  old_path : string;          (* absolute path of file being renamed *)
+  project_dir : string;
+  project_file : string;      (* abs path to _RocqProject *)
+  extension : string;         (* always ".v" for now; locked suffix *)
+  mutable input : string;     (* editable portion, never includes [extension] *)
+  mutable cursor : int;       (* byte offset within [input] *)
+}
+
 type kind =
   | Help of { mutable scroll : int }
   | QueryMenu
@@ -14,6 +23,7 @@ type kind =
   | SearchPrompt
     (* No payload: the search state lives on Tab.t (per-tab persistence).
        Dispatched via Editor.Modals.handle_search_prompt. *)
+  | RenamePrompt of rename_state
 
 and prompt_result =
   | Handled    (* prompt consumed the event, dismiss *)
@@ -50,6 +60,7 @@ let same_kind a b =
   | FilePicker _, FilePicker _ -> true
   | Prompt _, Prompt _ -> true
   | SearchPrompt, SearchPrompt -> true
+  | RenamePrompt _, RenamePrompt _ -> true
   | _ -> false
 
 let toggle t kind =

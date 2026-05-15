@@ -265,6 +265,7 @@ let membership t ~rel =
   !found
 
 type toggle_outcome = [`Added | `Removed]
+type rename_outcome = [`Renamed | `NotListed]
 
 (* [toggle_member] is the only function that needs a line-preserving
    view of the file. We read lines, mutate (or insert) the matching
@@ -322,3 +323,28 @@ let toggle_member t ~rel =
   ) new_lines;
   close_out oc;
   (read t.path, outcome)
+
+(* Replace the [old_rel] listing with [new_rel]. Preserves whether the
+   line was active or commented. Returns [`NotListed] (no-op) if no
+   line in the project references [old_rel]. *)
+let rename_member t ~old_rel ~new_rel =
+  let lines = read_lines t.path in
+  let arr = Array.of_list lines in
+  let n = Array.length arr in
+  let outcome = ref `NotListed in
+  for i = 0 to n - 1 do
+    match classify_line arr.(i) with
+    | Lf_file { commented; rel } when rel = old_rel ->
+      arr.(i) <- (if commented then "# " ^ new_rel else new_rel);
+      outcome := `Renamed
+    | _ -> ()
+  done;
+  if !outcome = `Renamed then begin
+    let oc = open_out t.path in
+    Array.iter (fun line ->
+      output_string oc line;
+      output_char oc '\n'
+    ) arr;
+    close_out oc
+  end;
+  (read t.path, !outcome)

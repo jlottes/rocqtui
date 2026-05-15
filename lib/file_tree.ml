@@ -393,6 +393,7 @@ type action =
   | TreeContinue
   | TreeOpen of string  (* file path *)
   | TreeToggleProject of string  (* rel path under [project_dir] *)
+  | TreeRename of string  (* rel path of file (non-dir) to rename *)
   | TreeUnhandled       (* let global key handlers run *)
 
 let activate_selected t =
@@ -537,6 +538,14 @@ let handle_key t r ch =
     match selected_line t with
     | Some line when not line.entry.is_dir ->
       TreeToggleProject line.entry.rel_path
+    | Some _ | None -> TreeContinue
+  end
+  else if not in_filter && t.view = VTree && ch = Char.code 'r' then begin
+    (* Open the rename prompt for the selected file. Dirs are
+       a no-op (we don't support renaming directories yet). *)
+    match selected_line t with
+    | Some line when not line.entry.is_dir ->
+      TreeRename line.entry.rel_path
     | Some _ | None -> TreeContinue
   end
   else if ch = 20 then begin (* ^T toggle mode (tree view only) *)
