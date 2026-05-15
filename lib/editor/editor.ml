@@ -96,6 +96,7 @@ let handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r =
     | Some (Modal.Prompt p) -> Modals.handle_prompt ctx p.handler ev
     | Some Modal.SearchPrompt -> Modals.handle_search_prompt ctx ev tab
     | Some (Modal.RenamePrompt _) -> Modals.handle_rename_prompt ctx ev r
+    | Some (Modal.SaveAsPrompt _) -> Modals.handle_save_as_prompt ctx ev r
     | _ -> None
   in
   match prompt_action with

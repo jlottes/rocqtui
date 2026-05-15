@@ -91,7 +91,7 @@ See `lib/keys.ml` for the source of truth. Summary:
 
 | Key | Action |
 |-----|--------|
-| ^S | Save |
+| ^S | Save (prompts for filename on a new/blank tab; locked `.v` extension, project-relative path) |
 | ^O | Open file picker |
 | ^W | Close tab / close terminal (when focused) |
 | ^X / ^K | Cut line / selection (script pane) |

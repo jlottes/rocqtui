@@ -87,7 +87,10 @@ or hand-written).
 
 ## File Management
 
-- [ ] Save as: prompt for filename (needed for new/blank tabs)
+- [x] Save as for new/blank tabs: `^S` on a tab with no filename
+      opens a project-relative save-as prompt (locked `.v` extension,
+      `mkdir -p` confirmation for new directories). Doesn't add to
+      `_RocqProject` — the user can toggle with `p` in the tree view.
 - [x] Toggle file's `_RocqProject` membership (`p` in file-tree panel,
       tree view). Comments/uncomments in place, or inserts at sorted
       position among existing .v entries. File-tree glyphs update via

@@ -14,6 +14,17 @@ type rename_state = {
   field : Text_field.t;     (** editable portion (never includes [extension]) *)
 }
 
+(** Mutable state of the save-as prompt (^S on a tab with no filename
+    yet). Path is resolved relative to [project_dir]; locked extension
+    is appended on commit. [tab_id] is captured at modal-open time so
+    a stray mouse click on the tab bar doesn't redirect the save. *)
+type save_as_state = {
+  tab_id : int;
+  project_dir : string;
+  extension : string;       (** locked suffix (always ".v" for now) *)
+  field : Text_field.t;     (** editable portion; starts empty *)
+}
+
 type kind =
   | Help of { mutable scroll : int }
   | QueryMenu
@@ -32,6 +43,10 @@ type kind =
   | RenamePrompt of rename_state
     (** Single-line rename prompt for a file in the file-tree panel.
         Dispatched via [Editor.Modals.handle_rename_prompt]. *)
+  | SaveAsPrompt of save_as_state
+    (** Save-as prompt that opens when [^S] is pressed on a tab that
+        has no filename yet. Dispatched via
+        [Editor.Modals.handle_save_as_prompt]. *)
 
 type t
 

@@ -8,6 +8,13 @@ type rename_state = {
   field : Text_field.t;       (* editable portion; never includes [extension] *)
 }
 
+type save_as_state = {
+  tab_id : int;               (* tab whose buffer will be saved *)
+  project_dir : string;       (* root for path resolution *)
+  extension : string;         (* locked suffix (".v") *)
+  field : Text_field.t;       (* editable portion; starts empty *)
+}
+
 type kind =
   | Help of { mutable scroll : int }
   | QueryMenu
@@ -23,6 +30,7 @@ type kind =
     (* No payload: the search state lives on Tab.t (per-tab persistence).
        Dispatched via Editor.Modals.handle_search_prompt. *)
   | RenamePrompt of rename_state
+  | SaveAsPrompt of save_as_state
 
 and prompt_result =
   | Handled    (* prompt consumed the event, dismiss *)
@@ -60,6 +68,7 @@ let same_kind a b =
   | Prompt _, Prompt _ -> true
   | SearchPrompt, SearchPrompt -> true
   | RenamePrompt _, RenamePrompt _ -> true
+  | SaveAsPrompt _, SaveAsPrompt _ -> true
   | _ -> false
 
 let toggle t kind =

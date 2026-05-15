@@ -163,15 +163,17 @@ let save buf =
   match buf.filename with
   | None -> false
   | Some path ->
-    let oc = open_out path in
-    for i = 0 to buf.num_lines - 1 do
-      output_string oc buf.lines.(i);
-      output_char oc '\n'
-    done;
-    close_out oc;
-    buf.modified <- false;
-    buf.disk_changed <- false;
-    true
+    try
+      let oc = open_out path in
+      for i = 0 to buf.num_lines - 1 do
+        output_string oc buf.lines.(i);
+        output_char oc '\n'
+      done;
+      close_out oc;
+      buf.modified <- false;
+      buf.disk_changed <- false;
+      true
+    with Sys_error _ -> false
 
 let save_as buf path =
   buf.filename <- Some path;

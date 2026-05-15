@@ -499,7 +499,19 @@ let () =
                      Render.set_status r "Error saving file."
                  end
                | None ->
-                 Render.set_status r "No filename.");
+                 (* New / unfiled tab: open the Save As prompt. Anchor
+                    at the project (cwd-first); fall back to cwd if
+                    no project file is found anywhere in the tree. *)
+                 let project_dir = match Project.find_for () with
+                   | Some p -> p.project_dir
+                   | None -> Sys.getcwd ()
+                 in
+                 Modal.push ctx.modal (Modal.SaveAsPrompt {
+                   tab_id = tab.id;
+                   project_dir;
+                   extension = ".v";
+                   field = Text_field.create ();
+                 }));
               Render_need.request ()
             | Editor.Jump_back jp ->
               let found = Tab.switch_to_id mgr jp.jp_tab_id in

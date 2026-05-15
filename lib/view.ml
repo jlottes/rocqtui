@@ -791,6 +791,19 @@ let update_status (ctx : Editor_context.t) r (tab : Tab.t) =
        set_status_line_styled. *)
     Render.place_cursor_status r ~row_from_bottom:0
       ~col:(1 + String.length label + Text_field.cursor rp.field)
+  | Some (Modal.SaveAsPrompt sp) ->
+    let attrs = Theme.attrs () in
+    let base = attrs.ga_status in
+    let dim = { base with Grid.dim = true } in
+    let label = "Save as: " in
+    Render.set_status_line_styled r ~row_from_bottom:0 [
+      label, base;
+      Text_field.contents sp.field, base;
+      sp.extension, dim;
+      "    Enter:Save  ESC:Cancel", base;
+    ];
+    Render.place_cursor_status r ~row_from_bottom:0
+      ~col:(1 + String.length label + Text_field.cursor sp.field)
   | _ ->
   if is_help ctx then
     Render.set_status r

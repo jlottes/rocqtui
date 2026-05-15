@@ -694,3 +694,80 @@ let handle_rename_prompt (ctx : Editor_context.t) ev r =
        Some Continue
      | _ -> Some Continue)
   | _ -> None
+
+(* --- Save-as prompt --- *)
+
+let tab_by_id (ctx : Editor_context.t) id =
+  List.find_opt (fun (t : Tab.t) -> t.id = id) (ctx.tabs ())
+
+let execute_save_as (ctx : Editor_context.t) r ~tab_id ~new_path =
+  match tab_by_id ctx tab_id with
+  | None ->
+    Render.set_status r "Save as: tab no longer exists"
+  | Some tab ->
+    Buffer.set_filename tab.buf new_path;
+    if Buffer.save tab.buf then begin
+      ctx.add_file_watch new_path;
+      Render.set_status r
+        (Printf.sprintf "Saved to %s" (Filename.basename new_path))
+    end
+    else
+      Render.set_status r "Error saving file."
+
+let commit_save_as_prompt (ctx : Editor_context.t)
+    (sp : Modal.save_as_state) r =
+  let final_rel = Text_field.contents sp.field ^ sp.extension in
+  match resolve_in_project ~project_dir:sp.project_dir final_rel with
+  | Error msg ->
+    Render.set_status r (Printf.sprintf "Save as: %s" msg)
+  | Ok (new_path, new_rel) ->
+    if Sys.file_exists new_path then
+      Render.set_status r
+        (Printf.sprintf "Save as: %s already exists" new_rel)
+    else
+      let parent = Filename.dirname new_path in
+      if Sys.file_exists parent then begin
+        Modal.pop ctx.modal;
+        execute_save_as ctx r ~tab_id:sp.tab_id ~new_path
+      end
+      else begin
+        Modal.pop ctx.modal;
+        let parent_rel =
+          let prefix = sp.project_dir ^ "/" in
+          let plen = String.length prefix in
+          if String.length parent > plen
+             && String.sub parent 0 plen = prefix
+          then String.sub parent plen (String.length parent - plen)
+          else parent
+        in
+        let tab_id = sp.tab_id in
+        Modal.push ctx.modal (Modal.Prompt {
+          message = Printf.sprintf
+            "Create directory %s/ ? %s to confirm, ESC to cancel."
+            parent_rel Keys.save.Keys.display;
+          handler = (fun ev ->
+            if Keymatch.match_binding ev Keys.save then begin
+              (try mkdir_p parent with Unix.Unix_error (e, _, _) ->
+                 Render.set_status r
+                   (Printf.sprintf "mkdir: %s" (Unix.error_message e)));
+              if Sys.file_exists parent then
+                execute_save_as ctx r ~tab_id ~new_path;
+              Modal.Handled
+            end
+            else Modal.Dismissed)
+        })
+      end
+
+let handle_save_as_prompt (ctx : Editor_context.t) ev r =
+  match Modal.top ctx.modal with
+  | Some (Modal.SaveAsPrompt sp) ->
+    if Text_field.handle_key sp.field ev then Some Continue
+    else (match ev with
+     | Input.Special (Input.Escape, _) ->
+       Modal.pop ctx.modal;
+       Some Continue
+     | Input.Special (Input.Enter, _) ->
+       commit_save_as_prompt ctx sp r;
+       Some Continue
+     | _ -> Some Continue)
+  | _ -> None

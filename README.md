@@ -48,7 +48,7 @@ rocqtui -theme solarized-dark path/to/file.v
 
 | Key | Action |
 |-----|--------|
-| `^S` | Save |
+| `^S` | Save (prompts for filename on a new tab) |
 | `^O` | Open file picker |
 | `^N` | New tab |
 | `^W` | Close tab (or close terminal, when focused) |

@@ -48,6 +48,11 @@ val handle_help :
 val handle_rename_prompt :
   Editor_context.t -> Input.event -> Render.t -> Action.action option
 
+(** While a SaveAsPrompt is open: edit the input, Enter to commit,
+    Esc to cancel. *)
+val handle_save_as_prompt :
+  Editor_context.t -> Input.event -> Render.t -> Action.action option
+
 (** While SearchPrompt is open: edit the query, navigate matches, toggle
     flags. ESC (or ESC ESC under compose) cancels via [logical_escape].
     The prompt absorbs every event — caller never needs to fall through. *)
