@@ -71,7 +71,11 @@ class Bridge:
                 pass
 
     async def _dispatch(self, req: Request, writer: asyncio.StreamWriter) -> None:
-        kind = classify_mod.classify(req.recent_edits)
+        if req.shape == "auto":
+            kind = classify_mod.classify(req.recent_edits)
+        else:
+            kind = req.shape
+        log.info("req %s: shape=%s (resolved=%s)", req.req_id, req.shape, kind)
         if kind == "fim":
             await self._handle_fim(req, writer)
         else:

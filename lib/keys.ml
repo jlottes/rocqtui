@@ -320,6 +320,11 @@ let ai_accept_word = {
   display = "Alt+W"; context = Script;
   description = "Accept next word of AI suggestion" }
 
+let ai_predict_edits = {
+  name = "ai_predict_edits"; codes = [274]; kitty_codes = [];
+  display = "F10"; context = Global;
+  description = "Predict edits (force edits-shape AI request)" }
+
 (* --- Grouped for help/status generation --- *)
 
 let navigation_bindings = [step_forward; step_backward; go_to_cursor; step_to_start; step_to_end; cycle_pane]

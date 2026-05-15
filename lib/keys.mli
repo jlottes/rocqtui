@@ -96,6 +96,7 @@ val ai_toggle : binding
 val ai_accept : binding
 val ai_dismiss : binding
 val ai_accept_word : binding
+val ai_predict_edits : binding
 
 (** Binding groups for help/status generation *)
 val navigation_bindings : binding list

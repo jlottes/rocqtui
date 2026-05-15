@@ -46,6 +46,7 @@ Fields:
 |---|---|---|
 | `req_id` | string | Caller-chosen correlation id. Echoed in every response line. |
 | `kind` | string | Currently always `"suggest"`. Reserved for future `"warmup"`, `"shutdown"`. |
+| `shape` | string | Optional shape hint: `"fim"`, `"edits"`, or `"auto"` (default). `"auto"` lets the bridge classify via heuristic; the other values force the response shape. |
 | `buffer` | string | Full text of the active script buffer. |
 | `cursor` | object | `{line, col}`, both 0-indexed. |
 | `language` | string | `"rocq"` for now. Reserved for future language gating. |

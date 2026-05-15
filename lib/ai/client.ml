@@ -52,8 +52,11 @@ let parse_line line : response option =
      with _ -> None)
   | exception _ -> None
 
-(* Build the request JSON from raw values. *)
-let build_request ~req_id ~buffer ~cursor_line ~cursor_col ~recent_edits =
+(* Build the request JSON from raw values. [shape] hints to the
+   bridge which response shape to produce ("fim" / "edits" / "auto").
+   Defaults to "auto" — bridge picks via its heuristic. *)
+let build_request ?(shape="auto") ~req_id ~buffer
+    ~cursor_line ~cursor_col ~recent_edits () =
   let edits_json =
     `List (List.map (fun (before, after) ->
       `Assoc [ ("before", `String before); ("after", `String after) ]
@@ -62,6 +65,7 @@ let build_request ~req_id ~buffer ~cursor_line ~cursor_col ~recent_edits =
   `Assoc [
     ("req_id", `String req_id);
     ("kind", `String "suggest");
+    ("shape", `String shape);
     ("buffer", `String buffer);
     ("cursor", `Assoc [
        ("line", `Int cursor_line);

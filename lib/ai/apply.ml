@@ -49,3 +49,38 @@ let accept_word (tab : Tab.t) ~text : int option =
       Buffer.clear_selection tab.buf;
       Some (String.length chunk)
     | Region_buffer.Rejected _ -> None
+
+(* Convert a (line, col) byte position to a buffer-wide byte offset
+   without mutating the cursor. [col] is interpreted as the byte
+   column within the line. *)
+let line_col_to_offset buf line col =
+  let off = ref 0 in
+  for i = 0 to line - 1 do
+    off := !off + String.length (Buffer.get_line buf i) + 1
+  done;
+  !off + col
+
+(* Apply one predicted edit. Returns [true] on success, [false] on
+   rejection (e.g. overlaps the verified region). *)
+let accept_edit (tab : Tab.t) (c : Per_tab.edit_change) : bool =
+  let buf = tab.buf in
+  let s = line_col_to_offset buf c.start_line c.start_col in
+  let e = line_col_to_offset buf c.end_line c.end_col in
+  match Region_buffer.try_replace tab.rb ~start:s ~old_end:e c.replacement with
+  | Region_buffer.Applied ->
+    Buffer.clear_selection tab.buf;
+    true
+  | Region_buffer.Rejected _ -> false
+
+(* Apply all predicted edits in one pass, in reverse byte order so
+   earlier offsets remain valid as we mutate. Returns the count of
+   successfully applied changes. *)
+let accept_all_edits (tab : Tab.t) (changes : Per_tab.edit_change list) : int =
+  let sorted =
+    List.sort (fun (a : Per_tab.edit_change) b ->
+      compare (b.start_line, b.start_col) (a.start_line, a.start_col)
+    ) changes
+  in
+  List.fold_left (fun n c ->
+    if accept_edit tab c then n + 1 else n
+  ) 0 sorted

@@ -22,6 +22,9 @@ class RecentEdit:
     after: str
 
 
+Shape = Literal["fim", "edits", "auto"]
+
+
 @dataclass
 class Request:
     req_id: str
@@ -29,17 +32,24 @@ class Request:
     cursor: Cursor
     language: str = "rocq"
     kind: Literal["suggest"] = "suggest"
+    # Hint for the response shape. "auto" (default) means the bridge
+    # picks via its heuristic; "fim" / "edits" force the shape.
+    shape: Shape = "auto"
     recent_edits: list[RecentEdit] = field(default_factory=list)
 
     @classmethod
     def from_json(cls, data: dict[str, Any]) -> Request:
         try:
+            shape = data.get("shape", "auto")
+            if shape not in ("fim", "edits", "auto"):
+                raise BadRequestError(f"unknown shape: {shape!r}")
             return cls(
                 req_id=data["req_id"],
                 kind=data.get("kind", "suggest"),
                 buffer=data["buffer"],
                 cursor=Cursor(**data["cursor"]),
                 language=data.get("language", "rocq"),
+                shape=shape,
                 recent_edits=[RecentEdit(**e) for e in data.get("recent_edits", [])],
             )
         except (KeyError, TypeError) as e:

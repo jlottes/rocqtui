@@ -18,6 +18,42 @@ let accept (state : State.t) (tab : Tab.t) : bool =
     state.status <- State.Idle;
     true   (* event consumed regardless of whether the buffer accepted *)
 
+(* Accept the first remaining edit in the active tab's edits overlay.
+   Edits are applied in document order; after accepting one, the rest
+   stay visible (with offsets implicitly re-anchored, since try_replace
+   ran on the current buffer state). *)
+let accept_one_edit (state : State.t) (tab : Tab.t) : bool =
+  let pt = State.per_tab state tab.id in
+  match pt.edits with
+  | None -> false
+  | Some o ->
+    (match o.changes with
+     | [] -> Per_tab.clear_edits pt; state.status <- State.Idle; true
+     | first :: rest ->
+       (* Sort by document position so Tab walks in order. *)
+       let sorted = List.sort (fun (a : Per_tab.edit_change) b ->
+         compare (a.start_line, a.start_col) (b.start_line, b.start_col)
+       ) (first :: rest) in
+       (match sorted with
+        | [] -> true
+        | head :: tail ->
+          let _ok = Apply.accept_edit tab head in
+          o.changes <- tail;
+          if tail = [] then begin
+            Per_tab.clear_edits pt;
+            state.status <- State.Idle
+          end;
+          true))
+
+let dismiss_edits (state : State.t) (tab : Tab.t) : bool =
+  let pt = State.per_tab state tab.id in
+  match pt.edits with
+  | None -> false
+  | Some _ ->
+    Per_tab.clear_edits pt;
+    state.status <- State.Idle;
+    true
+
 (* Accept only the next chunk of the ghost; leave the remainder
    visible at the new cursor position. *)
 let accept_word_action (state : State.t) (tab : Tab.t) : bool =
@@ -99,6 +135,11 @@ let is_alt_w ev =
     when m.alt && not m.shift && not m.ctrl && not m.super -> true
   | _ -> false
 
+let is_f10 ev =
+  match ev with
+  | Input.Special (Input.F 10, _) -> true
+  | _ -> false
+
 (* Main entry. [modal_active] = true means a modal pane has input
    focus; AI consumes nothing in that case. *)
 let try_handle ~state ~modal_active (ev : Input.event) (tab : Tab.t) : bool =
@@ -110,12 +151,23 @@ let try_handle ~state ~modal_active (ev : Input.event) (tab : Tab.t) : bool =
       toggle state; true
     end
     else if not state.State.enabled then false
-    else if is_plain_tab ev then
-      accept state tab
+    else if is_f10 ev then begin
+      Trigger.request_edits state tab; true
+    end
+    (* Tab accepts edits if any are pending, otherwise the ghost. *)
+    else if is_plain_tab ev then begin
+      let pt = State.per_tab state tab.id in
+      if pt.edits <> None then accept_one_edit state tab
+      else accept state tab
+    end
     else if is_alt_w ev then
       accept_word_action state tab
-    else if is_escape ev then
-      dismiss_active state tab
+    (* Esc dismisses whichever overlay is active. *)
+    else if is_escape ev then begin
+      let pt = State.per_tab state tab.id in
+      if pt.edits <> None then dismiss_edits state tab
+      else dismiss_active state tab
+    end
     else begin
       (* Implicit dismiss + cancel-in-flight: any other keystroke
          abandons the current prediction so a fresh one can fire after
