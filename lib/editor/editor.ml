@@ -23,8 +23,6 @@ let take_jump_target (ctx : Editor_context.t) =
 (* --- Input event handling --- *)
 
 let handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r =
-  (* Record time of any user input event for the AI idle trigger. *)
-  ctx.last_input_time <- Unix.gettimeofday ();
   let buf = tab.buf in
   let session = tab.session in
   (* Is a terminal sub-tab currently focused? *)
@@ -684,17 +682,7 @@ let handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r =
           | File_tree.TreeContinue -> Some Continue
           | File_tree.TreeUnhandled -> None))
   in
-  (* AI keystroke short-circuit: handles ^G toggle, Tab accept, Esc
-     dismiss. Bails out (returns false) when no AI state is configured,
-     when a modal is active, or when the key doesn't match an AI
-     binding. *)
-  let modal_active = Modal.is_active ctx.modal in
-  let ai_consumed =
-    Ai.Action.try_handle ~state:ctx.ai ~modal_active ev tab
-  in
   let action =
-    if ai_consumed then Continue
-    else
     match try_file_tree () with
     | Some a -> a
     | None ->
