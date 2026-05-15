@@ -93,3 +93,18 @@ val try_reload_from_disk : t -> result
 
 val try_undo : t -> result
 val try_redo : t -> result
+
+(** {1 Recent edits ring}
+
+    Bounded log of recently-applied edits, captured automatically by
+    every [try_*] that returns [Applied]. Generic infrastructure —
+    not tied to any one consumer. *)
+
+type edit_record = { before : string; after : string; at : float }
+
+(** The N most-recently-applied edits, most-recent LAST. Capped at
+    [ring_size]. *)
+val recent_edits : t -> edit_record list
+
+(** Capacity of the recent-edits ring. *)
+val ring_size : int

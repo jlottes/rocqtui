@@ -952,4 +952,7 @@ let render_all (ctx : Editor_context.t) r (tab : Tab.t) =
   Render.set_cursor_visible r cursor_visible;
   (match picker with
    | Some fp -> File_picker.render fp r
-   | None -> Render.clear_overlay r)
+   | None -> Render.clear_overlay r);
+  (* AI ghost text overlay — drawn last so it sits on top of the
+     normal script-pane render. No-op when AI is disabled. *)
+  Ai.Overlay.draw_overlay ~state:ctx.ai r tab

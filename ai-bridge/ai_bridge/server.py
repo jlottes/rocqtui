@@ -95,7 +95,11 @@ class Bridge:
         if "\n\n" in insertion:
             insertion = insertion.split("\n\n", 1)[0]
         if insertion.strip():
+            log.info("req %s: fim insertion=%r", req.req_id, insertion)
             await self._write(writer, fim_response(req.req_id, insertion))
+        else:
+            log.info("req %s: fim no useful insertion (got %r)",
+                     req.req_id, insertion)
 
     async def _handle_edits(self, req: Request, writer: asyncio.StreamWriter) -> None:
         messages = [
@@ -138,10 +142,14 @@ class Bridge:
                     seen = i + 1
                     change = parse_mod.anchor(req.buffer, search, replace)
                     if change:
+                        log.info("req %s: edit replace=%r at L%d:%d",
+                                 req.req_id, change.replacement,
+                                 change.range.start_line, change.range.start_col)
                         await self._write(writer,
                             edit_response(req.req_id, change))
                     else:
-                        log.info("req %s: rejected block (anchor failed)", req.req_id)
+                        log.info("req %s: rejected block search=%r replace=%r",
+                                 req.req_id, search, replace)
         except asyncio.CancelledError:
             client.cancel_active()
             raise

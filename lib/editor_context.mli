@@ -59,6 +59,8 @@ type t = {
   project_search : Project_search.t;
   mutable focus : focus;
   mutable file_tree : File_tree.t option;
+  mutable ai : Ai.State.t option;
+  mutable last_input_time : float;
 }
 
 val create :

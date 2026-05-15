@@ -301,6 +301,20 @@ let open_claude = {
   name = "open_claude"; codes = [270]; kitty_codes = [];
   display = "F6"; context = Global; description = "Claude" }
 
+(* --- AI suggestions --- *)
+
+let ai_toggle = {
+  name = "ai_toggle"; codes = [ctrl 'g']; kitty_codes = []; display = "^G";
+  context = Global; description = "Toggle AI suggestions" }
+
+let ai_accept = {
+  name = "ai_accept"; codes = [9]; kitty_codes = []; display = "Tab";
+  context = Script; description = "Accept AI suggestion" }
+
+let ai_dismiss = {
+  name = "ai_dismiss"; codes = [27]; kitty_codes = []; display = "Esc";
+  context = Script; description = "Dismiss AI suggestion" }
+
 (* --- Grouped for help/status generation --- *)
 
 let navigation_bindings = [step_forward; step_backward; go_to_cursor; step_to_start; step_to_end; cycle_pane]

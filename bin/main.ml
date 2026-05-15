@@ -164,6 +164,20 @@ let () =
     () in
   ctx.theme_name <- theme.Theme.name;
   if !xcompose then Editor.init_compose ctx;
+  (* Wire up the AI suggestion subsystem. The bridge process is
+     user-managed and lives outside rocqtui; we just point at its
+     socket. If the socket doesn't exist or the bridge isn't running,
+     Ai.Client.send returns a backend_unreachable error and the
+     status indicator reflects it — no boot-time check needed. *)
+  let ai_socket =
+    try Sys.getenv "AI_BRIDGE_SOCKET"
+    with Not_found ->
+      let runtime =
+        try Sys.getenv "XDG_RUNTIME_DIR" with Not_found -> "/tmp"
+      in
+      Filename.concat runtime "rocqtui-ai-bridge.sock"
+  in
+  ctx.ai <- Some (Ai.State.create ~socket_path:ai_socket);
   (* Wire terminal clipboard hook to editor context *)
   Terminal.set_clipboard_hook (fun text ->
     ctx.clipboard <- text;
@@ -202,11 +216,17 @@ let () =
       else ""
     in
     let build_indicator = Build.status_indicator () in
+    let ai_indicator =
+      match ctx.ai with
+      | None -> ""
+      | Some state -> "AI " ^ Ai.State.status_glyph state.status
+    in
     ctx.status_extra <-
-      (match mcp_indicator, build_indicator with
-       | "", "" -> ""
-       | a, "" | "", a -> a
-       | a, b -> a ^ "  " ^ b);
+      (let parts =
+         List.filter (fun s -> s <> "")
+           [mcp_indicator; build_indicator; ai_indicator]
+       in
+       String.concat "  " parts);
     let tab = Tab.active_tab mgr in
     if Tab.count mgr > 1 then begin
       let dnames = Tab.display_names mgr in
@@ -533,6 +553,18 @@ let () =
       in
       drain ()
     end;
+    (* AI idle trigger: if the user has been quiet for the debounce
+     window and no request is in flight, fire one for the active tab.
+     Only fires when the script pane has focus and no modal is open. *)
+    (match ctx.ai with
+     | Some state
+       when ctx.focus = Editor_context.FScript
+         && not (Modal.is_active ctx.modal) ->
+       Ai.Trigger.tick state
+         ~now:(Unix.gettimeofday ())
+         ~last_input_time:ctx.last_input_time
+         ~active_tab:(Tab.active_tab mgr)
+     | _ -> ());
     (* Render once at the end if needed *)
     (match Render_need.take () with
      | Render_need.No -> ()

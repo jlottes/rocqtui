@@ -49,6 +49,13 @@ type t = {
   (* File-tree panel: lazily created on first F8. Survives across tabs.
      Whether the panel currently receives keys is [focus = FFileTree]. *)
   mutable file_tree : File_tree.t option;
+  (* AI suggestion subsystem. None when not configured / disabled at
+     boot. Otherwise the State carries global on/off, in-flight
+     request id, and per-tab ghost state. *)
+  mutable ai : Ai.State.t option;
+  (* Timestamp of the last user input event. Used by the AI idle
+     trigger to debounce request firing. 0.0 = no input yet. *)
+  mutable last_input_time : float;
 }
 
 let create
@@ -81,7 +88,9 @@ let create
     project_mode = false;
     project_search = Project_search.create ();
     focus = FScript;
-    file_tree = None }
+    file_tree = None;
+    ai = None;
+    last_input_time = 0. }
 
 (* Lazy accessor: refresh [tab.search_matches] if either the global
    generation or the tab's buffer revision has changed. Returns None

@@ -1,10 +1,17 @@
 (* RegionBuffer: text mutation gateway. See region_buffer.mli for
    the contract and docs/REGION_INVARIANTS.md for the invariants. *)
 
+type edit_record = { before : string; after : string; at : float }
+
+let ring_size = 8
+
 type t = {
   buf : Buffer.t;
   mutable session : Session.t option;
   mutable lockedf : bool;
+  (* Most-recent first internally; [recent_edits] reverses for the
+     "most-recent last" public ordering. *)
+  mutable edits_rev : edit_record list;
 }
 
 type reject_reason =
@@ -14,7 +21,7 @@ type reject_reason =
 
 type result = Applied | Rejected of reject_reason
 
-let create buf ~session = { buf; session; lockedf = false }
+let create buf ~session = { buf; session; lockedf = false; edits_rev = [] }
 let buffer t = t.buf
 
 let lock t = t.lockedf <- true
@@ -76,34 +83,89 @@ let maybe_clear_error t ~start =
      | _ -> ())
   | None -> ()
 
+(* Diff [old_text] and [new_text] into a single replace-range. Returns
+   None if the texts are identical. Used by wholesale-replace,
+   undo/redo, and the recent-edits ring to find the byte range an
+   edit actually touched. *)
+let diff_replace_range ~old_text ~new_text =
+  let ol = String.length old_text in
+  let nl = String.length new_text in
+  let m = min ol nl in
+  let i = ref 0 in
+  while !i < m && old_text.[!i] = new_text.[!i] do incr i done;
+  let suf = ref 0 in
+  while !suf < (ol - !i) && !suf < (nl - !i)
+        && old_text.[ol - 1 - !suf] = new_text.[nl - 1 - !suf] do
+    incr suf
+  done;
+  let start = !i in
+  let old_end = ol - !suf in
+  let new_end = nl - !suf in
+  if start = old_end && start = new_end then None
+  else
+    let first_inserted =
+      if new_end > start then Some new_text.[start] else None
+    in
+    Some (start, old_end, first_inserted)
+
+(* {1 Recent edits ring} *)
+
+let recent_edits t = List.rev t.edits_rev
+
+let push_edit t record =
+  let rec take n = function
+    | [] -> []
+    | x :: xs when n > 0 -> x :: take (n - 1) xs
+    | _ -> []
+  in
+  t.edits_rev <- record :: take (ring_size - 1) t.edits_rev
+
+(* Wrap a [try_*] body: capture pre-edit text, run the body, on
+   [Applied] diff pre vs post and push to the ring. *)
+let with_recording t f =
+  let pre = Buffer.text t.buf in
+  let result = f () in
+  (match result with
+   | Applied ->
+     let post = Buffer.text t.buf in
+     (match diff_replace_range ~old_text:pre ~new_text:post with
+      | None -> ()
+      | Some (start, old_end, _) ->
+        let new_end = old_end + (String.length post - String.length pre) in
+        let before = String.sub pre start (old_end - start) in
+        let after = String.sub post start (new_end - start) in
+        push_edit t { before; after; at = Unix.gettimeofday () })
+   | Rejected _ -> ());
+  result
+
 (* {1 Cursor-relative atomic edits} *)
 
-let try_insert_char t ch =
+let try_insert_char t ch = with_recording t (fun () ->
   let off = Buffer.cursor_byte_offset t.buf in
   match check t ~start:off ~old_end:off ~first_inserted:(Some ch) with
   | Applied ->
     Buffer.Unsafe.insert_char t.buf ch;
     maybe_clear_error t ~start:off;
     Applied
-  | r -> r
+  | r -> r)
 
-let try_insert_newline t =
+let try_insert_newline t = with_recording t (fun () ->
   let off = Buffer.cursor_byte_offset t.buf in
   match check t ~start:off ~old_end:off ~first_inserted:(Some '\n') with
   | Applied ->
     Buffer.Unsafe.insert_newline t.buf;
     maybe_clear_error t ~start:off;
     Applied
-  | r -> r
+  | r -> r)
 
-let try_insert_newline_auto_indent t =
+let try_insert_newline_auto_indent t = with_recording t (fun () ->
   let off = Buffer.cursor_byte_offset t.buf in
   match check t ~start:off ~old_end:off ~first_inserted:(Some '\n') with
   | Applied ->
     Buffer.Unsafe.insert_newline_auto_indent t.buf;
     maybe_clear_error t ~start:off;
     Applied
-  | r -> r
+  | r -> r)
 
 (* For deletes that may or may not have a selection, compute the
    affected byte range. Returns None if the op would be a no-op. *)
@@ -133,7 +195,7 @@ let delete_range t ~for_backspace =
       else
         None
 
-let try_delete_forward t =
+let try_delete_forward t = with_recording t (fun () ->
   match delete_range t ~for_backspace:false with
   | None -> Applied  (* nothing to delete; no-op *)
   | Some (s, e) ->
@@ -144,9 +206,9 @@ let try_delete_forward t =
        | None -> Buffer.Unsafe.delete_char_at t.buf);
       maybe_clear_error t ~start:s;
       Applied
-    | r -> r
+    | r -> r)
 
-let try_delete_backward t =
+let try_delete_backward t = with_recording t (fun () ->
   match delete_range t ~for_backspace:true with
   | None -> Applied
   | Some (s, e) ->
@@ -157,9 +219,9 @@ let try_delete_backward t =
        | None -> Buffer.Unsafe.delete_char_before t.buf);
       maybe_clear_error t ~start:s;
       Applied
-    | r -> r
+    | r -> r)
 
-let try_paste t =
+let try_paste t = with_recording t (fun () ->
   let buf = t.buf in
   let cut = Buffer.cut_buffer buf in
   match cut with
@@ -186,9 +248,9 @@ let try_paste t =
       Buffer.Unsafe.paste buf;
       maybe_clear_error t ~start;
       Applied
-    | r -> r
+    | r -> r)
 
-let try_cut_line t =
+let try_cut_line t = with_recording t (fun () ->
   let buf = t.buf in
   let (cl, _) = Buffer.cursor buf in
   let line_start = line_start_offset buf cl in
@@ -206,9 +268,9 @@ let try_cut_line t =
     Buffer.Unsafe.cut_line t.buf;
     maybe_clear_error t ~start:s;
     Applied
-  | r -> r
+  | r -> r)
 
-let try_enter t =
+let try_enter t = with_recording t (fun () ->
   let buf = t.buf in
   let (s, e) = match Buffer.selection buf with
     | Some r -> r
@@ -222,9 +284,9 @@ let try_enter t =
     Buffer.Unsafe.insert_newline_auto_indent buf;
     maybe_clear_error t ~start:s;
     Applied
-  | r -> r
+  | r -> r)
 
-let try_indent_lines t width =
+let try_indent_lines t width = with_recording t (fun () ->
   let (first, _) = Buffer.selection_line_range t.buf in
   let off = line_start_offset t.buf first in
   match check t ~start:off ~old_end:off ~first_inserted:(Some ' ') with
@@ -232,9 +294,9 @@ let try_indent_lines t width =
     Buffer.Unsafe.indent_lines t.buf width;
     maybe_clear_error t ~start:off;
     Applied
-  | r -> r
+  | r -> r)
 
-let try_unindent_lines t width =
+let try_unindent_lines t width = with_recording t (fun () ->
   let (first, _) = Buffer.selection_line_range t.buf in
   let off = line_start_offset t.buf first in
   (* unindent removes leading spaces from each line in the range.
@@ -246,7 +308,7 @@ let try_unindent_lines t width =
     Buffer.Unsafe.unindent_lines t.buf width;
     maybe_clear_error t ~start:off;
     Applied
-  | r -> r
+  | r -> r)
 
 (* {1 Replace selection (or insert at cursor)} *)
 
@@ -257,7 +319,7 @@ let apply_replace_at_cursor t text =
     else Buffer.Unsafe.insert_char t.buf c
   ) text
 
-let try_replace_selection t text =
+let try_replace_selection t text = with_recording t (fun () ->
   let buf = t.buf in
   let (s, e) = match Buffer.selection buf with
     | Some r -> r
@@ -274,11 +336,11 @@ let try_replace_selection t text =
     apply_replace_at_cursor t text;
     maybe_clear_error t ~start:s;
     Applied
-  | r -> r
+  | r -> r)
 
 (* {1 Explicit-range replace (for MCP)} *)
 
-let try_replace t ~start ~old_end new_text =
+let try_replace t ~start ~old_end new_text = with_recording t (fun () ->
   let first_inserted =
     if String.length new_text = 0 then None
     else Some new_text.[0]
@@ -295,33 +357,9 @@ let try_replace t ~start ~old_end new_text =
     ) new_text;
     maybe_clear_error t ~start;
     Applied
-  | r -> r
+  | r -> r)
 
 (* {1 Wholesale text replacement} *)
-
-(* Diff [old_text] and [new_text] into a single replace-range. Returns
-   None if the texts are identical. Used by wholesale-replace and
-   undo/redo to find the byte range an edit actually touched. *)
-let diff_replace_range ~old_text ~new_text =
-  let ol = String.length old_text in
-  let nl = String.length new_text in
-  let m = min ol nl in
-  let i = ref 0 in
-  while !i < m && old_text.[!i] = new_text.[!i] do incr i done;
-  let suf = ref 0 in
-  while !suf < (ol - !i) && !suf < (nl - !i)
-        && old_text.[ol - 1 - !suf] = new_text.[nl - 1 - !suf] do
-    incr suf
-  done;
-  let start = !i in
-  let old_end = ol - !suf in
-  let new_end = nl - !suf in
-  if start = old_end && start = new_end then None
-  else
-    let first_inserted =
-      if new_end > start then Some new_text.[start] else None
-    in
-    Some (start, old_end, first_inserted)
 
 (* For wholesale replacement we run a different check: the verified
    prefix and the pending prefix must match the new text byte-for-byte,
@@ -346,7 +384,7 @@ let check_wholesale t ~new_text =
   else if Sentence.is_space new_text.[vend] then Applied
   else Rejected Erodes_boundary
 
-let try_load_text t new_text =
+let try_load_text t new_text = with_recording t (fun () ->
   match check_wholesale t ~new_text with
   | Applied ->
     let old_text = Buffer.text t.buf in
@@ -355,9 +393,9 @@ let try_load_text t new_text =
      | Some (start, _, _) -> maybe_clear_error t ~start
      | None -> ());
     Applied
-  | r -> r
+  | r -> r)
 
-let try_reload_from_disk t =
+let try_reload_from_disk t = with_recording t (fun () ->
   match Buffer.filename t.buf with
   | None -> Applied  (* no filename, nothing to reload *)
   | Some path when not (Sys.file_exists path) -> Applied  (* nothing to do *)
@@ -378,7 +416,7 @@ let try_reload_from_disk t =
        | Some (start, _, _) -> maybe_clear_error t ~start
        | None -> ());
       Applied
-    | r -> r
+    | r -> r)
 
 (* {1 Undo / redo}
 
@@ -389,7 +427,7 @@ let try_reload_from_disk t =
    the current text to find the affected byte range, and run that
    range through [check]. *)
 
-let try_undo t =
+let try_undo t = with_recording t (fun () ->
   match Buffer.peek_undo_text t.buf with
   | None -> Applied  (* nothing to undo *)
   | Some new_text ->
@@ -401,9 +439,9 @@ let try_undo t =
         Buffer.Unsafe.undo t.buf;
         maybe_clear_error t ~start;
         Applied
-      | r -> r
+      | r -> r)
 
-let try_redo t =
+let try_redo t = with_recording t (fun () ->
   match Buffer.peek_redo_text t.buf with
   | None -> Applied
   | Some new_text ->
@@ -415,4 +453,4 @@ let try_redo t =
         Buffer.Unsafe.redo t.buf;
         maybe_clear_error t ~start;
         Applied
-      | r -> r
+      | r -> r)

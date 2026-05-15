@@ -91,6 +91,11 @@ val build_cancel : binding
 val open_terminal : binding
 val open_claude : binding
 
+(** AI suggestions *)
+val ai_toggle : binding
+val ai_accept : binding
+val ai_dismiss : binding
+
 (** Binding groups for help/status generation *)
 val navigation_bindings : binding list
 val editing_bindings : binding list
