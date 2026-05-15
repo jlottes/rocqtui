@@ -43,6 +43,10 @@ type t = {
   search_match_bg : color;
   search_current_bg : color;
   search_current_fg : color;
+
+  (* Matching paren / bracket highlight *)
+  paren_match_bg : color;
+  paren_match_fg : color;
 }
 
 (** List of available theme names. *)
@@ -88,6 +92,7 @@ type grid_attrs = {
   ga_selection : Grid.attr;
   ga_search_match : Grid.attr;
   ga_search_current : Grid.attr;
+  ga_paren_match : Grid.attr;
   ga_tab_active : Grid.attr;
   ga_tab_inactive : Grid.attr;
   ga_gutter : Grid.attr;

@@ -586,6 +586,18 @@ let render_script (ctx : Editor_context.t) r (tab : Tab.t) =
       | Some m -> overlay_match m a.ga_search_current
       | None -> ())
    | _ -> ());
+  (* Overlay matching paren / bracket / brace at the cursor. Skipped
+     during selection so the selection background remains uncluttered. *)
+  (match Buffer.selection buf with
+   | Some _ -> ()
+   | None ->
+     let text = Buffer.text buf in
+     let cursor = Buffer.cursor_byte_offset buf in
+     match Paren_match.pair_at_cursor text ~cursor with
+     | None -> ()
+     | Some (a_pos, b_pos) ->
+       overlay_range a_pos (a_pos + 1) a.ga_paren_match;
+       overlay_range b_pos (b_pos + 1) a.ga_paren_match);
   (* Minimap -- render into the minimap pane *)
   if Render.minimap_width r > 0 then begin
     let mm_rect = Render.pane_rect r Render.PMinimap in

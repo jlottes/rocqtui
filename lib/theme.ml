@@ -26,6 +26,10 @@ type t = {
   search_match_bg : color;
   search_current_bg : color;
   search_current_fg : color;
+
+  (* Matching paren / bracket highlight *)
+  paren_match_bg : color;
+  paren_match_fg : color;
 }
 
 (* Shorthand constructors *)
@@ -75,6 +79,8 @@ let solarized_dark = {
   search_match_bg = sol_base02;
   search_current_bg = sol_yellow;
   search_current_fg = sol_base03;
+  paren_match_bg = sol_base01;
+  paren_match_fg = d;
 }
 
 let solarized_light = {
@@ -101,6 +107,8 @@ let solarized_light = {
   search_match_bg = c 254;  (* sol_base2 — subtle warm tint *)
   search_current_bg = sol_yellow;
   search_current_fg = sol_base03;
+  paren_match_bg = sol_base1;
+  paren_match_fg = c 230;
 }
 
 (* Classic: basic 8-color theme, works on any terminal *)
@@ -128,6 +136,8 @@ let classic = {
   search_match_bg = c 6;  (* cyan *)
   search_current_bg = c 3;  (* yellow *)
   search_current_fg = c 0;  (* black *)
+  paren_match_bg = c 5;  (* magenta *)
+  paren_match_fg = c 0;  (* black *)
 }
 
 (* Monokai-inspired *)
@@ -155,6 +165,8 @@ let monokai = {
   search_match_bg = c 238;
   search_current_bg = c 220;  (* yellow *)
   search_current_fg = c 235;
+  paren_match_bg = c 240;
+  paren_match_fg = c 255;
 }
 
 (* Nord *)
@@ -182,6 +194,8 @@ let nord = {
   search_match_bg = c 59;
   search_current_bg = c 179;  (* warm yellow *)
   search_current_fg = c 236;
+  paren_match_bg = c 60;
+  paren_match_fg = c 253;
 }
 
 let default = solarized_dark
@@ -232,6 +246,7 @@ type grid_attrs = {
   ga_selection : Grid.attr;
   ga_search_match : Grid.attr;
   ga_search_current : Grid.attr;
+  ga_paren_match : Grid.attr;
   ga_tab_active : Grid.attr;
   ga_tab_inactive : Grid.attr;
   ga_gutter : Grid.attr;
@@ -281,6 +296,7 @@ let grid_attrs_of_theme (theme : t) : grid_attrs =
       (let a = make_attr theme.search_current_fg theme.search_current_bg in
        { a with reverse = true });
     ga_search_current = ab theme.search_current_fg theme.search_current_bg;
+    ga_paren_match = ab theme.paren_match_fg theme.paren_match_bg;
     ga_tab_active = ab theme.status_fg theme.status_bg;
     ga_tab_inactive = a theme.border_fg theme.status_bg;
     ga_gutter = make_attr theme.border_fg theme.bg;

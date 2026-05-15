@@ -51,7 +51,7 @@
       reserved marker column for upcoming error/warning/git markers)
 - [x] Tab/indent support (Tab key inserts spaces or tab character)
 - [x] Auto-indent on newline (match previous line's indentation)
-- [ ] Matching bracket/paren highlighting
+- [x] Matching bracket/paren highlighting
 - [ ] Go to line number (^G is taken — need another binding)
 
 ## Rocq Integration
