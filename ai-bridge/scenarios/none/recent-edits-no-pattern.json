@@ -1,0 +1,17 @@
+{
+  "id": "none-recent-edits-no-pattern",
+  "description": "Two recent edits are unrelated typo fixes — no propagation pattern. Bridge classifier currently routes to 'edits' shape; expectation is that the model produces no S/R blocks (or that they don't anchor).",
+  "request": {
+    "kind": "suggest",
+    "buffer": "Definition foo (n : nat) : nat := n.\nDefinition bar (b : bool) : bool := b.\nDefinition baz (l : list nat) : list nat := l.\n",
+    "cursor": {"line": 0, "col": 0},
+    "language": "rocq",
+    "recent_edits": [
+      {"before": "Defintion foo", "after": "Definition foo"},
+      {"before": "Definitoin bar", "after": "Definition bar"}
+    ]
+  },
+  "expected": {
+    "kind": "none"
+  }
+}

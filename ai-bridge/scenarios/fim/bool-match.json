@@ -1,0 +1,15 @@
+{
+  "id": "fim-bool-match",
+  "description": "Complete the true arm of a boolean negation match.",
+  "request": {
+    "kind": "suggest",
+    "buffer": "Definition not (b : bool) : bool :=\n  match b with\n  | true => ",
+    "cursor": {"line": 2, "col": 12},
+    "language": "rocq",
+    "recent_edits": []
+  },
+  "expected": {
+    "kind": "fim",
+    "contains": "false"
+  }
+}

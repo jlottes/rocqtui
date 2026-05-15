@@ -1,0 +1,14 @@
+{
+  "id": "none-empty-buffer",
+  "description": "Empty buffer with no recent edits — classifier picks FIM, model has nothing useful.",
+  "request": {
+    "kind": "suggest",
+    "buffer": "",
+    "cursor": {"line": 0, "col": 0},
+    "language": "rocq",
+    "recent_edits": []
+  },
+  "expected": {
+    "kind": "none"
+  }
+}

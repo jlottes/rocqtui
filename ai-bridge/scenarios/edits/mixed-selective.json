@@ -1,0 +1,27 @@
+{
+  "id": "edits-mixed-selective",
+  "description": "Pattern applies only to lines that still have implicits; bridge should reject hallucinated edits for the others.",
+  "request": {
+    "kind": "suggest",
+    "buffer": "Definition foo (n : nat) : nat := n.\nDefinition bar (b : bool) : bool := b.\nDefinition baz (l : list nat) : list nat := l.\nDefinition qux (p : nat * nat) : nat := fst p.\nDefinition wibble {Z : Type} (s : string) : string := s.\nDefinition wobble (a : nat) (b : nat) : nat := a + b.\nDefinition flub {X Y : Set} (l : list bool) : nat := length l.\n",
+    "cursor": {"line": 0, "col": 0},
+    "language": "rocq",
+    "recent_edits": [
+      {"before": "Definition foo {X : Type} (n : nat) : nat := n.",
+       "after":  "Definition foo (n : nat) : nat := n."},
+      {"before": "Definition bar {W : Type} (b : bool) : bool := b.",
+       "after":  "Definition bar (b : bool) : bool := b."},
+      {"before": "Definition baz {X Y : Set} (l : list nat) : list nat := l.",
+       "after":  "Definition baz (l : list nat) : list nat := l."}
+    ]
+  },
+  "expected": {
+    "kind": "edits",
+    "min_changes": 2,
+    "max_changes": 2,
+    "must_contain_each": [
+      "Definition wibble (s : string)",
+      "Definition flub (l : list bool)"
+    ]
+  }
+}

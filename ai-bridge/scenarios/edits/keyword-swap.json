@@ -1,0 +1,25 @@
+{
+  "id": "edits-keyword-swap",
+  "description": "Swap Lemma keyword for Theorem across remaining definitions.",
+  "request": {
+    "kind": "suggest",
+    "buffer": "Lemma plus_0_r : forall n, n + 0 = n.\nLemma plus_S_r : forall n m, n + S m = S (n + m).\nLemma plus_comm  : forall n m, n + m = m + n.\nLemma plus_assoc : forall n m p, n + (m + p) = (n + m) + p.\n",
+    "cursor": {"line": 0, "col": 0},
+    "language": "rocq",
+    "recent_edits": [
+      {"before": "Lemma plus_0_r : forall n, n + 0 = n.",
+       "after":  "Theorem plus_0_r : forall n, n + 0 = n."},
+      {"before": "Lemma plus_S_r : forall n m, n + S m = S (n + m).",
+       "after":  "Theorem plus_S_r : forall n m, n + S m = S (n + m)."}
+    ]
+  },
+  "expected": {
+    "kind": "edits",
+    "min_changes": 2,
+    "max_changes": 2,
+    "must_contain_each": [
+      "Theorem plus_comm  : forall n m, n + m = m + n.",
+      "Theorem plus_assoc : forall n m p, n + (m + p) = (n + m) + p."
+    ]
+  }
+}

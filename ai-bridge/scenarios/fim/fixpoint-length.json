@@ -1,0 +1,15 @@
+{
+  "id": "fim-fixpoint-length",
+  "description": "Recursive arm completion in a Fixpoint match — classic list length.",
+  "request": {
+    "kind": "suggest",
+    "buffer": "Fixpoint length {A : Type} (l : list A) : nat :=\n  match l with\n  | nil => 0\n  | cons _ t => ",
+    "cursor": {"line": 3, "col": 16},
+    "language": "rocq",
+    "recent_edits": []
+  },
+  "expected": {
+    "kind": "fim",
+    "contains": "S (length t)"
+  }
+}

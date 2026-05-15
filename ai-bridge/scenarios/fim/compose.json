@@ -1,0 +1,15 @@
+{
+  "id": "fim-compose",
+  "description": "Basic FIM completion inside a function body.",
+  "request": {
+    "kind": "suggest",
+    "buffer": "Definition compose {A B C : Type} (g : B -> C) (f : A -> B) : A -> C :=\n  fun x => ",
+    "cursor": {"line": 1, "col": 10},
+    "language": "rocq",
+    "recent_edits": []
+  },
+  "expected": {
+    "kind": "fim",
+    "contains": "g (f x)"
+  }
+}

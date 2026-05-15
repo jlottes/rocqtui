@@ -1,0 +1,29 @@
+{
+  "id": "edits-implicit-uniform",
+  "description": "User removes {X Y : Set} from 3 definitions; bridge should propose the remaining 4.",
+  "request": {
+    "kind": "suggest",
+    "buffer": "Definition foo (n : nat) : nat := n.\nDefinition bar (b : bool) : bool := b.\nDefinition baz (l : list nat) : list nat := l.\nDefinition qux {X Y : Set} (p : nat * nat) : nat := fst p.\nDefinition wibble {X Y : Set} (s : string) : string := s.\nDefinition wobble {X Y : Set} (a : nat) (b : nat) : nat := a + b.\nDefinition flub {X Y : Set} (l : list bool) : nat := length l.\n",
+    "cursor": {"line": 0, "col": 0},
+    "language": "rocq",
+    "recent_edits": [
+      {"before": "Definition foo {X Y : Set} (n : nat) : nat := n.",
+       "after":  "Definition foo (n : nat) : nat := n."},
+      {"before": "Definition bar {X Y : Set} (b : bool) : bool := b.",
+       "after":  "Definition bar (b : bool) : bool := b."},
+      {"before": "Definition baz {X Y : Set} (l : list nat) : list nat := l.",
+       "after":  "Definition baz (l : list nat) : list nat := l."}
+    ]
+  },
+  "expected": {
+    "kind": "edits",
+    "min_changes": 4,
+    "max_changes": 4,
+    "must_contain_each": [
+      "Definition qux (p : nat * nat)",
+      "Definition wibble (s : string)",
+      "Definition wobble (a : nat) (b : nat)",
+      "Definition flub (l : list bool)"
+    ]
+  }
+}

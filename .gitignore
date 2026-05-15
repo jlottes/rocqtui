@@ -8,3 +8,10 @@ _build/
 
 # MCP socket (created at runtime in project dirs using rocqtui)
 .rocqtui-mcp.sock
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+*.egg-info/
