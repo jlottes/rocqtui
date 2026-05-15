@@ -12,10 +12,7 @@
    Revisit if it becomes confusing. *)
 
 let read_file path =
-  try
-    let ic = open_in path in
-    let s = In_channel.input_all ic in
-    close_in ic; Some s
+  try Some (In_channel.with_open_text path In_channel.input_all)
   with _ -> None
 
 (* Project-relative path for a file under [project_dir], or "" if it

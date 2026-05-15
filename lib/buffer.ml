@@ -115,11 +115,10 @@ let reload buf =
   match buf.filename with
   | None -> ()
   | Some path ->
-    let ic = open_in path in
     let lines = ref [] in
-    (try while true do lines := input_line ic :: !lines done
-     with End_of_file -> ());
-    close_in ic;
+    In_channel.with_open_text path (fun ic ->
+      try while true do lines := input_line ic :: !lines done
+      with End_of_file -> ());
     let lines = List.rev !lines in
     let n = max 1 (List.length lines) in
     ensure_capacity buf n;

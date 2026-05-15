@@ -152,11 +152,10 @@ let process_file_changes t (tabs : Tab.t list) paths =
               events := DiskChanged path :: !events
             else begin
               let old_text = Buffer.text tab.buf in
-              let new_text = try
-                let ic = open_in path in
-                let s = In_channel.input_all ic in
-                close_in ic; s
-              with _ -> old_text in
+              let new_text =
+                try In_channel.with_open_text path In_channel.input_all
+                with _ -> old_text
+              in
               if old_text = new_text then
                 Buffer.set_disk_changed tab.buf false
               else begin

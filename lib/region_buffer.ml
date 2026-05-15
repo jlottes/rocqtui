@@ -363,11 +363,7 @@ let try_reload_from_disk t =
   | Some path when not (Sys.file_exists path) -> Applied  (* nothing to do *)
   | Some path ->
     let new_text =
-      try
-        let ic = open_in path in
-        let s = In_channel.input_all ic in
-        close_in ic;
-        s
+      try In_channel.with_open_text path In_channel.input_all
       with _ -> Buffer.text t.buf
     in
     match check_wholesale t ~new_text with

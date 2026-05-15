@@ -30,9 +30,9 @@ let resolve_path project_dir path =
    Paths in -R/-Q are resolved relative to the project file's directory. *)
 let parse_project_file path =
   let project_dir = Filename.dirname path in
-  let ic = open_in path in
   let args = ref [] in
-  (try while true do
+  In_channel.with_open_text path (fun ic ->
+   try while true do
      let line = String.trim (input_line ic) in
      if line = "" || String.length line > 0 && line.[0] = '#' then
        ()  (* skip empty lines and comments *)
@@ -86,7 +86,6 @@ let parse_project_file path =
        process toks
      end
    done with End_of_file -> ());
-  close_in ic;
   List.rev !args
 
 (* --- Load paths and project file listing --- *)
@@ -100,9 +99,9 @@ type load_path_entry = {
 (* Parse a project file and extract load path entries *)
 let load_paths path =
   let project_dir = Filename.dirname path in
-  let ic = open_in path in
   let entries = ref [] in
-  (try while true do
+  In_channel.with_open_text path (fun ic ->
+   try while true do
      let line = String.trim (input_line ic) in
      if line = "" || String.length line > 0 && line.[0] = '#' then ()
      else begin
@@ -141,22 +140,20 @@ let load_paths path =
        process toks
      end
    done with End_of_file -> ());
-  close_in ic;
   List.rev !entries
 
 (* List .v files explicitly listed in _RocqProject *)
 let listed_files path =
   let project_dir = Filename.dirname path in
-  let ic = open_in path in
   let files = ref [] in
-  (try while true do
+  In_channel.with_open_text path (fun ic ->
+   try while true do
      let line = String.trim (input_line ic) in
      if String.length line > 2
         && String.sub line (String.length line - 2) 2 = ".v"
         && (String.length line < 1 || line.[0] <> '-') then
        files := resolve_path project_dir line :: !files
    done with End_of_file -> ());
-  close_in ic;
   List.rev !files
 
 (* Recursively find all .v files under a directory *)

@@ -172,16 +172,14 @@ let locale_compose_path () =
 
 (* Load a compose file, inserting entries into the trie *)
 let load_file root path =
-  if Sys.file_exists path then begin
-    let ic = open_in path in
-    (try while true do
-       let line = input_line ic in
-       match parse_line line with
-       | Some (keys, text) -> trie_insert root keys text
-       | None -> ()
-     done with End_of_file -> ());
-    close_in ic
-  end
+  if Sys.file_exists path then
+    In_channel.with_open_text path (fun ic ->
+      try while true do
+        let line = input_line ic in
+        match parse_line line with
+        | Some (keys, text) -> trie_insert root keys text
+        | None -> ()
+      done with End_of_file -> ())
 
 let load () =
   let root = new_node () in
