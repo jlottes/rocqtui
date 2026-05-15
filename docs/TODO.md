@@ -141,23 +141,27 @@ or hand-written).
 
 ## Async / Performance
 
-- [ ] Make `query` non-blocking. Currently sync — and now does ~15
-      Add round-trips (the EditAt dance for printing-option overrides),
-      so the latency cost is multiplied. `with_options` no longer exists.
+- [x] Make `query` non-blocking (`Op_query` state machine, start/poll
+      tickets at the bridge↔server boundary —
+      `docs/ROCQ_PROTOCOL_PULL_PLAN.md` step 7)
+- [x] Make `edit_at` (backward stepping) non-blocking (`Op_rewinding`)
 - [ ] Skip `Session.query`'s Add+EditAt dance when the persistent
       Printopts already match `tip`'s snapshot. Rocq has no API to read
       a snapshot's options, so we'd need to track "last setup baked
       into tip" and invalidate on stepping. Cheap when it applies
       (zero round-trips for queries against an unchanged tip).
-- [ ] Make `edit_at` (backward stepping) non-blocking
 - [ ] Syntax highlighting caching (don't re-highlight unchanged lines)
 - [ ] Incremental re-rendering (only redraw changed regions)
 - [ ] Large file support (virtual scrolling, lazy line loading)
 
 ## Robustness
 
-- [ ] Handle rocqtop crash gracefully (show error, allow restart)
-- [ ] Handle broken pipe on rocqtop fd
+- [x] Handle broken pipe / rocqtop subprocess death without crashing
+      (`rocq_protocol.mark_dead` fails queued calls cleanly; commit
+      668f21e)
+- [ ] Rocqtop restart UI: surface the dead state as a banner with a
+      "restart rocqtop" action (the survive-the-death piece is done;
+      the user still has to relaunch rocqtui to recover)
 - [ ] Recover from MCP client sending malformed JSON
 - [x] Session tests (test async stepping, error recovery, rewind)
       (covered by test/e2e/: smoke, error_recovery, buffer_mutation,
