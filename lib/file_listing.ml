@@ -95,12 +95,10 @@ let build_tree project_dir project_files_set rel_paths =
   sort_children tree
 
 let enumerate ~project_dir ~project_file ~mode =
-  let project_files = Project.listed_files project_file in
+  let p = Project.read project_file in
   let files = match mode with
-    | Project -> project_files
-    | All ->
-      let load_paths = Project.load_paths project_file in
-      Project.all_v_files load_paths
+    | Project -> p.listed_files
+    | All -> Project.all_v_files p
   in
   let rels = List.sort String.compare (relative_paths project_dir files) in
-  build_tree project_dir project_files rels
+  build_tree project_dir p.listed_files rels

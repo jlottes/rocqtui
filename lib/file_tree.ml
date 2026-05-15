@@ -392,6 +392,7 @@ let set_dep_graph t ~graph ~running =
 type action =
   | TreeContinue
   | TreeOpen of string  (* file path *)
+  | TreeToggleProject of string  (* rel path under [project_dir] *)
   | TreeUnhandled       (* let global key handlers run *)
 
 let activate_selected t =
@@ -529,6 +530,14 @@ let handle_key t r ch =
     cycle_view t;
     ensure_visible t visible_rows;
     TreeContinue
+  end
+  else if not in_filter && t.view = VTree && ch = Char.code 'p' then begin
+    (* Toggle project membership of the selected file. Dirs and
+       non-.v files fall through to the editor for a status message. *)
+    match selected_line t with
+    | Some line when not line.entry.is_dir ->
+      TreeToggleProject line.entry.rel_path
+    | Some _ | None -> TreeContinue
   end
   else if ch = 20 then begin (* ^T toggle mode (tree view only) *)
     toggle_mode t;

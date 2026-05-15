@@ -3,12 +3,14 @@ open Rocqtui_lib
 let build_initial_state ~filenames ~extra_args =
   let project_dirs = ref [] in
   let create_tab_for_file filename =
-    let (project_dir, project_args) = Project.find_args (Some filename) in
-    (match project_dir with
-     | Some d ->
-       if not (List.mem d !project_dirs) then
-         project_dirs := d :: !project_dirs
-     | None -> ());
+    let project_args =
+      match Project.find_for ~filename () with
+      | Some p ->
+        if not (List.mem p.project_dir !project_dirs) then
+          project_dirs := p.project_dir :: !project_dirs;
+        p.args
+      | None -> []
+    in
     let all_args = project_args @ extra_args in
     Tab.create_from_file ~args:all_args filename
   in
@@ -134,9 +136,8 @@ let () =
   let fm = File_manager.create () in
   let dr = Dep_runner.create () in
   let refresh_dep_runner_for_dir dir =
-    match Project.find_project_file dir with
-    | Some (_, project_file) ->
-      Dep_runner.refresh dr ~project_file
+    match Project.find dir with
+    | Some p -> Dep_runner.refresh dr ~project_file:p.path
     | None -> ()
   in
   let ctx = Editor_context.create

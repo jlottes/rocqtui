@@ -80,8 +80,8 @@ let clear_project_watches t =
   t.project_dir <- None
 
 (* Conventional project-file names, in priority order. Kept in sync with
-   [Project.project_filenames]; duplicated here to avoid an upward
-   dependency from File_manager onto Project. *)
+   [Project.filenames]; duplicated here to avoid an upward dependency
+   from File_manager onto Project. *)
 let project_file_candidates = ["_RocqProject"; "_CoqProject"]
 
 let find_project_file_in dir =

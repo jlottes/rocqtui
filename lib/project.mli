@@ -1,32 +1,66 @@
-(** Parse _RocqProject / _CoqProject files for coqidetop arguments. *)
+(** Reading and editing _RocqProject / _CoqProject files.
 
-(** Search for a project file in the cwd, then the file's directory and
-    parents. Returns the directory containing the project file and the
-    list of arguments to pass to coqidetop. *)
-val find_args : string option -> string option * string list
+    Callers obtain a [t] via [read], [find], or [find_for] and read out
+    the fields they need. The line-by-line structure is preserved only
+    inside [toggle_member]. *)
 
-(** Load path entry from -R/-Q flags. *)
-type load_path_entry = {
-  physical_dir : string;
+(** Conventional project-file names, in search priority order. *)
+val filenames : string list
+
+(** A -R or -Q directive resolved into absolute paths. *)
+type load_path = {
+  implicit : bool;          (** -R = true, -Q = false *)
+  physical_dir : string;    (** absolute *)
   logical_prefix : string;
-  implicit : bool;  (** -R = true, -Q = false *)
 }
 
-(** Search for a project file starting from [dir] and upward.
-    Returns [(project_dir, project_file_path)] or None. *)
-val find_project_file : string -> (string * string) option
+(** A parsed project file. Immutable snapshot of what was on disk at
+    [read] time. *)
+type t = {
+  path : string;              (** absolute path to the project file *)
+  project_dir : string;       (** directory containing it *)
+  load_paths : load_path list;
+  listed_files : string list; (** absolute paths, uncommented entries only *)
+  args : string list;         (** args ready to pass to coqidetop *)
+}
 
-(** Parse load path entries (-R/-Q) from a project file. *)
-val load_paths : string -> load_path_entry list
+(** Parse a project file at [path]. *)
+val read : string -> t
 
-(** List .v files explicitly listed in a project file (absolute paths). *)
-val listed_files : string -> string list
+(** Walk upward from [dir] looking for a project file. Returns the
+    parsed project, or [None] if no project file was found above [dir]. *)
+val find : string -> t option
 
-(** Recursively find all .v files under a directory. *)
-val find_v_files : string -> string list
+(** Search cwd first, then the directory of [filename] (if given and
+    different from cwd). *)
+val find_for : ?filename:string -> unit -> t option
 
-(** Get all .v files reachable through load path entries. *)
-val all_v_files : load_path_entry list -> string list
+(** All .v files reachable through any of the project's load paths,
+    sorted and de-duplicated. Walks the filesystem on each call. *)
+val all_v_files : t -> string list
 
-(** Resolve a dotted module name (e.g. "Foo.Bar.Baz") to a .v file path. *)
-val resolve_module : load_path_entry list -> string -> string option
+(** Resolve a dotted module name (e.g. ["Foo.Bar.Baz"]) to a .v file
+    path under one of the project's load paths. *)
+val resolve_module : t -> string -> string option
+
+(** Membership of a project-relative path in the project file. *)
+type membership = [`Active | `Commented | `Absent]
+
+val membership : t -> rel:string -> membership
+
+type toggle_outcome = [`Added | `Removed]
+
+(** Toggle membership of [rel] (a project-relative path) and persist to
+    disk. Returns the freshly re-read project alongside the outcome:
+    [`Added] for [`Absent]/[`Commented] -> active, [`Removed] for
+    [`Active] -> commented.
+
+    - [`Active]   → comment the existing line (`# rel`).
+    - [`Commented] → uncomment the existing line.
+    - [`Absent]   → insert a new line at sorted position among .v file
+      lines (before the first .v line whose rel sorts greater; else
+      after the last .v line; else at end of file).
+
+    The toggled line is re-emitted in canonical form
+    (`# rel` / `rel`); all other lines round-trip verbatim. *)
+val toggle_member : t -> rel:string -> t * toggle_outcome

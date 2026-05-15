@@ -100,8 +100,8 @@ let handle_theme (ctx : Editor_context.t) ev =
 let project_dir_of_buf buf =
   let dir = match Buffer.filename buf with
     | Some f -> Filename.dirname f | None -> Sys.getcwd () in
-  match Project.find_project_file dir with
-  | Some (pd, _) -> Some pd
+  match Project.find dir with
+  | Some p -> Some p.project_dir
   | None -> None
 
 let handle_build (ctx : Editor_context.t) ev (tab : Tab.t) r =
@@ -279,9 +279,9 @@ let project_search_kick (ctx : Editor_context.t) (tab : Tab.t) =
     match Buffer.filename tab.buf with
     | None -> Project_search.cancel ctx.project_search
     | Some fname ->
-      (match Project.find_project_file (Filename.dirname fname) with
+      (match Project.find (Filename.dirname fname) with
        | None -> Project_search.cancel ctx.project_search
-       | Some (project_dir, project_file) ->
+       | Some p ->
          let (query, flags) = match ctx.search_query with
            | Some q -> q.query, q.flags
            | None -> "", Search.empty_flags
@@ -290,7 +290,8 @@ let project_search_kick (ctx : Editor_context.t) (tab : Tab.t) =
            Project_search.cancel ctx.project_search
          else
            Project_search.start ctx.project_search
-             ~project_dir ~project_file ~query ~flags)
+             ~project_dir:p.project_dir ~project_file:p.path
+             ~query ~flags)
 
 (* F3 / Shift+F3 dispatcher. In single-file mode walks the active
    tab's matches. In project mode walks the merged-stream

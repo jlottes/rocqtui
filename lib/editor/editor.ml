@@ -210,9 +210,10 @@ let handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r =
         | Some f -> Filename.dirname f
         | None -> Sys.getcwd ()
       in
-      (match Project.find_project_file dir with
-       | Some (project_dir, project_file) ->
-         let fp = File_picker.create ~project_dir ~project_file
+      (match Project.find dir with
+       | Some p ->
+         let fp = File_picker.create
+           ~project_dir:p.project_dir ~project_file:p.path
            ~open_files:(List.map fst (ctx.open_files ())) in
          Modal.push ctx.modal (Modal.FilePicker fp)
        | None ->
@@ -359,19 +360,20 @@ let handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r =
         | Some f -> Filename.dirname f
         | None -> Sys.getcwd ()
       in
-      (match Project.find_project_file dir with
+      (match Project.find dir with
        | None -> Render.set_status r "No _RocqProject found."
-       | Some (project_dir, project_file) ->
+       | Some p ->
          let need_new = match ctx.file_tree with
            | None -> true
-           | Some ft -> File_tree.project_file ft <> project_file
+           | Some ft -> File_tree.project_file ft <> p.path
          in
          if need_new then begin
            ctx.file_tree <-
-             Some (File_tree.create ~project_dir ~project_file);
+             Some (File_tree.create
+                     ~project_dir:p.project_dir ~project_file:p.path);
            (* Retarget the project watcher so auto-refresh tracks the
               tree the user is now looking at. *)
-           ctx.set_project_dir project_dir
+           ctx.set_project_dir p.project_dir
          end;
          let was_visible = Render.file_tree_visible r in
          if not was_visible then begin
@@ -466,10 +468,9 @@ let handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r =
               | None ->
                 let dir = match Buffer.filename buf with
                   | Some f -> Filename.dirname f | None -> Sys.getcwd () in
-                (match Project.find_project_file dir with
-                 | Some (_, pf) ->
-                   let lps = Project.load_paths pf in
-                   (match Project.resolve_module lps m with
+                (match Project.find dir with
+                 | Some p ->
+                   (match Project.resolve_module p m with
                     | Some path -> Some (path, None)
                     | None ->
                       Render.set_status r ("Module not found: " ^ m);
@@ -480,10 +481,9 @@ let handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r =
            | Some m, None ->
              let dir = match Buffer.filename buf with
                | Some f -> Filename.dirname f | None -> Sys.getcwd () in
-             (match Project.find_project_file dir with
-              | Some (_, pf) ->
-                let lps = Project.load_paths pf in
-                (match Project.resolve_module lps m with
+             (match Project.find dir with
+              | Some p ->
+                (match Project.resolve_module p m with
                  | Some path -> Some (path, None)
                  | None ->
                    Render.set_status r ("Module not found: " ^ m);
@@ -679,6 +679,15 @@ let handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r =
        | Some ch ->
          (match File_tree.handle_key ft r ch with
           | File_tree.TreeOpen path -> Some (Open_file path)
+          | File_tree.TreeToggleProject rel ->
+            let project_file = File_tree.project_file ft in
+            let project = Project.read project_file in
+            let (_, outcome) = Project.toggle_member project ~rel in
+            let verb = match outcome with
+              | `Added -> "added to" | `Removed -> "removed from" in
+            Render.set_status r
+              (Printf.sprintf "%s %s _RocqProject" rel verb);
+            Some Continue
           | File_tree.TreeContinue -> Some Continue
           | File_tree.TreeUnhandled -> None))
   in

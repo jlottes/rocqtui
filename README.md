@@ -71,6 +71,8 @@ rocqtui -theme solarized-dark path/to/file.v
 | `F5` | Build menu |
 | `F6` | Open Claude Code in project dir |
 | `F7` | Theme picker |
+| `F8` | Toggle file-tree panel |
+| `p` | (in file-tree panel) Toggle selected file's `_RocqProject` membership |
 | `F12` | Force redraw |
 
 ## Project files

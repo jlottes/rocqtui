@@ -880,11 +880,13 @@ let handle_tool t client name args mgr =
            ]))]
        ]])
      | None ->
-       let (project_dir, project_args) = Project.find_args (Some filename) in
+       let project = Project.find_for ~filename () in
+       let project_args = match project with
+         | Some p -> p.args | None -> [] in
        let new_tab = Tab.create_from_file ~args:project_args filename in
        Tab.add_tab mgr new_tab;
-       (match project_dir with
-        | Some d -> create_project_symlink t d
+       (match project with
+        | Some p -> create_project_symlink t p.project_dir
         | None -> ());
        (true, `Assoc ["content", `List [
          `Assoc ["type", `String "text"; "text",
@@ -1131,10 +1133,9 @@ let handle_tool t client name args mgr =
         `Assoc ["type", `String "text"; "text", `String "No file open"]
       ]; "isError", `Bool true])
     else begin
-      let (project_dir, _) = Project.find_args (Some filename) in
-      match project_dir with
-      | Some pd ->
-        let started = Build.build_deps ~project_dir:pd filename in
+      match Project.find_for ~filename () with
+      | Some p ->
+        let started = Build.build_deps ~project_dir:p.project_dir filename in
         (false, `Assoc ["content", `List [
           `Assoc ["type", `String "text"; "text",
             `String (if started then "Build started" else "Build already running")]

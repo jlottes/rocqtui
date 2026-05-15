@@ -160,7 +160,9 @@ let open_or_switch mgr ?(extra_args=[]) path =
     ignore (switch_to_id mgr t.id);
     (t, false)
   | None ->
-    let (_pd, pargs) = Project.find_args (Some path) in
+    let pargs = match Project.find_for ~filename:path () with
+      | Some p -> p.args
+      | None -> [] in
     let new_tab = create_from_file ~args:(pargs @ extra_args) path in
     add_tab mgr new_tab;
     (new_tab, true)
@@ -254,9 +256,9 @@ let project_relative_path filename =
   | None -> "[new]"
   | Some f ->
     let dir = Filename.dirname f in
-    match Project.find_project_file dir with
-    | Some (project_dir, _) ->
-      let prefix = project_dir ^ "/" in
+    match Project.find dir with
+    | Some p ->
+      let prefix = p.project_dir ^ "/" in
       let prefix_len = String.length prefix in
       if String.length f > prefix_len
          && String.sub f 0 prefix_len = prefix then

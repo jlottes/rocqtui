@@ -88,8 +88,11 @@ or hand-written).
 ## File Management
 
 - [ ] Save as: prompt for filename (needed for new/blank tabs)
-- [ ] Add/remove file from _RocqProject (toggle current file's presence)
-      Visual indicator in tab bar or status bar for files not in _RocqProject
+- [x] Toggle file's `_RocqProject` membership (`p` in file-tree panel,
+      tree view). Comments/uncomments in place, or inserts at sorted
+      position among existing .v entries. File-tree glyphs update via
+      the existing `ProjectChanged` inotify path.
+- [ ] Visual indicator in tab bar or status bar for files not in `_RocqProject`
 - [x] External modification detection: inotify watches on open files.
       Clean buffer auto-reloads; dirty buffer shows warning in status bar.
 - [x] Project-tree watching: recursive inotify dir-watches under the

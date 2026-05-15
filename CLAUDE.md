@@ -125,6 +125,7 @@ See `lib/keys.ml` for the source of truth. Summary:
 | F8 | Toggle file-tree panel (focus + snap to current file on initial show; close on second) |
 | . | (in file-tree panel) Snap selection to current tab's file |
 | v | (in file-tree panel) Cycle view: filesystem tree ↔ dependency order |
+| p | (in file-tree panel, tree view) Toggle selected file's `_RocqProject` membership (commented ↔ active, or inserts new entry in sorted position) |
 | F12 | Force redraw |
 | ESC | Start XCompose (only if launched with `--xcompose`); otherwise sent to terminal when focused |
 | ESC | Cancel search (prompt: restores cursor; outside prompt: clears highlights). Under `--xcompose`, ESC starts compose so the user-visible cancel is ESC ESC; the second ESC also doubles as "send ESC to terminal" when one is focused and no search is in flight. |

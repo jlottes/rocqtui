@@ -2,8 +2,8 @@ let open_tab ?cmd (ctx : Editor_context.t) (tab : Tab.t) r =
   let buf = tab.buf in
   let (h, w) = Render.pane_dims r Render.PMessages in
   let cwd = match Buffer.filename buf with
-    | Some f -> (match Project.find_project_file (Filename.dirname f) with
-      | Some (pd, _) -> pd | None -> Filename.dirname f)
+    | Some f -> (match Project.find (Filename.dirname f) with
+      | Some p -> p.project_dir | None -> Filename.dirname f)
     | None -> Sys.getcwd () in
   let term = match cmd with
     | Some c -> Terminal.create ~cmd:c ~cwd ~w ~h ()

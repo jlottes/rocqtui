@@ -187,8 +187,8 @@ let search_snapshot t (active_tab : Tab.t) : Search_results.t option =
     let project_dir =
       match active_path with
       | Some p ->
-        (match Project.find_project_file (Filename.dirname p) with
-         | Some (pd, _) -> pd
+        (match Project.find (Filename.dirname p) with
+         | Some pf -> pf.project_dir
          | None -> Filename.dirname p)
       | None -> ""
     in
