@@ -36,19 +36,13 @@ let send_request (state : State.t) (tab : Tab.t) ~now ~shape =
   let (line, col) = Buffer.cursor buf in
   let origin_offset = Buffer.cursor_byte_offset buf in
   let revision = Buffer.revision buf in
-  (* For FIM we only need the most recent edit (or none) to keep the
-     bridge in FIM mode under "auto". For edits-shape we send the
-     full ring so the model has pattern context. *)
+  (* Always send the full recent-edits ring. The bridge's model-based
+     classifier inspects the edits to decide shape under "auto"; for
+     explicit "fim" / "edits" the bridge ignores them when picking
+     shape but uses them as context inside the chosen prompt. *)
   let recent_edits =
-    let all =
-      List.map (fun e -> Region_buffer.(e.before, e.after))
-        (Region_buffer.recent_edits tab.rb)
-    in
-    if shape = "edits" then all
-    else
-      match List.rev all with
-      | [] -> []
-      | newest :: _ -> [newest]
+    List.map (fun e -> Region_buffer.(e.before, e.after))
+      (Region_buffer.recent_edits tab.rb)
   in
   let req_id = Printf.sprintf "r%d-%d" (int_of_float (now *. 1000.)) tab.id in
   let req = Client.build_request ~shape ~req_id ~buffer:text
@@ -90,7 +84,7 @@ let send_request (state : State.t) (tab : Tab.t) ~now ~shape =
      | Client.Done_resp ->
        Debug.log "<- req=%s done mine=%b" req_id mine);
     match resp with
-    | Client.Fim { insertion } when mine && shape <> "edits" ->
+    | Client.Fim { insertion } when mine ->
       let shifted = shifted_insertion ~origin_offset ~insertion buf in
       let cur_off = Buffer.cursor_byte_offset buf in
       Debug.log "   typed=%d shifted=%s"
@@ -109,19 +103,28 @@ let send_request (state : State.t) (tab : Tab.t) ~now ~shape =
          state.status <- State.Ready
        | _ -> ())
     | Client.Edit { start_line; start_col; end_line; end_col; replacement }
-      when mine && shape <> "fim" ->
+      when mine ->
       (* Stale check: if the user has typed since the request was
          issued, the offsets may not line up with the current buffer.
          Drop the change in that case. *)
-      if Buffer.revision buf = revision then
-        (match pt.edits with
-         | Some o ->
-           let c = {
-             Per_tab.start_line; start_col; end_line; end_col; replacement
-           } in
-           o.changes <- o.changes @ [c];
-           state.status <- State.Ready
-         | None -> ())
+      if Buffer.revision buf = revision then begin
+        (* If this is the first Edit response on an "auto" shape, we
+           may not have an overlay yet (the bridge picked edits via
+           classifier). Create one lazily. *)
+        let o = match pt.edits with
+          | Some o -> o
+          | None ->
+            let o = { Per_tab.changes = []; origin_revision = revision } in
+            pt.edits <- Some o;
+            pt.ghost <- None;
+            o
+        in
+        let c = {
+          Per_tab.start_line; start_col; end_line; end_col; replacement
+        } in
+        o.changes <- o.changes @ [c];
+        state.status <- State.Ready
+      end
     | Client.Done_resp when mine ->
       (* If shape=edits and no changes arrived, drop the empty overlay
          so the status indicator returns to Idle cleanly. *)
@@ -150,7 +153,11 @@ let tick (state : State.t) ~now ~last_input_time ~active_tab =
   else if last_input_time = 0. then ()
   else if now -. last_input_time < debounce_seconds then ()
   else if last_input_time <= state.last_request_time then ()
-  else send_request state active_tab ~now ~shape:"fim"
+  (* Send "auto" — the bridge's model classifier decides between
+     FIM, edits, and no-suggestion. Earlier phases hard-coded "fim"
+     to bypass a too-eager heuristic; that's no longer needed now
+     that the classifier is model-based. *)
+  else send_request state active_tab ~now ~shape:"auto"
 
 (* Explicit edits-shape trigger — F10. Cancels any in-flight request
    and issues a fresh edits-shape one. *)

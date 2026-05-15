@@ -72,14 +72,24 @@ class Bridge:
 
     async def _dispatch(self, req: Request, writer: asyncio.StreamWriter) -> None:
         if req.shape == "auto":
-            kind = classify_mod.classify(req.recent_edits)
+            kind = await asyncio.to_thread(
+                classify_mod.classify_with_model,
+                self.llama_url, req.buffer,
+                req.cursor.line, req.cursor.col,
+                req.recent_edits,
+            )
         else:
             kind = req.shape
         log.info("req %s: shape=%s (resolved=%s)", req.req_id, req.shape, kind)
         if kind == "fim":
             await self._handle_fim(req, writer)
-        else:
+        elif kind == "edits":
             await self._handle_edits(req, writer)
+        else:
+            # "none" — model decided no suggestion applies. Bridge
+            # emits the done sentinel only (handled by the outer
+            # finally block in handle()).
+            pass
 
     async def _handle_fim(self, req: Request, writer: asyncio.StreamWriter) -> None:
         offset = _line_col_to_offset(req.buffer, req.cursor.line, req.cursor.col)
