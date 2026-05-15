@@ -72,15 +72,14 @@ class Bridge:
 
     async def _dispatch(self, req: Request, writer: asyncio.StreamWriter) -> None:
         if req.shape == "auto":
-            kind = await asyncio.to_thread(
-                classify_mod.classify_with_model,
-                self.llama_url, req.buffer,
-                req.cursor.line, req.cursor.col,
-                req.recent_edits,
-            )
+            kind, classifier_used = await asyncio.to_thread(
+                self._resolve_auto_shape, req)
         else:
             kind = req.shape
-        log.info("req %s: shape=%s (resolved=%s)", req.req_id, req.shape, kind)
+            classifier_used = False
+        log.info("req %s: shape=%s (resolved=%s, classifier=%s)",
+                 req.req_id, req.shape, kind,
+                 "yes" if classifier_used else "skip")
         if kind == "fim":
             await self._handle_fim(req, writer)
         elif kind == "edits":
@@ -90,6 +89,22 @@ class Bridge:
             # emits the done sentinel only (handled by the outer
             # finally block in handle()).
             pass
+
+    def _resolve_auto_shape(self, req: Request) -> tuple[str, bool]:
+        """Resolve [shape="auto"] to a concrete shape. Returns (kind,
+        classifier_used). When recent_edits has fewer than two
+        entries there's no pattern signal for the classifier to read,
+        so we shortcut to FIM and skip the ~200 ms model call. This
+        is the common case for "user is typing" — keystrokes that
+        haven't accumulated yet."""
+        if len(req.recent_edits) < 2:
+            return ("fim", False)
+        kind = classify_mod.classify_with_model(
+            self.llama_url, req.buffer,
+            req.cursor.line, req.cursor.col,
+            req.recent_edits,
+        )
+        return (kind, True)
 
     async def _handle_fim(self, req: Request, writer: asyncio.StreamWriter) -> None:
         offset = _line_col_to_offset(req.buffer, req.cursor.line, req.cursor.col)
