@@ -919,8 +919,24 @@ let update_status (ctx : Editor_context.t) r (tab : Tab.t) =
         Printf.sprintf "  Search: %s %d/%d"
           (Text_field.contents q.query) idx count
     in
-    let status = Printf.sprintf "%s%s  Ln %d, Col %d%s%s%s%s%s"
-      fname mod_flag (cl + 1) (vcol + 1) rocq_status search_info extra hscroll_ind focus_info
+    let compose_hint =
+      match ctx.compose, ctx.focus with
+      | Some cs, FScript ->
+        let line = Buffer.get_line buf cl in
+        (match Compose.reverse_lookup cs line cc with
+         | None -> ""
+         | Some (matched_bytes, alternatives) ->
+           let glyph = String.sub line cc matched_bytes in
+           let fmt_seq keys =
+             String.concat " " (List.map Compose.key_name keys) in
+           let alts = String.concat " | "
+             (List.map fmt_seq alternatives) in
+           Printf.sprintf "  %s \xe2\x86\x90 %s" glyph alts)
+      | _ -> ""
+    in
+    let status = Printf.sprintf "%s%s  Ln %d, Col %d%s%s%s%s%s%s"
+      fname mod_flag (cl + 1) (vcol + 1) rocq_status compose_hint
+      search_info extra hscroll_ind focus_info
     in
     Render.set_status r status
   end

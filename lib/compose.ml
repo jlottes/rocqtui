@@ -12,14 +12,24 @@ type trie_node = {
   mutable output : string option;
 }
 
+(* Reverse trie: children keyed by UTF-8 byte; terminal nodes hold all
+   key sequences that produce the output ending here.  Used for
+   "what's at the cursor and how would I type it?" status hints. *)
+type rev_node = {
+  mutable rev_children : (char * rev_node) list;
+  mutable sequences : int list list;
+}
+
 type t = {
   root : trie_node;
+  rev_root : rev_node;
   mutable cursor : trie_node;
   mutable is_active : bool;
   mutable pressed : int list;  (* keys pressed so far, in order *)
 }
 
 let new_node () = { children = []; output = None }
+let new_rev_node () = { rev_children = []; sequences = [] }
 
 let find_child node key =
   List.assoc_opt key node.children
@@ -181,6 +191,28 @@ let load_file root path =
         | None -> ()
       done with End_of_file -> ())
 
+(* Walk the forward trie and populate the reverse trie. *)
+let build_reverse forward_root rev_root =
+  let rev_insert text keys =
+    let node = ref rev_root in
+    String.iter (fun c ->
+      match List.assoc_opt c !node.rev_children with
+      | Some child -> node := child
+      | None ->
+        let child = new_rev_node () in
+        !node.rev_children <- (c, child) :: !node.rev_children;
+        node := child
+    ) text;
+    !node.sequences <- keys :: !node.sequences
+  in
+  let rec walk node path =
+    (match node.output with
+     | Some text -> rev_insert text (List.rev path)
+     | None -> ());
+    List.iter (fun (k, child) -> walk child (k :: path)) node.children
+  in
+  walk forward_root []
+
 let load () =
   let root = new_node () in
   (* Load system compose file first *)
@@ -190,7 +222,9 @@ let load () =
   let home = try Sys.getenv "HOME" with Not_found -> "." in
   let user_path = Filename.concat home ".XCompose" in
   load_file root user_path;
-  { root; cursor = root; is_active = false; pressed = [] }
+  let rev_root = new_rev_node () in
+  build_reverse root rev_root;
+  { root; rev_root; cursor = root; is_active = false; pressed = [] }
 
 let start t =
   t.cursor <- t.root;
@@ -224,6 +258,34 @@ let feed t key =
 let active t = t.is_active
 
 let keys_so_far t = t.pressed
+
+(* Reverse lookup: given buffer text [s] and a byte [offset], return the
+   longest output starting at that position and the key sequences that
+   produce it.  Returns [None] if no compose entry starts there. *)
+let reverse_lookup t s offset =
+  let len = String.length s in
+  let node = ref t.rev_root in
+  let i = ref offset in
+  let best = ref None in
+  let cont = ref true in
+  while !cont && !i < len do
+    match List.assoc_opt s.[!i] !node.rev_children with
+    | None -> cont := false
+    | Some child ->
+      node := child;
+      i := !i + 1;
+      if child.sequences <> [] then
+        best := Some (!i - offset, child.sequences)
+  done;
+  !best
+
+(* Human-readable name for a key code as stored in compose sequences.
+   Matches view.ml's key_to_string convention so reverse-lookup status
+   and live-compose status render the same glyphs. *)
+let key_name k =
+  if k = 27 then "\xe2\x90\x9b"  (* U+241B SYMBOL FOR ESCAPE *)
+  else if k >= 32 && k < 127 then String.make 1 (Char.chr k)
+  else Printf.sprintf "<%d>" k
 
 (* Collect all completions reachable from a node, with remaining key paths *)
 let completions t =
