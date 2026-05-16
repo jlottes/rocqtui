@@ -172,9 +172,8 @@ let chgat t pane ~row ~col ~width attr =
 (* Clear a pane — content panes use theme default, UI panes use their own *)
 let clear_pane t pane =
   let attr = match pane with
-    | PScript | PGoals | PMessages | PFileTree -> (Theme.attrs ()).ga_default
     | PStatus -> (Theme.attrs ()).ga_status
-    | _ -> Grid.default_attr
+    | _ -> (Theme.attrs ()).ga_default
   in
   Grid.clear_rect t.curr (rect_of_pane t pane) ~attr
 

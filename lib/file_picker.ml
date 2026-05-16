@@ -246,7 +246,7 @@ let render_overlay grid (rect : Render.rect) t =
   let box_left = rect.col in
   let visible_rows = box_h - 4 in
   let border_attr = { (Theme.attrs ()).ga_border with bold = true } in
-  let normal_attr = Grid.default_attr in
+  let normal_attr = (Theme.attrs ()).ga_default in
   (* Fill background *)
   Grid.clear_region grid ~row:box_top ~col:box_left ~height:box_h ~width:box_w ~attr:normal_attr;
   (* Top border *)
@@ -320,7 +320,7 @@ let render_overlay grid (rect : Render.rect) t =
         else name_text
       in
       if idx = t.selected then begin
-        let rev_attr = { Grid.default_attr with reverse = true } in
+        let rev_attr = { normal_attr with reverse = true } in
         let cols_used = Grid.put_str grid ~row ~col:(box_left + 2)
           (prefix_text ^ name_trunc) rev_attr in
         let remaining = content_width - cols_used in
@@ -329,8 +329,8 @@ let render_overlay grid (rect : Render.rect) t =
             ~col:(box_left + 2 + cols_used + c) " " rev_attr
         done
       end else begin
-        let dim_attr = { Grid.default_attr with dim = true } in
-        let bold_attr = { Grid.default_attr with bold = true } in
+        let dim_attr = { normal_attr with dim = true } in
+        let bold_attr = { normal_attr with bold = true } in
         let dim = not line.is_dir && not line.in_project
                   && t.mode = File_listing.All in
         let prefix_cols = Grid.put_str grid ~row ~col:(box_left + 2)

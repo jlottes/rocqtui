@@ -153,7 +153,7 @@ let char_round_bot = "\xe2\x95\xb0"   (* ╰ U+2570 *)
 let grid_attr_of_status status =
   let a = Theme.attrs () in
   match status with
-  | RDefault -> Grid.default_attr
+  | RDefault -> a.ga_default
   | RVerified -> a.ga_verified
   | RProcessing -> a.ga_processing
   | RError -> a.ga_error
@@ -188,7 +188,7 @@ let draw grid ~base_row ~base_col ~sep_col ~col_offset ~win_rows ~minimap_rows
               else win_rows in
       for c = 0 to w - 1 do
         Grid.set_cell grid ~row:(base_row + r) ~col:(base_col + col_offset + c)
-          " " Grid.default_attr
+          " " (Theme.attrs ()).ga_default
       done
     end
   done

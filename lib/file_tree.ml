@@ -616,7 +616,7 @@ let render t r ~open_files ~focused =
       if focused then { border_attr with bold = true; reverse = true }
       else { border_attr with bold = true }
     in
-    let normal_attr = Grid.default_attr in
+    let normal_attr = (Theme.attrs ()).ga_default in
     let dim_attr = { normal_attr with dim = true } in
     let bold_attr = { normal_attr with bold = true } in
     ignore (Render.put_str r Render.PFileTree ~row:0 ~col:0

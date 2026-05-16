@@ -34,8 +34,15 @@ type t = {
 
 (* Shorthand constructors *)
 let c n = Grid.Color256 n  (* 256-color *)
-let d = Grid.Default        (* terminal default *)
+let d = Grid.Default        (* terminal default — used for bg only *)
 let rgb r g b = Grid.TrueColor (r, g, b)
+
+(* Explicit mid-grey foreground used in place of Grid.Default for the
+   dark themes. Matches a typical emulator's default-fg rendering
+   (~0.8 brightness) but keeps the color stable when the bold attribute
+   is applied — many terminals shift "default" to a different color
+   under bold, which is undesirable. *)
+let grey_fg = rgb 0xcc 0xcc 0xcc
 
 (* --- Solarized color palette --- *)
 let sol_base03  = c 234    (* #002b36 - darkest bg *)
@@ -64,7 +71,7 @@ let solarized_dark = {
   string_fg = sol_yellow;
   bullet_fg = sol_orange;
   number_fg = sol_magenta;
-  default_fg = d;
+  default_fg = grey_fg;
   verified_bg = sol_base02;
   verified_fg = sol_base1;
   error_bg = sol_red;
@@ -80,7 +87,7 @@ let solarized_dark = {
   search_current_bg = sol_yellow;
   search_current_fg = sol_base03;
   paren_match_bg = sol_base01;
-  paren_match_fg = d;
+  paren_match_fg = grey_fg;
 }
 
 let solarized_light = {
@@ -121,7 +128,7 @@ let classic = {
   string_fg = c 3;    (* yellow *)
   bullet_fg = c 1;    (* red *)
   number_fg = c 5;    (* magenta *)
-  default_fg = d;
+  default_fg = c 7;   (* white *)
   verified_bg = c 2;  (* green *)
   verified_fg = c 0;  (* black *)
   error_bg = c 1;     (* red *)

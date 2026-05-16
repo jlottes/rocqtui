@@ -252,7 +252,7 @@ let grid_attr_of_color color =
   else if color = color_bullet_p then a.ga_bullet_p
   else if color = color_number_p then a.ga_number_p
   else if color = color_default_p then a.ga_default_p
-  else Grid.default_attr
+  else a.ga_default
 
 let add_span result line_offsets num_lines bp ep attr color =
   if bp < ep then begin
