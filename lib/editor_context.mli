@@ -43,6 +43,11 @@ type t = {
   mutable dragging : drag_mode;
   mutable jump_stack : jump_point list;
   mutable jump_target : (int * int) option;
+  (** Deferred Open_file action set by an async callback (e.g. when an
+      async [Locate]/[Locate Library] query chain finishes). The main
+      loop drains this after each session poll and dispatches it as an
+      [Open_file] action. *)
+  mutable pending_open : string option;
   mutable search_panel_msg : string;
   (** Global "what we're searching for" — the single source of truth
       for the search prompt's Find / Replace / flags / focus. None

@@ -20,6 +20,11 @@ let take_jump_target (ctx : Editor_context.t) =
   ctx.jump_target <- None;
   v
 
+let take_pending_open (ctx : Editor_context.t) =
+  let v = ctx.pending_open in
+  ctx.pending_open <- None;
+  v
+
 (* --- Input event handling --- *)
 
 let handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r =
@@ -451,102 +456,86 @@ let handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r =
     else if Keymatch.match_binding ev Keys.jump_to_def then begin
       let (cl, cc) = Buffer.cursor buf in
       let line = Buffer.get_line buf cl in
-      (* Try Require line first *)
-      let result = match Locate.parse_require_line line with
-        | Some (_, modules) ->
-          let modname = Locate.module_at_col modules cc in
-          (match modname, session with
-           | Some m, Some s ->
-             Session.query s ("Locate Library " ^ m ^ ".");
-             let msgs = String.concat "\n" (Session.messages s) in
-             (match Locate.parse_locate_library msgs with
-              | Some vo_path ->
-                let v_path = Locate.vo_to_v vo_path in
-                if Sys.file_exists v_path then Some (v_path, None)
-                else begin
-                  Render.set_status r ("Source not found: " ^ v_path);
-                  None
-                end
-              | None ->
-                let dir = match Buffer.filename buf with
-                  | Some f -> Filename.dirname f | None -> Sys.getcwd () in
-                (match Project.find dir with
-                 | Some p ->
-                   (match Project.resolve_module p m with
-                    | Some path -> Some (path, None)
-                    | None ->
-                      Render.set_status r ("Module not found: " ^ m);
-                      None)
-                 | None ->
-                   Render.set_status r ("Module not found: " ^ m);
-                   None))
-           | Some m, None ->
-             let dir = match Buffer.filename buf with
-               | Some f -> Filename.dirname f | None -> Sys.getcwd () in
-             (match Project.find dir with
-              | Some p ->
-                (match Project.resolve_module p m with
-                 | Some path -> Some (path, None)
-                 | None ->
-                   Render.set_status r ("Module not found: " ^ m);
-                   None)
-              | None ->
-                Render.set_status r "No session and no project.";
-                None)
-           | None, _ ->
-             Render.set_status r "No module name at cursor.";
-             None)
-        | None ->
-          let word = Modals.query_subject ctx tab in
-          (match word, session with
-           | Some w, Some s ->
-             Session.query s ("Locate " ^ w ^ ".");
-             let msgs = String.concat "\n" (Session.messages s) in
-             (match Locate.parse_locate msgs with
-              | Some (_kind, module_path, def_name) ->
-                Session.query s ("Locate Library " ^ module_path ^ ".");
-                let msgs2 = String.concat "\n" (Session.messages s) in
-                (match Locate.parse_locate_library msgs2 with
-                 | Some vo_path ->
-                   let v_path = Locate.vo_to_v vo_path in
-                   let target_line =
-                     if Sys.file_exists v_path then begin
-                       let glob_path = Locate.vo_to_glob vo_path in
-                       if Sys.file_exists glob_path then
-                         let entries = Glob.parse glob_path in
-                         match Glob.find_definition entries def_name with
-                         | Some e -> Glob.byte_offset_to_line v_path e.bp
-                         | None -> None
-                       else None
-                     end else None
-                   in
-                   if Sys.file_exists v_path then
-                     Some (v_path, target_line)
-                   else begin
-                     Render.set_status r ("Source not found: " ^ v_path);
-                     None
-                   end
-                 | None ->
-                   Render.set_status r ("Cannot locate library for " ^ module_path);
-                   None)
-              | None ->
-                Render.set_status r ("Cannot locate: " ^ msgs);
-                None)
-           | Some _, None ->
-             Render.set_status r "No session.";
-             None
-           | None, _ ->
-             Render.set_status r "No identifier at cursor.";
-             None)
+      let dir = match Buffer.filename buf with
+        | Some f -> Filename.dirname f | None -> Sys.getcwd () in
+      let format_msgs pps =
+        String.concat "\n" (List.map Session.string_of_pp pps) in
+      let captured_tab = tab in
+      let finalize ?target_line path =
+        Jump.push ctx captured_tab;
+        ctx.jump_target <- (match target_line with
+          | Some l -> Some (l, 0) | None -> None);
+        ctx.pending_open <- Some path
       in
-      (match result with
-       | Some (path, line_opt) ->
-         Jump.push ctx tab;
-         (match line_opt with
-          | Some l -> ctx.jump_target <- Some (l, 0)
-          | None -> ctx.jump_target <- None);
-         Some (Open_file path)
-       | None -> Some Continue)
+      let try_project m =
+        match Project.find dir with
+        | Some p -> Project.resolve_module p m
+        | None -> None
+      in
+      let after_locate_library_for_require m pps =
+        let msgs = format_msgs pps in
+        match Locate.parse_locate_library msgs with
+        | Some vo_path ->
+          let v_path = Locate.vo_to_v vo_path in
+          if Sys.file_exists v_path then finalize v_path
+          else Render.set_status r ("Source not found: " ^ v_path)
+        | None ->
+          (match try_project m with
+           | Some path -> finalize path
+           | None -> Render.set_status r ("Module not found: " ^ m))
+      in
+      let after_locate_library_for_ident module_path def_name pps =
+        let msgs = format_msgs pps in
+        match Locate.parse_locate_library msgs with
+        | Some vo_path ->
+          let v_path = Locate.vo_to_v vo_path in
+          if Sys.file_exists v_path then begin
+            let glob_path = Locate.vo_to_glob vo_path in
+            let target_line =
+              if Sys.file_exists glob_path then
+                let entries = Glob.parse glob_path in
+                match Glob.find_definition entries def_name with
+                | Some e -> Glob.byte_offset_to_line v_path e.bp
+                | None -> None
+              else None
+            in
+            finalize ?target_line v_path
+          end else
+            Render.set_status r ("Source not found: " ^ v_path)
+        | None ->
+          Render.set_status r ("Cannot locate library for " ^ module_path)
+      in
+      let after_locate s pps =
+        let msgs = format_msgs pps in
+        match Locate.parse_locate msgs with
+        | Some (_kind, module_path, def_name) ->
+          Session.query s ("Locate Library " ^ module_path ^ ".")
+            ~on_done:(after_locate_library_for_ident module_path def_name)
+        | None ->
+          Render.set_status r ("Cannot locate: " ^ msgs)
+      in
+      (match Locate.parse_require_line line with
+       | Some (_, modules) ->
+         (match Locate.module_at_col modules cc, session with
+          | Some m, Some s ->
+            Session.query s ("Locate Library " ^ m ^ ".")
+              ~on_done:(after_locate_library_for_require m)
+          | Some m, None ->
+            (match try_project m with
+             | Some path -> finalize path
+             | None -> Render.set_status r ("Module not found: " ^ m))
+          | None, _ ->
+            Render.set_status r "No module name at cursor.")
+       | None ->
+         (match Modals.query_subject ctx tab, session with
+          | Some w, Some s ->
+            Session.query s ("Locate " ^ w ^ ".")
+              ~on_done:(after_locate s)
+          | Some _, None ->
+            Render.set_status r "No session."
+          | None, _ ->
+            Render.set_status r "No identifier at cursor."));
+      Some Continue
     end
     else if Keymatch.match_binding ev Keys.next_error
          || Keymatch.match_binding ev Keys.prev_error then begin

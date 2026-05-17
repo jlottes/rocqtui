@@ -226,6 +226,20 @@ let () =
     View.render_all ctx r tab;
     Render.present ~force r
   in
+  let do_open_file path =
+    let jump = Editor.take_jump_target ctx in
+    let (_, created) = Tab.open_or_switch mgr ~extra_args path in
+    if created then begin
+      File_manager.add_watch fm path;
+      if Tab.count mgr > 1 then Render.set_tab_bar r true
+    end;
+    (match jump with
+     | Some (line, col) ->
+       let active = Tab.active_tab mgr in
+       Buffer.move_to active.buf line col
+     | None -> ());
+    Render_need.request ()
+  in
   let stdin_fd = Unix.stdin in
   let running = ref true in
   let match_binding_input (ev : Input.event) (b : Keys.binding) =
@@ -386,6 +400,11 @@ let () =
       Render_need.request ();
       Mcp_server.poll_notifications mcp mgr
     end;
+    (* Drain any deferred Open_file action queued by an async on_done
+       callback (e.g. jump-to-definition's Locate/Locate-Library chain). *)
+    (match Editor.take_pending_open ctx with
+     | Some path -> do_open_file path
+     | None -> ());
     (* User step settled? Activate Rocq sub-tab on error (unless on
        Terminal). Run every frame regardless of poll_all return so we
        catch the transition even when other state didn't change. *)
@@ -526,20 +545,7 @@ let () =
               let active = Tab.active_tab mgr in
               Buffer.move_to active.buf jp.jp_line jp.jp_col;
               Render_need.request ()
-            | Editor.Open_file path ->
-              let jump = Editor.take_jump_target ctx in
-              let (_, created) = Tab.open_or_switch mgr
-                ~extra_args path in
-              if created then begin
-                File_manager.add_watch fm path;
-                if Tab.count mgr > 1 then Render.set_tab_bar r true
-              end;
-              (match jump with
-               | Some (line, col) ->
-                 let active = Tab.active_tab mgr in
-                 Buffer.move_to active.buf line col
-               | None -> ());
-              Render_need.request ()
+            | Editor.Open_file path -> do_open_file path
             | Editor.Continue ->
               Render_need.request ()
           end;

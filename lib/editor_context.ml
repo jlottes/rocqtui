@@ -39,6 +39,11 @@ type t = {
   mutable dragging : drag_mode;
   mutable jump_stack : jump_point list;
   mutable jump_target : (int * int) option;
+  (* Deferred Open_file action set by an async callback (e.g. when an
+     async [Locate]/[Locate Library] query chain finishes). The main
+     loop drains this after each session poll and dispatches it as an
+     [Open_file] action. *)
+  mutable pending_open : string option;
   (* Transient message shown in the search panel after replace-current /
      replace-all. Cleared by any other prompt interaction. Stays in the
      panel only — does not leak into the normal status bar. *)
@@ -79,6 +84,7 @@ let create
     dragging = NoDrag;
     jump_stack = [];
     jump_target = None;
+    pending_open = None;
     search_panel_msg = "";
     search_query = None;
     search_query_gen = 0;

@@ -165,22 +165,22 @@ let line_contains needle line =
   scan 0
 
 let coercion_filter session word =
-  Session.query session "Print Graph.";
-  let all_msgs = Session.messages session in
-  let matches line =
-    line_contains (" " ^ word ^ " >->") line
-    || line_contains (">-> " ^ word) line
-    || line_contains ("." ^ word ^ " >->") line
-  in
-  let filtered = List.concat_map (fun msg ->
-    let lines = String.split_on_char '\n' msg in
-    List.filter (fun line -> String.length line > 0 && matches line) lines
-  ) all_msgs in
-  if filtered = [] then
-    Session.set_messages session ["No coercions found for " ^ word ^ "."]
-  else
-    Session.set_messages session filtered;
-  Msg_pane.activate Msg_pane.Rocq
+  Msg_pane.activate Msg_pane.Rocq;
+  Session.query session "Print Graph." ~on_done:(fun pps ->
+    let all_msgs = List.map Session.string_of_pp pps in
+    let matches line =
+      line_contains (" " ^ word ^ " >->") line
+      || line_contains (">-> " ^ word) line
+      || line_contains ("." ^ word ^ " >->") line
+    in
+    let filtered = List.concat_map (fun msg ->
+      let lines = String.split_on_char '\n' msg in
+      List.filter (fun line -> String.length line > 0 && matches line) lines
+    ) all_msgs in
+    if filtered = [] then
+      Session.set_messages session ["No coercions found for " ^ word ^ "."]
+    else
+      Session.set_messages session filtered)
 
 let handle_query (ctx : Editor_context.t) ev (tab : Tab.t) =
   let session = tab.session in

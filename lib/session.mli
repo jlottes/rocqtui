@@ -48,6 +48,11 @@ val clear_error : t -> unit
 val goals_text : ?all_hyps:bool -> ?width:int -> t -> string option
 
 val messages : ?width:int -> t -> string list
+
+(** Render a single [Pp.t] to a string at the given width (default ~78).
+    Use when consuming [on_done] callbacks from {!query} — those receive
+    raw Pp values, not formatted strings. *)
+val string_of_pp : ?width:int -> Pp.t -> string
 val clear_messages : t -> unit
 val set_messages : t -> string list -> unit
 val sentence_ranges : t -> sentence_display list
