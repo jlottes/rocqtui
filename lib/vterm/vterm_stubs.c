@@ -219,26 +219,39 @@ static value gr_color_to_ocaml(uint32 c)
   CAMLreturn(Val_int(0));
 }
 
-/* Helper: build a Grid.attr from struct gr.
-   Grid.attr only carries fg/bg/bold/dim/reverse/underline today; the
-   richer state (italic, strikethrough, ul color, etc.) is dropped here
-   and surfaces only once Grid.attr is extended. */
+/* Helper: build a Grid.attr from struct gr. Field order must match the
+   declaration order in lib/grid.mli's [type attr].
+
+   Multi-valued slots (italic / underline / blink / frame / script) map
+   to variant types with only constant constructors, so their OCaml
+   runtime representation is just Val_int(N) where N is the constructor
+   index — which matches the slot value from a_get() one-to-one. */
 static value gr_to_attr(struct gr g)
 {
   CAMLparam0();
-  CAMLlocal3(v_attr, v_fg, v_bg);
+  CAMLlocal4(v_attr, v_fg, v_bg, v_ul);
 
   v_fg = gr_color_to_ocaml(g.fg);
   v_bg = gr_color_to_ocaml(g.bg);
+  v_ul = gr_color_to_ocaml(g.ul);
 
-  /* Grid.attr = { fg; bg; bold; dim; reverse; underline } */
-  v_attr = caml_alloc(6, 0);
-  Store_field(v_attr, 0, v_fg);
-  Store_field(v_attr, 1, v_bg);
-  Store_field(v_attr, 2, Val_bool(a_get(g.a, BOLD)));
-  Store_field(v_attr, 3, Val_bool(a_get(g.a, FAINT)));
-  Store_field(v_attr, 4, Val_bool(a_get(g.a, INVERSE)));
-  Store_field(v_attr, 5, Val_bool(a_get(g.a, UNDERLINE)));
+  v_attr = caml_alloc(16, 0);
+  Store_field(v_attr,  0, v_fg);
+  Store_field(v_attr,  1, v_bg);
+  Store_field(v_attr,  2, v_ul);
+  Store_field(v_attr,  3, Val_bool(a_get(g.a, BOLD)));
+  Store_field(v_attr,  4, Val_bool(a_get(g.a, FAINT)));
+  Store_field(v_attr,  5, Val_int (a_get(g.a, ITALIC)));
+  Store_field(v_attr,  6, Val_int (a_get(g.a, UNDERLINE)));
+  Store_field(v_attr,  7, Val_bool(a_get(g.a, INVERSE)));
+  Store_field(v_attr,  8, Val_bool(a_get(g.a, STRIKETHROUGH)));
+  Store_field(v_attr,  9, Val_bool(a_get(g.a, CONCEAL)));
+  Store_field(v_attr, 10, Val_bool(a_get(g.a, OVERLINE)));
+  Store_field(v_attr, 11, Val_int (a_get(g.a, BLINK)));
+  Store_field(v_attr, 12, Val_int (a_get(g.a, FRAME)));
+  Store_field(v_attr, 13, Val_int (a_get(g.a, SCRIPT)));
+  Store_field(v_attr, 14, Val_int (a_get(g.a, FONT)));
+  Store_field(v_attr, 15, Val_bool(a_get(g.a, SPACING)));
 
   CAMLreturn(v_attr);
 }

@@ -262,8 +262,7 @@ type grid_attrs = {
 }
 
 let make_attr ?(bold=false) ?(dim=false) (fg : color) (bg : color) : Grid.attr =
-  { Grid.fg = fg; bg; bold; dim;
-    reverse = false; underline = false }
+  { Grid.default_attr with fg; bg; bold; dim }
 
 let grid_attrs_of_theme (theme : t) : grid_attrs =
   let a fg bg = make_attr fg bg in

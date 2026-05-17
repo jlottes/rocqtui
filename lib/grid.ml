@@ -4,22 +4,56 @@
 
 type color =
   | Default
-  | Basic of int          (* 0-7 standard, 8-15 bright *)
-  | Color256 of int       (* 0-255 *)
+  | Basic of int          (* 0..15 — full 16-color palette *)
+  | Color256 of int       (* 0..255 *)
   | TrueColor of int * int * int
+
+type underline_style =
+  | UL_none
+  | UL_single
+  | UL_double
+  | UL_curly
+  | UL_dotted
+  | UL_dashed
+
+type italic_style = Italic_none | Italic_on | Italic_fraktur
+type blink_style  = Blink_none  | Blink_slow | Blink_rapid
+type frame_style  = Frame_none  | Frame_box  | Frame_circle
+type script_style = Script_none | Script_super | Script_sub
 
 type attr = {
   fg : color;
   bg : color;
+  ul : color;
   bold : bool;
   dim : bool;
+  italic : italic_style;
+  underline : underline_style;
   reverse : bool;
-  underline : bool;
+  strikethrough : bool;
+  conceal : bool;
+  overline : bool;
+  blink : blink_style;
+  frame : frame_style;
+  script : script_style;
+  font : int;
+  spacing : bool;
 }
 
 let default_attr = {
-  fg = Default; bg = Default;
-  bold = false; dim = false; reverse = false; underline = false;
+  fg = Default; bg = Default; ul = Default;
+  bold = false; dim = false;
+  italic = Italic_none;
+  underline = UL_none;
+  reverse = false;
+  strikethrough = false;
+  conceal = false;
+  overline = false;
+  blink = Blink_none;
+  frame = Frame_none;
+  script = Script_none;
+  font = 0;
+  spacing = false;
 }
 
 type cell = {
@@ -283,12 +317,11 @@ let clear_rect g rect ~attr =
   clear_region g ~row:rect.row ~col:rect.col
     ~height:rect.height ~width:rect.width ~attr
 
-(* Compare two cells for equality *)
+(* Compare two cells for equality. Polymorphic [=] hits a pointer-equality
+   shortcut when attr records are shared (the common case — cells with the
+   same rendition share the same attr block). *)
 let cell_eq a b =
-  a.text = b.text && a.width = b.width
-  && a.attr.fg = b.attr.fg && a.attr.bg = b.attr.bg
-  && a.attr.bold = b.attr.bold && a.attr.dim = b.attr.dim
-  && a.attr.reverse = b.attr.reverse && a.attr.underline = b.attr.underline
+  a.text = b.text && a.width = b.width && a.attr = b.attr
 
 (* Copy contents of src into dst *)
 let copy ~src ~dst =
@@ -340,27 +373,29 @@ let emit_attr buf prev_attr attr =
   let attr = effective_attr attr in
   if prev_attr = attr then ()
   else begin
+    let underlined a = a.underline <> UL_none in
     let parts = ref [] in
     (* Reset if any attribute was turned off *)
     let needs_reset =
       (prev_attr.bold && not attr.bold)
       || (prev_attr.dim && not attr.dim)
       || (prev_attr.reverse && not attr.reverse)
-      || (prev_attr.underline && not attr.underline)
+      || (underlined prev_attr && not (underlined attr))
     in
     if needs_reset then begin
       parts := ["0"];
       (* After reset, re-emit everything that's on *)
       if attr.bold then parts := "1" :: !parts;
       if attr.dim then parts := "2" :: !parts;
-      if attr.underline then parts := "4" :: !parts;
+      if underlined attr then parts := "4" :: !parts;
       if attr.reverse then parts := "7" :: !parts;
       if attr.fg <> Default then parts := sgr_of_color true attr.fg :: !parts;
       if attr.bg <> Default then parts := sgr_of_color false attr.bg :: !parts;
     end else begin
       if attr.bold && not prev_attr.bold then parts := "1" :: !parts;
       if attr.dim && not prev_attr.dim then parts := "2" :: !parts;
-      if attr.underline && not prev_attr.underline then parts := "4" :: !parts;
+      if underlined attr && not (underlined prev_attr) then
+        parts := "4" :: !parts;
       if attr.reverse && not prev_attr.reverse then parts := "7" :: !parts;
       if attr.fg <> prev_attr.fg then
         parts := sgr_of_color true attr.fg :: !parts;

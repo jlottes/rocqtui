@@ -6,17 +6,43 @@
 
 type color =
   | Default
-  | Basic of int
-  | Color256 of int
+  | Basic of int                 (** 0..15 — full 16-color palette *)
+  | Color256 of int              (** 0..255 *)
   | TrueColor of int * int * int
 
+(** Underline style — extended via SGR 4:n sub-parameter (colon syntax). *)
+type underline_style =
+  | UL_none
+  | UL_single
+  | UL_double
+  | UL_curly
+  | UL_dotted
+  | UL_dashed
+
+type italic_style = Italic_none | Italic_on | Italic_fraktur
+type blink_style  = Blink_none  | Blink_slow | Blink_rapid
+type frame_style  = Frame_none  | Frame_box  | Frame_circle
+type script_style = Script_none | Script_super | Script_sub
+
+(** Full SGR rendition state. Most consumers should build values with
+    [{ default_attr with ... }] rather than naming every field. *)
 type attr = {
   fg : color;
   bg : color;
+  ul : color;                    (** underline color *)
   bold : bool;
-  dim : bool;
+  dim : bool;                    (** SGR 2 faint *)
+  italic : italic_style;
+  underline : underline_style;
   reverse : bool;
-  underline : bool;
+  strikethrough : bool;
+  conceal : bool;
+  overline : bool;
+  blink : blink_style;
+  frame : frame_style;
+  script : script_style;
+  font : int;                    (** 0 = primary, 1..9 = alt fonts *)
+  spacing : bool;                (** SGR 26 proportional *)
 }
 
 val default_attr : attr
