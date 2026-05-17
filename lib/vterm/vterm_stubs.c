@@ -184,58 +184,61 @@ CAMLprim value caml_vterm_prepare_rows(value v)
   return Val_int(vterm_prepare_rows(vt));
 }
 
-/* Helper: convert a struct gr color to an OCaml Grid.color value.
+/* Helper: convert a struct gr color word to an OCaml Grid.color value.
    Grid.color = Default | Basic of int | Color256 of int
               | TrueColor of int * int * int
-   Tags: Default=0, Basic=0(block), Color256=1(block), TrueColor=2(block) */
-static value gr_color_to_ocaml(uint32 raw, uint32 mode)
+   Tags: Default=0, Basic=0(block), Color256=1(block), TrueColor=2(block).
+
+   The color word's mode bits (24..25) discriminate:
+     00 = default (value bits unused)
+     01 = 16-color   (Basic 0..15 — bright colors are first-class here)
+     10 = 256-color
+     11 = 24-bit RGB */
+static value gr_color_to_ocaml(uint32 c)
 {
   CAMLparam0();
   CAMLlocal1(v);
-  uint32 color = raw & GR_CLR_MASK;
-
-  switch (mode >> GR_MD_BITS) {
-  case 0: /* 16-color */
-    if (color == DEFAULT_COLOR) {
-      CAMLreturn(Val_int(0)); /* Default */
-    } else {
-      v = caml_alloc(1, 0); /* Basic */
-      Store_field(v, 0, Val_int(color));
-      CAMLreturn(v);
-    }
-  case 1: /* 256-color */
+  switch (c & GR_MD_MASK) {
+  case 0: /* default */
+    CAMLreturn(Val_int(0));
+  case GR_MD_16:
+    v = caml_alloc(1, 0); /* Basic */
+    Store_field(v, 0, Val_int(c & 0x0fu));
+    CAMLreturn(v);
+  case GR_MD_256:
     v = caml_alloc(1, 1); /* Color256 */
-    Store_field(v, 0, Val_int(color));
+    Store_field(v, 0, Val_int(c & 0xffu));
     CAMLreturn(v);
-  case 2: /* 24-bit */
+  case GR_MD_24:
     v = caml_alloc(3, 2); /* TrueColor */
-    Store_field(v, 0, Val_int((color >> 16) & 0xff));
-    Store_field(v, 1, Val_int((color >> 8) & 0xff));
-    Store_field(v, 2, Val_int(color & 0xff));
+    Store_field(v, 0, Val_int((c >> 16) & 0xff));
+    Store_field(v, 1, Val_int((c >>  8) & 0xff));
+    Store_field(v, 2, Val_int( c        & 0xff));
     CAMLreturn(v);
-  default:
-    CAMLreturn(Val_int(0)); /* Default */
   }
+  CAMLreturn(Val_int(0));
 }
 
-/* Helper: build a Grid.attr from struct gr */
+/* Helper: build a Grid.attr from struct gr.
+   Grid.attr only carries fg/bg/bold/dim/reverse/underline today; the
+   richer state (italic, strikethrough, ul color, etc.) is dropped here
+   and surfaces only once Grid.attr is extended. */
 static value gr_to_attr(struct gr g)
 {
   CAMLparam0();
   CAMLlocal3(v_attr, v_fg, v_bg);
-  uint32 attrb = gr_attrb(g);
 
-  v_fg = gr_color_to_ocaml(g.fg, g.fg & GR_MD_MASK);
-  v_bg = gr_color_to_ocaml(g.bg, g.bg & GR_MD_MASK);
+  v_fg = gr_color_to_ocaml(g.fg);
+  v_bg = gr_color_to_ocaml(g.bg);
 
   /* Grid.attr = { fg; bg; bold; dim; reverse; underline } */
   v_attr = caml_alloc(6, 0);
   Store_field(v_attr, 0, v_fg);
   Store_field(v_attr, 1, v_bg);
-  Store_field(v_attr, 2, Val_bool(attrb & ATTRB_BD));
-  Store_field(v_attr, 3, Val_bool(attrb & ATTRB_DM));
-  Store_field(v_attr, 4, Val_bool(attrb & ATTRB_IN));
-  Store_field(v_attr, 5, Val_bool(attrb & ATTRB_UL));
+  Store_field(v_attr, 2, Val_bool(a_get(g.a, BOLD)));
+  Store_field(v_attr, 3, Val_bool(a_get(g.a, FAINT)));
+  Store_field(v_attr, 4, Val_bool(a_get(g.a, INVERSE)));
+  Store_field(v_attr, 5, Val_bool(a_get(g.a, UNDERLINE)));
 
   CAMLreturn(v_attr);
 }

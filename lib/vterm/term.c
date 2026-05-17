@@ -27,7 +27,7 @@
 
 #define default_cell { 0x20u, default_gr_w1 }
 
-#define GR_BG_IS_DEF(g) ( gr_eff_bg(g) == DEFAULT_COLOR )
+#define GR_BG_IS_DEF(g) ( gr_eff_bg(g) == 0u )
 
 /*----------------------------------------------------------------------------
   Cells
@@ -40,110 +40,224 @@ static unsigned cells_col(unsigned col,
   return col;
 }
 
+/* Returns a synthetic uint32 representing the color that would actually be
+   rendered for this gr's trailing fill area (the EOL nl_gr bg).
+   Layout matches the color-word format:
+     mode 00, value 0      = default bg
+     mode 01, value 0..15  = 16-color (bright variant baked in when applicable)
+     mode 10, value N      = 256-color
+     mode 11, value RGB    = 24-bit RGB
+   Plus an internal sentinel:
+     bit 31 set            = "default fg color as bg" (inverse + default fg).
+   GR_BG_IS_DEF checks for the all-zero return.
+
+   When inverse is set, the fg color is used as bg, and the standard
+   bold-→-bright-fg interaction is applied (16-color 0..7 + bold → 8..15). */
 static uint32 gr_eff_bg(struct gr gr)
 {
-  if(gr_attrb(gr) & ATTRB_IN) {
-    uint32 bg = gr.fg & GR_MD_CLR_MASK ;
-    if( (gr.fg & GR_MD_MASK) == 0 ) {
-      if( bg == DEFAULT_COLOR )
-        bg |= (uint32)ATTRB_IN << GR_ATTRB_BITS;
-      else if( gr_attrb(gr) & ATTRB_BD )
-        bg |= (uint32)ATTRB_BL << GR_ATTRB_BITS;
-    }
-    return bg;
+  uint32 c;
+  if(a_get(gr.a, INVERSE)) {
+    c = gr.fg;
+    if((c & GR_MD_MASK) == 0) return 1u<<31; /* default fg sentinel */
+    if((c & GR_MD_MASK) == GR_MD_16 && a_get(gr.a, BOLD))
+      c = GR_MD_16 | (8u | (c & 0x07u));
   } else {
-    uint32 bg = gr.bg & GR_MD_CLR_MASK ;
-    if( (gr.bg & GR_MD_MASK) == 0
-        && bg != DEFAULT_COLOR
-        && (gr_attrb(gr) & ATTRB_BL) )
-      bg |= (uint32)ATTRB_BL << GR_ATTRB_BITS;
-    return bg;
+    c = gr.bg;
   }
+  return c;
 }
 
+/* Emit the minimum wire bytes such that, after decoding, the running gr's
+   gr_eff_bg matches new's gr_eff_bg. Used for nl_gr at EOL — only the bg
+   matters for trailing fill, plus the inverse attribute and (in the
+   default-fg-as-bg case) fg=default. */
+
+/* Helper: figure out the target attribute SHORT-mask bits given a desired
+   effective bg. We need:
+     - INVERSE on iff bg is the synthetic default-fg sentinel
+     - BOLD/STRIKETHROUGH/etc don't affect bg, but clearing them is harmless
+       and lets us emit a single ENC_ATTRB(SHORT, 0) for the common case. */
 static unsigned gr_encode_bg_count(struct gr old, struct gr new)
 {
-  uint32 bg = gr_eff_bg(new);
-  if(bg==gr_eff_bg(old)) return 0;
-  else if((bg & GR_MD_MASK) == 0) {
-    return (bg>>GR_ATTRB_BITS) != (gr_attrb(old) & (ATTRB_IN|ATTRB_BL))
-           ? 4 : 2;
-  } else if(bg & GR_MD_256) return 2;
-  else                      return 4;
+  uint32 nbg = gr_eff_bg(new);
+  if(nbg == gr_eff_bg(old)) return 0;
+
+  unsigned count = 0;
+  uint32 want_short = (nbg & (1u<<31)) ? A_INVERSE_MASK : 0u;
+
+  /* attribute change in SHORT: emit ENC_ATTRB if low 8 bits differ */
+  if(((old.a ^ want_short) & A_SHORT_MASK) != 0) count += 2;
+
+  if(nbg & (1u<<31)) {
+    /* case B: need decoder fg == 0 too */
+    if(old.fg != 0) count += 1; /* ENC_FG_DEF */
+  } else {
+    /* case A/C/D/E: emit bg token if old.bg doesn't already match */
+    if(old.bg != nbg) {
+      switch(nbg & GR_MD_MASK) {
+      case 0:        count += 1; break; /* ENC_BG_DEF */
+      case GR_MD_16: count += 2; break; /* ENC_BG_16  */
+      case GR_MD_256:count += 2; break; /* ENC_BG_256 */
+      case GR_MD_24: count += 4; break; /* ENC_BG_24  */
+      }
+    }
+  }
+  return count;
 }
 
 static uchar *gr_encode_bg(uchar *restrict out, struct gr old, struct gr new)
 {
-  uint32 bg = gr_eff_bg(new);
-  if(bg==gr_eff_bg(old)) return out;
-  else if((bg & GR_MD_MASK) == 0) {
-    uchar at = bg>>GR_ATTRB_BITS;
-    if( at != (gr_attrb(old) & (ATTRB_IN|ATTRB_BL)) )
-      *out++ = ENC_ATTRB, *out++ = at;
-    *out++ = ENC_CLR_16, *out++ = (bg & 0x0fu)<<4 | SAME_COLOR;
-  } else if(bg & GR_MD_256)
-    *out++ = ENC_BG_256, *out++ = bg & 0xffu;
-  else if(bg & GR_MD_24)
-    *out++ = ENC_BG_24,
-    *out++ = (bg >> 16) & 0xffu,
-    *out++ = (bg >>  8) & 0xffu,
-    *out++ = (bg >>  0) & 0xffu;
+  uint32 nbg = gr_eff_bg(new);
+  if(nbg == gr_eff_bg(old)) return out;
+
+  uint32 want_short = (nbg & (1u<<31)) ? A_INVERSE_MASK : 0u;
+
+  if(((old.a ^ want_short) & A_SHORT_MASK) != 0)
+    *out++ = ENC_ATTRB, *out++ = (uchar)want_short;
+
+  if(nbg & (1u<<31)) {
+    if(old.fg != 0) *out++ = ENC_FG_DEF;
+  } else if(old.bg != nbg) {
+    switch(nbg & GR_MD_MASK) {
+    case 0:        *out++ = ENC_BG_DEF; break;
+    case GR_MD_16: *out++ = ENC_BG_16,  *out++ = nbg & 0x0fu;       break;
+    case GR_MD_256:*out++ = ENC_BG_256, *out++ = nbg & 0xffu;       break;
+    case GR_MD_24: *out++ = ENC_BG_24,
+                   *out++ = (nbg >> 16) & 0xffu,
+                   *out++ = (nbg >>  8) & 0xffu,
+                   *out++ = (nbg >>  0) & 0xffu;                    break;
+    }
+  }
   return out;
 }
 
 
+/* Compute byte cost of emitting the gr-tokens needed to transition the
+   decoder's running state from old to new. fg/bg/ul/attribute all considered.
+   Width bits are excluded (per-cell, not rendition). */
+
+/* per-channel byte cost for a color word change to value `new`. */
+static unsigned gr_encode_clr_count(uint32 new)
+{
+  switch(new & GR_MD_MASK) {
+  case 0:         return 1; /* ENC_xx_DEF */
+  case GR_MD_16:  return 2; /* ENC_xx_16  */
+  case GR_MD_256: return 2; /* ENC_xx_256 */
+  case GR_MD_24:  return 4; /* ENC_xx_24  */
+  }
+  return 0;
+}
+
 static unsigned gr_encode_count(struct gr old, struct gr new)
 {
-  unsigned at=0,c16=0,fg=0,bg=0;
-  if( !gr_ne(old,new) ) return 0;
-  if( (new.fg & GR_ATTRB_MASK) != (old.fg & GR_ATTRB_MASK) ) at=2;
-  if( gr_fg_full(new)!=gr_fg_full(old) ) {
-    switch(gr_fg_mode(new)) {
-    case 0: c16=2; break;
-    case 1: fg=2; break;
-    case 2: fg=4; break;
-    }
+  unsigned count = 0;
+  uint32 a_diff = (new.a ^ old.a) & A_WIRE_MASK;
+  int fg_chg = (new.fg != old.fg);
+  int bg_chg = (new.bg != old.bg);
+  int ul_chg = (new.ul != old.ul);
+
+  if(a_diff) {
+    if(a_diff & ~A_SHORT_MASK) {
+      if(a_diff & ~A_MID_MASK) count += 4; /* ENC_ATTRB3 */
+      else                     count += 3; /* ENC_ATTRB2 */
+    } else                     count += 2; /* ENC_ATTRB  */
   }
-  if( gr_bg_full(new)!=gr_bg_full(old) ) {
-    switch(gr_bg_mode(new)) {
-    case 0: c16=2; break;
-    case 1: bg=2; break;
-    case 2: bg=4; break;
-    }
+
+  /* Packed ENC_CLR_16 shortcut: both fg and bg change to 16-color mode */
+  if(fg_chg && bg_chg
+     && (new.fg & GR_MD_MASK) == GR_MD_16
+     && (new.bg & GR_MD_MASK) == GR_MD_16) {
+    count += 2; /* ENC_CLR_16 */
+  } else {
+    if(fg_chg) count += gr_encode_clr_count(new.fg);
+    if(bg_chg) count += gr_encode_clr_count(new.bg);
   }
-  return at+c16+fg+bg;
+
+  if(ul_chg) count += gr_encode_clr_count(new.ul);
+
+  return count;
+}
+
+/* per-channel emit. Caller already verified the channel actually changed. */
+static uchar *emit_fg(uchar *restrict out, uint32 c)
+{
+  switch(c & GR_MD_MASK) {
+  case 0:         *out++ = ENC_FG_DEF; break;
+  case GR_MD_16:  *out++ = ENC_FG_16,  *out++ = c & 0x0fu; break;
+  case GR_MD_256: *out++ = ENC_FG_256, *out++ = c & 0xffu; break;
+  case GR_MD_24:  *out++ = ENC_FG_24,
+                  *out++ = (c >> 16) & 0xffu,
+                  *out++ = (c >>  8) & 0xffu,
+                  *out++ = (c >>  0) & 0xffu; break;
+  }
+  return out;
+}
+static uchar *emit_bg(uchar *restrict out, uint32 c)
+{
+  switch(c & GR_MD_MASK) {
+  case 0:         *out++ = ENC_BG_DEF; break;
+  case GR_MD_16:  *out++ = ENC_BG_16,  *out++ = c & 0x0fu; break;
+  case GR_MD_256: *out++ = ENC_BG_256, *out++ = c & 0xffu; break;
+  case GR_MD_24:  *out++ = ENC_BG_24,
+                  *out++ = (c >> 16) & 0xffu,
+                  *out++ = (c >>  8) & 0xffu,
+                  *out++ = (c >>  0) & 0xffu; break;
+  }
+  return out;
+}
+static uchar *emit_ul(uchar *restrict out, uint32 c)
+{
+  switch(c & GR_MD_MASK) {
+  case 0:         *out++ = ENC_UL_DEF; break;
+  /* ul has no 16-color mode (SGR 58 only takes :5: or :2:), but accept it
+     defensively if produced */
+  case GR_MD_16:  *out++ = ENC_UL_256, *out++ = c & 0x0fu; break;
+  case GR_MD_256: *out++ = ENC_UL_256, *out++ = c & 0xffu; break;
+  case GR_MD_24:  *out++ = ENC_UL_24,
+                  *out++ = (c >> 16) & 0xffu,
+                  *out++ = (c >>  8) & 0xffu,
+                  *out++ = (c >>  0) & 0xffu; break;
+  }
+  return out;
 }
 
 static uchar *gr_encode(uchar *restrict out, struct gr old, struct gr new)
 {
-  uchar f16 = SAME_COLOR, b16 = SAME_COLOR; 
-  if( (new.fg & GR_ATTRB_MASK) != (old.fg & GR_ATTRB_MASK) )
-    *out++ = ENC_ATTRB, *out++ = gr_attrb(new);
-  if( gr_fg_full(new)!=gr_fg_full(old) ) {
-    switch(gr_fg_mode(new)) {
-    case 0: f16=gr_fg(new); break;
-    case 1: *out++ = ENC_FG_256, *out++ = gr_fg(new); break;
-    case 2: *out++ = ENC_FG_24,
-            *out++ = (gr_fg(new) >> 16) & 0xffu,
-            *out++ = (gr_fg(new) >>  8) & 0xffu,
-            *out++ = (gr_fg(new) >>  0) & 0xffu;
-            break;
+  uint32 a_diff = (new.a ^ old.a) & A_WIRE_MASK;
+  int fg_chg = (new.fg != old.fg);
+  int bg_chg = (new.bg != old.bg);
+  int ul_chg = (new.ul != old.ul);
+
+  if(a_diff) {
+    if(a_diff & ~A_SHORT_MASK) {
+      if(a_diff & ~A_MID_MASK) {
+        *out++ = ENC_ATTRB3;
+        *out++ =  new.a        & 0xffu;
+        *out++ = (new.a >>  8) & 0xffu;
+        *out++ = (new.a >> 16) & 0x3fu;
+      } else {
+        *out++ = ENC_ATTRB2;
+        *out++ =  new.a        & 0xffu;
+        *out++ = (new.a >>  8) & 0xffu;
+      }
+    } else {
+      *out++ = ENC_ATTRB;
+      *out++ =  new.a        & 0xffu;
     }
   }
-  if( gr_bg_full(new)!=gr_bg_full(old) ) {
-    switch(gr_bg_mode(new)) {
-    case 0: b16=gr_bg(new); break;
-    case 1: *out++ = ENC_BG_256, *out++ = gr_bg(new); break;
-    case 2: *out++ = ENC_BG_24,
-            *out++ = (gr_bg(new) >> 16) & 0xffu,
-            *out++ = (gr_bg(new) >>  8) & 0xffu,
-            *out++ = (gr_bg(new) >>  0) & 0xffu;
-            break;
-    }
+
+  if(fg_chg && bg_chg
+     && (new.fg & GR_MD_MASK) == GR_MD_16
+     && (new.bg & GR_MD_MASK) == GR_MD_16) {
+    *out++ = ENC_CLR_16;
+    *out++ = (uchar)( ((new.fg & 0x0fu) << 4) | (new.bg & 0x0fu) );
+  } else {
+    if(fg_chg) out = emit_fg(out, new.fg);
+    if(bg_chg) out = emit_bg(out, new.bg);
   }
-  b16 = (b16<<4) | f16;
-  if(b16 != ((SAME_COLOR<<4)|SAME_COLOR))
-    *out++ = ENC_CLR_16, *out++ = b16;
+
+  if(ul_chg) out = emit_ul(out, new.ul);
+
   return out;
 }
 
@@ -179,7 +293,7 @@ static unsigned cells_encode_count(
     count += utf8_bytes(c->code);
     c+=step;
   }
-  gr.bg &= GR_MD_CLR_MASK;
+  gr.a &= ~A_WIDTH_MASK; /* width is per-cell, not rendition state */
   *gr_st = gr;
   return count;
 }
@@ -1081,54 +1195,74 @@ static void cf_cursor_move(struct term *restrict const t,
 static void cf_SGR(struct term *restrict const t,
   const int *restrict p, unsigned n)
 {
-  const struct gr def = default_gr;
-  if(n==0) { t->cursor.gr = def; return; }
+  if(n==0) { t->cursor.gr = default_gr; return; }
   do {
     switch(*p) {
     case -1:
-    case 0 : t->cursor.gr=def;             break;
-    case 1 : add_gr_attrb(t->cursor.gr, ATTRB_BD); break;
-    case 2 : add_gr_attrb(t->cursor.gr, ATTRB_DM); break;
-    case 4 : add_gr_attrb(t->cursor.gr, ATTRB_UL); break;
-    case 5 : add_gr_attrb(t->cursor.gr, ATTRB_BL); break;
-    case 7 : add_gr_attrb(t->cursor.gr, ATTRB_IN); break;
-    case 22: del_gr_attrb(t->cursor.gr, ATTRB_BD|ATTRB_DM); break;
-    case 24: del_gr_attrb(t->cursor.gr, ATTRB_UL); break;
-    case 25: del_gr_attrb(t->cursor.gr, ATTRB_BL); break;
-    case 27: del_gr_attrb(t->cursor.gr, ATTRB_IN); break;
-    case 30: case 31: case 32: case 33: case 34: case 35: case 36: case 37:
-    case 39:
-      t->cursor.gr.fg = (t->cursor.gr.fg & ~(uint32)GR_MD_CLR_MASK) | (*p-30);
-      break;
-    case 90: case 91: case 92: case 93: case 94: case 95: case 96: case 97:
-      t->cursor.gr.fg = (t->cursor.gr.fg & ~(uint32)GR_MD_CLR_MASK)
-                      | GR_MD_256 | 8 | (*p-90);
-      break;
-    case 40: case 41: case 42: case 43: case 44: case 45:
-    case 46: case 47: case 49:
-      t->cursor.gr.bg = (*p-40);
-      break;
+    case 0:  t->cursor.gr = default_gr;                       break;
+    case 1:  a_set(t->cursor.gr.a, BOLD, 1);                  break;
+    case 2:  a_set(t->cursor.gr.a, FAINT, 1);                 break;
+    case 3:  a_set(t->cursor.gr.a, ITALIC, 1);                break;
+    case 4:  a_set(t->cursor.gr.a, UNDERLINE, 1);             break;
+    case 5:  a_set(t->cursor.gr.a, BLINK, 1);                 break;
+    case 6:  a_set(t->cursor.gr.a, BLINK, 2);                 break;
+    case 7:  a_set(t->cursor.gr.a, INVERSE, 1);               break;
+    case 8:  a_set(t->cursor.gr.a, CONCEAL, 1);               break;
+    case 9:  a_set(t->cursor.gr.a, STRIKETHROUGH, 1);         break;
+    case 20: a_set(t->cursor.gr.a, ITALIC, 2);                break; /* Fraktur */
+    case 21: a_set(t->cursor.gr.a, UNDERLINE, 2);             break; /* double */
+    case 22: a_set(t->cursor.gr.a, BOLD,  0);
+             a_set(t->cursor.gr.a, FAINT, 0);                 break;
+    case 23: a_set(t->cursor.gr.a, ITALIC, 0);                break;
+    case 24: a_set(t->cursor.gr.a, UNDERLINE, 0);             break;
+    case 25: a_set(t->cursor.gr.a, BLINK, 0);                 break;
+    case 26: a_set(t->cursor.gr.a, SPACING, 1);               break;
+    case 27: a_set(t->cursor.gr.a, INVERSE, 0);               break;
+    case 28: a_set(t->cursor.gr.a, CONCEAL, 0);               break;
+    case 29: a_set(t->cursor.gr.a, STRIKETHROUGH, 0);         break;
+    case 30: case 31: case 32: case 33:
+    case 34: case 35: case 36: case 37:
+      t->cursor.gr.fg = GR_MD_16 | (*p - 30);                 break;
+    case 39: t->cursor.gr.fg = 0;                             break;
+    case 40: case 41: case 42: case 43:
+    case 44: case 45: case 46: case 47:
+      t->cursor.gr.bg = GR_MD_16 | (*p - 40);                 break;
+    case 49: t->cursor.gr.bg = 0;                             break;
+    case 50: a_set(t->cursor.gr.a, SPACING, 0);               break;
+    case 51: a_set(t->cursor.gr.a, FRAME, 1);                 break;
+    case 52: a_set(t->cursor.gr.a, FRAME, 2);                 break;
+    case 53: a_set(t->cursor.gr.a, OVERLINE, 1);              break;
+    case 54: a_set(t->cursor.gr.a, FRAME, 0);                 break;
+    case 55: a_set(t->cursor.gr.a, OVERLINE, 0);              break;
+    case 59: t->cursor.gr.ul = 0;                             break;
+    case 73: a_set(t->cursor.gr.a, SCRIPT, 1);                break;
+    case 74: a_set(t->cursor.gr.a, SCRIPT, 2);                break;
+    case 75: a_set(t->cursor.gr.a, SCRIPT, 0);                break;
+    case 90: case 91: case 92: case 93:
+    case 94: case 95: case 96: case 97:
+      t->cursor.gr.fg = GR_MD_16 | (8 + (*p - 90));           break;
     case 100: case 101: case 102: case 103:
     case 104: case 105: case 106: case 107:
-      t->cursor.gr.bg = GR_MD_256 | 8 | (*p-100);
-      break;
-    case 38: case 48: {
-        uint32 *clr = *p==38 ? &t->cursor.gr.fg : &t->cursor.gr.bg;
-        uint32 at = (*clr & ~(uint32)GR_MD_CLR_MASK);
+      t->cursor.gr.bg = GR_MD_16 | (8 + (*p - 100));          break;
+    case 38: case 48: case 58: {
+        uint32 *clr = *p==38 ? &t->cursor.gr.fg
+                    : *p==48 ? &t->cursor.gr.bg
+                             : &t->cursor.gr.ul;
         ++p, --n; if(n<2) return;
         switch(*p) {
-        case 5: ++p, --n; if(*p < 0 || 255 < *p) return;
-          *clr = at | GR_MD_256 | *p ;
+        case 5: ++p, --n; if(*p<0 || 255<*p) return;
+          *clr = GR_MD_256 | (uint32)*p;
           break;
         case 2: ++p, --n;
           if(n<3 || p[0]<0 || 255<p[0]
                  || p[1]<0 || 255<p[1]
                  || p[2]<0 || 255<p[2]) return;
-          *clr = at | GR_MD_24 | (uint32)p[0]<<16 | (uint32)p[1]<<8 | p[2];
+          *clr = GR_MD_24
+               | (uint32)p[0]<<16 | (uint32)p[1]<<8 | (uint32)p[2];
           p+=2, n-=2;
           break;
         }
-      }  
+      } break;
     }
     ++p;
   } while(--n);

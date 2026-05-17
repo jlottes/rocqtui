@@ -19,7 +19,7 @@ struct vterm_cell {
 struct cursor_pos {
   int on_screen;
   int x,y, w;
-  uchar attrb;
+  uint32 attrb;     /* gr.a — full 22-bit rendition state plus width bits */
   int mode;
   union {
     const struct cell *cell;

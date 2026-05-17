@@ -43,7 +43,7 @@ static struct layout_state layout_cells(
     if(w && x>=xmax) break;
     if(cursor&&v->t.cursor.col>=col&&v->t.cursor.col<col+(unsigned)w) {
       struct cursor_pos *restrict const cp = &v->layout.cursor_pos;
-      cursor=0, cp->on_screen=1, cp->attrb=gr_attrb(cell->gr),
+      cursor=0, cp->on_screen=1, cp->attrb=cell->gr.a,
       cp->x=x, cp->y=y, cp->w=w,
       cp->mode=cell->code==ENC_TAB?2:0, cp->pos.cell = cell,
       cp->max = n+1, cp->step=step;
@@ -75,7 +75,7 @@ static struct layout_state layout_enc_cells(
       if(w && x>=xmax) break;
       if(cursor&&v->t.cursor.col>=st.col&&v->t.cursor.col< st.col+w) {
         struct cursor_pos *restrict const cp = &v->layout.cursor_pos;
-        cursor=0, cp->on_screen=1, cp->attrb=gr_attrb(st.gr),
+        cursor=0, cp->on_screen=1, cp->attrb=st.gr.a,
         cp->x=x, cp->y=y, cp->w=w,
         cp->mode=(r.c==ENC_TAB?2:1),
         cp->pos.c = start+old_i, cp->max = max-old_i;
