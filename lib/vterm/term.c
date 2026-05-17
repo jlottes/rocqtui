@@ -67,26 +67,47 @@ static uint32 gr_eff_bg(struct gr gr)
   return c;
 }
 
-/* Emit the minimum wire bytes such that, after decoding, the running gr's
-   gr_eff_bg matches new's gr_eff_bg. Used for nl_gr at EOL — only the bg
-   matters for trailing fill, plus the inverse attribute and (in the
-   default-fg-as-bg case) fg=default. */
+/* nl_gr is "bg-only": its canonical representation has fg=0, ul=0, and
+   wire-format attribute bits all clear except possibly INVERSE.
+     - Default bg:        {fg=0, bg=0, ul=0, a=0}
+     - Specific bg:       {fg=0, bg=eff_bg_color, ul=0, a=0}
+     - Default fg as bg:  {fg=0, bg=0, ul=0, a=INVERSE}
+   Apply this to every line.nl_gr assignment so active-line and scrolled-back
+   nl_gr look the same to a client. The cells_decode path also normalizes the
+   running gr at EOL, so wire-format bytes from any source are canonicalized. */
+static inline struct gr nl_gr_normalize(struct gr g)
+{
+  uint32 eff = gr_eff_bg(g);
+  struct gr out = default_gr_ilzr;
+  if(eff & (1u<<31)) a_set(out.a, INVERSE, 1);
+  else               out.bg = eff;
+  return out;
+}
 
-/* Helper: figure out the target attribute SHORT-mask bits given a desired
-   effective bg. We need:
-     - INVERSE on iff bg is the synthetic default-fg sentinel
-     - BOLD/STRIKETHROUGH/etc don't affect bg, but clearing them is harmless
-       and lets us emit a single ENC_ATTRB(SHORT, 0) for the common case. */
+/* Emit the minimum wire bytes such that, after decoding, the running gr's
+   gr_eff_bg matches new's gr_eff_bg, AND the running gr's wire-format
+   attribute bits are cleared except for INVERSE (which is set iff the
+   target is the default-fg-as-bg case).
+
+   nl_gr semantically represents the bg color of the trailing fill only;
+   other attribute bits (underline, italic, strikethrough, faint, etc.)
+   are stripped at EOL so that scrolled-back lines and active lines look
+   the same to a client inspecting nl_gr. */
 static unsigned gr_encode_bg_count(struct gr old, struct gr new)
 {
   uint32 nbg = gr_eff_bg(new);
   if(nbg == gr_eff_bg(old)) return 0;
 
   unsigned count = 0;
-  uint32 want_short = (nbg & (1u<<31)) ? A_INVERSE_MASK : 0u;
+  uint32 want_a = (nbg & (1u<<31)) ? A_INVERSE_MASK : 0u;
+  uint32 a_diff = (old.a ^ want_a) & A_WIRE_MASK;
 
-  /* attribute change in SHORT: emit ENC_ATTRB if low 8 bits differ */
-  if(((old.a ^ want_short) & A_SHORT_MASK) != 0) count += 2;
+  if(a_diff) {
+    if(a_diff & ~A_SHORT_MASK) {
+      if(a_diff & ~A_MID_MASK) count += 4; /* ENC_ATTRB3 */
+      else                     count += 3; /* ENC_ATTRB2 */
+    } else                     count += 2; /* ENC_ATTRB  */
+  }
 
   if(nbg & (1u<<31)) {
     /* case B: need decoder fg == 0 too */
@@ -110,10 +131,26 @@ static uchar *gr_encode_bg(uchar *restrict out, struct gr old, struct gr new)
   uint32 nbg = gr_eff_bg(new);
   if(nbg == gr_eff_bg(old)) return out;
 
-  uint32 want_short = (nbg & (1u<<31)) ? A_INVERSE_MASK : 0u;
+  uint32 want_a = (nbg & (1u<<31)) ? A_INVERSE_MASK : 0u;
+  uint32 a_diff = (old.a ^ want_a) & A_WIRE_MASK;
 
-  if(((old.a ^ want_short) & A_SHORT_MASK) != 0)
-    *out++ = ENC_ATTRB, *out++ = (uchar)want_short;
+  if(a_diff) {
+    if(a_diff & ~A_SHORT_MASK) {
+      if(a_diff & ~A_MID_MASK) {
+        *out++ = ENC_ATTRB3;
+        *out++ =  want_a        & 0xffu;
+        *out++ = (want_a >>  8) & 0xffu;
+        *out++ = (want_a >> 16) & 0x3fu;
+      } else {
+        *out++ = ENC_ATTRB2;
+        *out++ =  want_a        & 0xffu;
+        *out++ = (want_a >>  8) & 0xffu;
+      }
+    } else {
+      *out++ = ENC_ATTRB;
+      *out++ =  want_a        & 0xffu;
+    }
+  }
 
   if(nbg & (1u<<31)) {
     if(old.fg != 0) *out++ = ENC_FG_DEF;
@@ -392,7 +429,7 @@ static void cells_decode(
   line->beg.n = out-start;
   line->end.n = 0;
   line->col = col;
-  line->nl_gr = gr;
+  line->nl_gr = nl_gr_normalize(gr);
   line_invariant(line);
 }
 
@@ -473,7 +510,7 @@ static inline void line_erase_right(struct line *restrict const line, int w,
   max -= line->col;
   if(w>=max) {
     line->end.n = 0;
-    line->nl_gr = gr;
+    line->nl_gr = nl_gr_normalize(gr);
   } else {
     line_del_right(line,w);
     if(line->end.n || gr_eff_bg(line->nl_gr) != gr_eff_bg(gr)) {
@@ -494,7 +531,7 @@ static inline void line_erase_left(struct line *restrict const line,
 
 static inline void line_clear(struct line *restrict const line, struct gr gr)
 {
-  line_reset(line); line->nl_gr = gr;
+  line_reset(line); line->nl_gr = nl_gr_normalize(gr);
   line_invariant(line);
 }
 
@@ -1064,7 +1101,7 @@ static void cf_LF(struct term *restrict const t)
   } else if(t->cursor.row+1==(unsigned)t->h-(t->mt+t->mb)) {
     struct line *line;
     --t->line_row, line = synch_row(t);
-    line_reset(line); line->nl_gr = t->cursor.gr;
+    line_reset(line); line->nl_gr = nl_gr_normalize(t->cursor.gr);
     if(t->alt_screen && (int)t->buf.beg.lines.n > 2*t->h)
       truncate_beg(t);
   } else
@@ -1080,7 +1117,7 @@ static void cf_RI(struct term *restrict const t)
   } else if(t->cursor.row==0) {
     struct line *line;
     ++t->line_row, line = synch_row(t);
-    line_reset(line); line->nl_gr = t->cursor.gr;
+    line_reset(line); line->nl_gr = nl_gr_normalize(t->cursor.gr);
   } else
     --t->cursor.row;
 }
@@ -1275,7 +1312,8 @@ static void cf_EL(struct term *restrict const t, int *param, int n)
   struct line *restrict line;
   switch(p) {
     case 0:
-      line=synch_pos(t,1); line->end.n=0; line->nl_gr = t->cursor.gr;
+      line=synch_pos(t,1); line->end.n=0;
+      line->nl_gr = nl_gr_normalize(t->cursor.gr);
       break;
     case 1:
       line=synch_pos(t,1);
