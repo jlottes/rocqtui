@@ -163,4 +163,36 @@ let () =
   assert (big.cells.(1).(9).text = "Z");  (* out of rect — unchanged *)
   Printf.printf "OK: set_cell_in_rect ignores out-of-rect col\n";
 
+  (* --- Extended SGR emission --- *)
+  let emit prev curr =
+    let buf = Stdlib.Buffer.create 32 in
+    Grid.emit_attr buf prev curr;
+    Stdlib.Buffer.contents buf
+  in
+  let d = Grid.default_attr in
+  (* Italic on/off *)
+  assert (emit d { d with italic = Grid.Italic_on } = "\x1b[3m");
+  (* Strikethrough *)
+  assert (emit d { d with strikethrough = true } = "\x1b[9m");
+  (* Conceal *)
+  assert (emit d { d with conceal = true } = "\x1b[8m");
+  (* Overline *)
+  assert (emit d { d with overline = true } = "\x1b[53m");
+  (* Curly underline + RGB underline color (LSP diagnostic style) *)
+  let curly_red = { d with underline = Grid.UL_curly;
+                           ul = Grid.TrueColor (255, 0, 0) } in
+  assert (emit d curly_red = "\x1b[4:3;58;2;255;0;0m");
+  (* Curly red -> default uses reset path (underline turns off) *)
+  assert (emit curly_red d = "\x1b[0m");
+  (* Blink slow / rapid *)
+  assert (emit d { d with blink = Grid.Blink_slow } = "\x1b[5m");
+  assert (emit d { d with blink = Grid.Blink_rapid } = "\x1b[6m");
+  (* Italic -> Fraktur: both non-none, delta path, just emit the new on-code *)
+  assert (emit { d with italic = Grid.Italic_on }
+               { d with italic = Grid.Italic_fraktur } = "\x1b[20m");
+  (* Underline single -> double: delta path *)
+  assert (emit { d with underline = Grid.UL_single }
+               { d with underline = Grid.UL_double } = "\x1b[21m");
+  Printf.printf "OK: extended SGR emission (italic/strike/curly/ul/blink)\n";
+
   Printf.printf "All grid tests passed.\n"

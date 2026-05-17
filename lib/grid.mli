@@ -127,6 +127,10 @@ val decode_utf8 : string -> int -> int * int
 (** Display width of a Unicode codepoint (via wcwidth). *)
 val wcwidth : int -> int
 
+(** Emit SGR escape sequence(s) for the transition from [prev] to [curr].
+    Emits nothing if [prev = curr]. Exposed primarily for testing. *)
+val emit_attr : Stdlib.Buffer.t -> attr -> attr -> unit
+
 (** Generate ANSI escape sequences for changed cells (diff rendering). *)
 val diff : prev:t -> curr:t -> Stdlib.Buffer.t -> unit
 

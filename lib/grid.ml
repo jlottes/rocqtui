@@ -353,6 +353,52 @@ let sgr_of_color is_fg = function
     if is_fg then Printf.sprintf "38;2;%d;%d;%d" r g b
     else Printf.sprintf "48;2;%d;%d;%d" r g b
 
+(* Underline color uses SGR 58 (256-color via 58;5;n, RGB via 58;2;r;g;b)
+   and SGR 59 for reset. There is no 16-color variant of SGR 58, so we
+   promote [Basic n] into the first 16 entries of the 256-color palette,
+   which match the 16-color palette by convention. *)
+let sgr_of_ul_color = function
+  | Default -> "59"
+  | Basic n -> Printf.sprintf "58;5;%d" n
+  | Color256 n -> Printf.sprintf "58;5;%d" n
+  | TrueColor (r, g, b) -> Printf.sprintf "58;2;%d;%d;%d" r g b
+
+(* Per-slot "turn on" SGRs. None means the slot is at its default state
+   (off / none / 0) — no SGR needed to set it from a fresh-reset baseline.
+   Curly / dotted / dashed underline use the colon-syntax sub-parameter
+   form; there is no semicolon-only fallback for these. *)
+let sgr_italic_on = function
+  | Italic_none -> None
+  | Italic_on -> Some "3"
+  | Italic_fraktur -> Some "20"
+
+let sgr_underline_on = function
+  | UL_none -> None
+  | UL_single -> Some "4"
+  | UL_double -> Some "21"
+  | UL_curly -> Some "4:3"
+  | UL_dotted -> Some "4:4"
+  | UL_dashed -> Some "4:5"
+
+let sgr_blink_on = function
+  | Blink_none -> None
+  | Blink_slow -> Some "5"
+  | Blink_rapid -> Some "6"
+
+let sgr_frame_on = function
+  | Frame_none -> None
+  | Frame_box -> Some "51"
+  | Frame_circle -> Some "52"
+
+let sgr_script_on = function
+  | Script_none -> None
+  | Script_super -> Some "73"
+  | Script_sub -> Some "74"
+
+let sgr_font_on n =
+  if n <= 0 || n > 9 then None
+  else Some (string_of_int (10 + n))
+
 (* Workaround for mosh dropping SGR 2 (dim): substitute a darker fg.
    Default and palette fgs collapse to a fixed mid-gray since we can't
    introspect the user's terminal palette; TrueColor scales properly. *)
@@ -367,40 +413,78 @@ let effective_attr attr =
     { attr with dim = false; fg = mosh_dim_color attr.fg }
   else attr
 
-(* Emit SGR sequence for an attribute change *)
+(* Emit SGR sequence for an attribute change.
+
+   Strategy: if any slot transitioned to its "off" state we emit a full
+   reset (\e[0m) and re-emit everything that's on. Otherwise we emit
+   only the deltas. Reset-and-rebuild is more verbose but avoids the
+   tangle of off-codes that share bits — e.g. SGR 22 turns off both
+   bold and dim. *)
 let emit_attr buf prev_attr attr =
   let prev_attr = effective_attr prev_attr in
   let attr = effective_attr attr in
   if prev_attr = attr then ()
   else begin
-    let underlined a = a.underline <> UL_none in
     let parts = ref [] in
-    (* Reset if any attribute was turned off *)
+    let push s = parts := s :: !parts in
+    let push_opt = function Some s -> push s | None -> () in
+    (* Any slot transitioning to its "off" state requires a reset *)
     let needs_reset =
       (prev_attr.bold && not attr.bold)
       || (prev_attr.dim && not attr.dim)
       || (prev_attr.reverse && not attr.reverse)
-      || (underlined prev_attr && not (underlined attr))
+      || (prev_attr.strikethrough && not attr.strikethrough)
+      || (prev_attr.conceal && not attr.conceal)
+      || (prev_attr.overline && not attr.overline)
+      || (prev_attr.spacing && not attr.spacing)
+      || (prev_attr.italic <> Italic_none && attr.italic = Italic_none)
+      || (prev_attr.underline <> UL_none && attr.underline = UL_none)
+      || (prev_attr.blink <> Blink_none && attr.blink = Blink_none)
+      || (prev_attr.frame <> Frame_none && attr.frame = Frame_none)
+      || (prev_attr.script <> Script_none && attr.script = Script_none)
+      || (prev_attr.font <> 0 && attr.font = 0)
     in
     if needs_reset then begin
-      parts := ["0"];
-      (* After reset, re-emit everything that's on *)
-      if attr.bold then parts := "1" :: !parts;
-      if attr.dim then parts := "2" :: !parts;
-      if underlined attr then parts := "4" :: !parts;
-      if attr.reverse then parts := "7" :: !parts;
-      if attr.fg <> Default then parts := sgr_of_color true attr.fg :: !parts;
-      if attr.bg <> Default then parts := sgr_of_color false attr.bg :: !parts;
+      push "0";
+      if attr.bold then push "1";
+      if attr.dim then push "2";
+      push_opt (sgr_italic_on attr.italic);
+      push_opt (sgr_underline_on attr.underline);
+      if attr.reverse then push "7";
+      if attr.conceal then push "8";
+      if attr.strikethrough then push "9";
+      push_opt (sgr_blink_on attr.blink);
+      push_opt (sgr_frame_on attr.frame);
+      if attr.overline then push "53";
+      push_opt (sgr_script_on attr.script);
+      push_opt (sgr_font_on attr.font);
+      if attr.spacing then push "26";
+      if attr.fg <> Default then push (sgr_of_color true attr.fg);
+      if attr.bg <> Default then push (sgr_of_color false attr.bg);
+      if attr.ul <> Default then push (sgr_of_ul_color attr.ul);
     end else begin
-      if attr.bold && not prev_attr.bold then parts := "1" :: !parts;
-      if attr.dim && not prev_attr.dim then parts := "2" :: !parts;
-      if underlined attr && not (underlined prev_attr) then
-        parts := "4" :: !parts;
-      if attr.reverse && not prev_attr.reverse then parts := "7" :: !parts;
-      if attr.fg <> prev_attr.fg then
-        parts := sgr_of_color true attr.fg :: !parts;
-      if attr.bg <> prev_attr.bg then
-        parts := sgr_of_color false attr.bg :: !parts;
+      if attr.bold && not prev_attr.bold then push "1";
+      if attr.dim && not prev_attr.dim then push "2";
+      if attr.italic <> prev_attr.italic then
+        push_opt (sgr_italic_on attr.italic);
+      if attr.underline <> prev_attr.underline then
+        push_opt (sgr_underline_on attr.underline);
+      if attr.reverse && not prev_attr.reverse then push "7";
+      if attr.conceal && not prev_attr.conceal then push "8";
+      if attr.strikethrough && not prev_attr.strikethrough then push "9";
+      if attr.blink <> prev_attr.blink then
+        push_opt (sgr_blink_on attr.blink);
+      if attr.frame <> prev_attr.frame then
+        push_opt (sgr_frame_on attr.frame);
+      if attr.overline && not prev_attr.overline then push "53";
+      if attr.script <> prev_attr.script then
+        push_opt (sgr_script_on attr.script);
+      if attr.font <> prev_attr.font then
+        push_opt (sgr_font_on attr.font);
+      if attr.spacing && not prev_attr.spacing then push "26";
+      if attr.fg <> prev_attr.fg then push (sgr_of_color true attr.fg);
+      if attr.bg <> prev_attr.bg then push (sgr_of_color false attr.bg);
+      if attr.ul <> prev_attr.ul then push (sgr_of_ul_color attr.ul);
     end;
     if !parts <> [] then begin
       Stdlib.Buffer.add_string buf "\x1b[";
