@@ -96,11 +96,11 @@ static inline struct gr nl_gr_normalize(struct gr g)
 static unsigned gr_encode_bg_count(struct gr old, struct gr new)
 {
   uint32 nbg = gr_eff_bg(new);
-  if(nbg == gr_eff_bg(old)) return 0;
-
-  unsigned count = 0;
   uint32 want_a = (nbg & (1u<<31)) ? A_INVERSE_MASK : 0u;
   uint32 a_diff = (old.a ^ want_a) & A_WIRE_MASK;
+  if(a_diff == 0 && nbg == gr_eff_bg(old)) return 0;
+
+  unsigned count = 0;
 
   if(a_diff) {
     if(a_diff & ~A_SHORT_MASK) {
@@ -129,10 +129,9 @@ static unsigned gr_encode_bg_count(struct gr old, struct gr new)
 static uchar *gr_encode_bg(uchar *restrict out, struct gr old, struct gr new)
 {
   uint32 nbg = gr_eff_bg(new);
-  if(nbg == gr_eff_bg(old)) return out;
-
   uint32 want_a = (nbg & (1u<<31)) ? A_INVERSE_MASK : 0u;
   uint32 a_diff = (old.a ^ want_a) & A_WIRE_MASK;
+  if(a_diff == 0 && nbg == gr_eff_bg(old)) return out;
 
   if(a_diff) {
     if(a_diff & ~A_SHORT_MASK) {
