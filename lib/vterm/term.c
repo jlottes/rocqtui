@@ -1227,19 +1227,48 @@ static void cf_cursor_move(struct term *restrict const t,
   }
 }
 
-/* Select Graphic Rendition (SGR) : ESC [ Ps... m    (Ps=0) */
+/* Select Graphic Rendition (SGR) : ESC [ Ps... m    (Ps=0)
+
+   Subparameter syntax (ECMA-48 / ITU T.416 / xterm CTLSEQS):
+     `Ps; Ps; ...`   ';' separates top-level SGR parameters
+     `Ps: Ps: ...`   ':' marks each Ps as a subparameter of the prior top-level
+   sub[i]=1 iff param[i] was preceded by ':'.
+
+   SGRs that consume subparameters:
+     4 : Ps    underline style (Ps in 0..5; none/single/double/curly/dotted/dashed)
+     38 :   extended fg color  (5:N indexed; 2:[CS:]R:G:B 24-bit RGB)
+     48 :   extended bg color  (same)
+     58 :   extended ul color  (same)
+   38/48/58 also accept the legacy ';' form: 38;5;N and 38;2;R;G;B */
 static void cf_SGR(struct term *restrict const t,
-  const int *restrict p, unsigned n)
+  const int *restrict param, const uchar *restrict sub, unsigned n)
 {
+  unsigned i;
   if(n==0) { t->cursor.gr = default_gr; return; }
-  do {
-    switch(*p) {
+  for(i=0; i<n; ) {
+    unsigned consumed = 1;
+    /* Orphan subparam (preceded by ':' but the prior SGR didn't consume it):
+       per spec, ignore. */
+    if(sub[i]) { ++i; continue; }
+    switch(param[i]) {
     case -1:
     case 0:  t->cursor.gr = default_gr;                       break;
     case 1:  a_set(t->cursor.gr.a, BOLD, 1);                  break;
     case 2:  a_set(t->cursor.gr.a, FAINT, 1);                 break;
     case 3:  a_set(t->cursor.gr.a, ITALIC, 1);                break;
-    case 4:  a_set(t->cursor.gr.a, UNDERLINE, 1);             break;
+    case 4:
+      /* Default form (no subparam): single underline.
+         Subparam form 4:n: style = n, clamped to 0..5. */
+      if(i+1 < n && sub[i+1]) {
+        int s = param[i+1];
+        if(s < 0)      s = 0;  /* empty subparam → off */
+        else if(s > 5) s = 1;  /* unknown style → single */
+        a_set(t->cursor.gr.a, UNDERLINE, s);
+        consumed = 2;
+        while(i+consumed < n && sub[i+consumed]) ++consumed;
+      } else
+        a_set(t->cursor.gr.a, UNDERLINE, 1);
+      break;
     case 5:  a_set(t->cursor.gr.a, BLINK, 1);                 break;
     case 6:  a_set(t->cursor.gr.a, BLINK, 2);                 break;
     case 7:  a_set(t->cursor.gr.a, INVERSE, 1);               break;
@@ -1258,11 +1287,11 @@ static void cf_SGR(struct term *restrict const t,
     case 29: a_set(t->cursor.gr.a, STRIKETHROUGH, 0);         break;
     case 30: case 31: case 32: case 33:
     case 34: case 35: case 36: case 37:
-      t->cursor.gr.fg = GR_MD_16 | (*p - 30);                 break;
+      t->cursor.gr.fg = GR_MD_16 | (param[i] - 30);           break;
     case 39: t->cursor.gr.fg = 0;                             break;
     case 40: case 41: case 42: case 43:
     case 44: case 45: case 46: case 47:
-      t->cursor.gr.bg = GR_MD_16 | (*p - 40);                 break;
+      t->cursor.gr.bg = GR_MD_16 | (param[i] - 40);           break;
     case 49: t->cursor.gr.bg = 0;                             break;
     case 50: a_set(t->cursor.gr.a, SPACING, 0);               break;
     case 51: a_set(t->cursor.gr.a, FRAME, 1);                 break;
@@ -1276,32 +1305,59 @@ static void cf_SGR(struct term *restrict const t,
     case 75: a_set(t->cursor.gr.a, SCRIPT, 0);                break;
     case 90: case 91: case 92: case 93:
     case 94: case 95: case 96: case 97:
-      t->cursor.gr.fg = GR_MD_16 | (8 + (*p - 90));           break;
+      t->cursor.gr.fg = GR_MD_16 | (8 + (param[i] - 90));     break;
     case 100: case 101: case 102: case 103:
     case 104: case 105: case 106: case 107:
-      t->cursor.gr.bg = GR_MD_16 | (8 + (*p - 100));          break;
+      t->cursor.gr.bg = GR_MD_16 | (8 + (param[i] - 100));    break;
     case 38: case 48: case 58: {
-        uint32 *clr = *p==38 ? &t->cursor.gr.fg
-                    : *p==48 ? &t->cursor.gr.bg
-                             : &t->cursor.gr.ul;
-        ++p, --n; if(n<2) return;
-        switch(*p) {
-        case 5: ++p, --n; if(*p<0 || 255<*p) return;
-          *clr = GR_MD_256 | (uint32)*p;
-          break;
-        case 2: ++p, --n;
-          if(n<3 || p[0]<0 || 255<p[0]
-                 || p[1]<0 || 255<p[1]
-                 || p[2]<0 || 255<p[2]) return;
-          *clr = GR_MD_24
-               | (uint32)p[0]<<16 | (uint32)p[1]<<8 | (uint32)p[2];
-          p+=2, n-=2;
-          break;
+        uint32 *clr = param[i]==38 ? &t->cursor.gr.fg
+                    : param[i]==48 ? &t->cursor.gr.bg
+                                  : &t->cursor.gr.ul;
+        if(i+1 < n && sub[i+1]) {
+          /* Colon subparam form: 38:type:... */
+          unsigned subn = 1; /* count subparams including the type marker */
+          while(i+1+subn < n && sub[i+1+subn]) ++subn;
+          if(subn >= 1) {
+            int type = param[i+1];
+            if(type == 5 && subn >= 2) {
+              int idx = param[i+2];
+              if(idx >= 0 && idx <= 255)
+                *clr = GR_MD_256 | (uint32)idx;
+            } else if(type == 2 && subn >= 4) {
+              /* subn==4: sloppy 2:R:G:B.   RGB at param[i+2..i+4].
+                 subn>=5: strict 2:CS:R:G:B (or with trailing tolerance
+                          subparams).      RGB at param[i+3..i+5]. */
+              unsigned r_pos = (subn == 4) ? i+2 : i+3;
+              int R = param[r_pos], G = param[r_pos+1], B = param[r_pos+2];
+              if(R>=0 && R<=255 && G>=0 && G<=255 && B>=0 && B<=255)
+                *clr = GR_MD_24
+                     | (uint32)R<<16 | (uint32)G<<8 | (uint32)B;
+            }
+          }
+          consumed = 1 + subn;
+        } else {
+          /* Legacy semicolon form: 38;5;N or 38;2;R;G;B */
+          if(i+1 >= n) return;
+          int type = param[i+1];
+          if(type == 5) {
+            if(i+2 >= n) return;
+            int idx = param[i+2];
+            if(idx < 0 || idx > 255) return;
+            *clr = GR_MD_256 | (uint32)idx;
+            consumed = 3;
+          } else if(type == 2) {
+            if(i+4 >= n) return;
+            int R = param[i+2], G = param[i+3], B = param[i+4];
+            if(R<0 || R>255 || G<0 || G>255 || B<0 || B>255) return;
+            *clr = GR_MD_24 | (uint32)R<<16 | (uint32)G<<8 | (uint32)B;
+            consumed = 5;
+          } else
+            consumed = 2; /* unknown type — skip the marker */
         }
       } break;
     }
-    ++p;
-  } while(--n);
+    i += consumed;
+  }
 }
 
 /* Erase in Line (EL) : ESC [ Ps K    (Ps=0) */
@@ -1741,23 +1797,39 @@ static void cf_kitty_kb_pop(struct term *restrict const t,
   }
 }
 
-static int parse_CSI(const uchar *restrict str, int *restrict param)
+/* CSI parameter parser. Recognizes both ';' (top-level separator) and
+   ':' (subparameter separator) per ECMA-48 / ITU T.416. param[i] gets the
+   integer value (-1 if empty); sub[i] is 1 iff param[i] was preceded by ':'
+   (i.e. is a subparameter of the preceding top-level param) and 0 if it was
+   preceded by ';' or is the first param. */
+#define CSI_MAX_PARAMS (MAX_ESCAPE/2)
+static int parse_CSI(const uchar *restrict str,
+                     int *restrict param, uchar *restrict sub)
 {
   int n=0;
-  param[0]=-1;
+  param[0]=-1, sub[0]=0;
   for(;;) {
     uchar c=*str++;
     switch(c) {
     case 0: return n+(param[n]==-1?0:1);
-    case ';': ++n, param[n]=-1; break;
-    default: param[n]=param[n]==-1?(c-'0'):param[n]*10+(c-'0'); break;
+    case ';':
+    case ':':
+      if(n+1 >= CSI_MAX_PARAMS) return n+(param[n]==-1?0:1);
+      ++n, param[n]=-1, sub[n]=(c==':');
+      break;
+    default:
+      if(c>='0' && c<='9')
+        param[n]=param[n]==-1?(c-'0'):param[n]*10+(c-'0');
+      /* else: silently ignore unexpected byte */
+      break;
     }
   }
 }
 
 static void proc_CSI_final(struct term *restrict const t, const uchar c)
 {
-  static int param[MAX_ESCAPE/2];
+  static int param[CSI_MAX_PARAMS];
+  static uchar sub[CSI_MAX_PARAMS];
   int dec=0, n;
   const uchar *restrict str = esc_buf(t);
        if(*str=='?') dec=1,++str;
@@ -1765,7 +1837,7 @@ static void proc_CSI_final(struct term *restrict const t, const uchar c)
   else if(*str=='=') dec=3,++str;
   else if(*str=='>') dec=4,++str;
   else if(*str=='<') dec=5,++str;
-  n=parse_CSI(str,param);
+  n=parse_CSI(str,param,sub);
 #if PRINT_ESC
   printf("ESC [ %s %c\n",esc_buf(t),c);
 #endif
@@ -1786,7 +1858,7 @@ static void proc_CSI_final(struct term *restrict const t, const uchar c)
       case 'X': cf_ECH(t,param,n); break;
       case 'h': cf_SM (t,param,n); break;
       case 'l': cf_RM (t,param,n); break;
-      case 'm': cf_SGR(t,param,n); break;
+      case 'm': cf_SGR(t,param,sub,n); break;
       case 'n': cf_DSR(t,param,n); break;
       case 'r': cf_DECSTBM(t,param,n); break;
       case 's': cf_DECSC(t); break;
