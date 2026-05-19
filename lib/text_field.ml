@@ -1,8 +1,11 @@
 (* Single-line text editing buffer shared by the search prompt, the
-   rename prompt, and (eventually) other modal text inputs. Holds
-   the contents and a byte-offset cursor; consumers do their own
-   rendering and decide where to place the hardware cursor (using
-   [cursor]). Focus is managed by the consumer, not the field. *)
+   rename prompt, and (eventually) other modal text inputs. Stores
+   contents as a string and the cursor as a byte offset; the byte
+   cursor is maintained on a UTF-8 codepoint boundary by [Utf8.prev]/
+   [next] (motion, deletion) and [Utf8.encode] (insertion always
+   produces a complete codepoint). Consumers do their own rendering
+   and place the hardware cursor via [cursor_col]. Focus is managed by
+   the consumer, not the field. *)
 
 type t = {
   mutable contents : string;
@@ -11,22 +14,23 @@ type t = {
 
 let clamp_cursor s i = max 0 (min i (String.length s))
 
-let create ?(contents = "") ?cursor () =
-  let cursor = match cursor with
+let create ?(contents = "") ?cursor_byte () =
+  let cursor = match cursor_byte with
     | Some c -> clamp_cursor contents c
     | None -> String.length contents in
   { contents; cursor }
 
 let contents t = t.contents
-let cursor t = t.cursor
+let cursor_byte t = t.cursor
+let cursor_col t = Utf8.byte_to_col t.contents t.cursor
 
-let set_contents ?cursor t s =
+let set_contents ?cursor_byte t s =
   t.contents <- s;
-  t.cursor <- (match cursor with
+  t.cursor <- (match cursor_byte with
     | Some c -> clamp_cursor s c
     | None -> String.length s)
 
-let set_cursor t i = t.cursor <- clamp_cursor t.contents i
+let set_cursor_byte t i = t.cursor <- clamp_cursor t.contents i
 
 let insert t s =
   let len = String.length t.contents in
@@ -34,10 +38,6 @@ let insert t s =
   let after = String.sub t.contents t.cursor (len - t.cursor) in
   t.contents <- before ^ s ^ after;
   t.cursor <- t.cursor + String.length s
-
-(* Cursor motion and deletion respect UTF-8 codepoint boundaries via
-   [Utf8.prev]/[Utf8.next] — important for users typing multi-byte
-   characters through the compose layer. *)
 
 let delete_back t =
   if t.cursor > 0 then begin

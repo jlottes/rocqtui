@@ -681,8 +681,8 @@ let render_search_panel (ctx : Editor_context.t) (tab : Tab.t) r =
       let q_text = Text_field.contents q.query in
       let r_text = Text_field.contents q.replacement in
       let cursor = match q.focus with
-        | Search.Find -> Text_field.cursor q.query
-        | Search.Replace -> Text_field.cursor q.replacement in
+        | Search.Find -> Text_field.cursor_col q.query
+        | Search.Replace -> Text_field.cursor_col q.replacement in
       q_text, r_text, q.focus, cursor,
       count, idx,
       Search.is_case_insensitive ~query:q_text ~flags:q.flags,
@@ -802,7 +802,7 @@ let update_status (ctx : Editor_context.t) r (tab : Tab.t) =
     (* Hardware cursor: column-1 origin matches the indent inside
        set_status_line_styled. *)
     Render.place_cursor_status r ~row_from_bottom:0
-      ~col:(1 + String.length label + Text_field.cursor rp.field)
+      ~col:(1 + String.length label + Text_field.cursor_col rp.field)
   | Some (Modal.SaveAsPrompt sp) ->
     let attrs = Theme.attrs () in
     let base = attrs.ga_status in
@@ -815,7 +815,7 @@ let update_status (ctx : Editor_context.t) r (tab : Tab.t) =
       "    Enter:Save  ESC:Cancel", base;
     ];
     Render.place_cursor_status r ~row_from_bottom:0
-      ~col:(1 + String.length label + Text_field.cursor sp.field)
+      ~col:(1 + String.length label + Text_field.cursor_col sp.field)
   | _ ->
   if is_help ctx then
     Render.set_status r
