@@ -784,8 +784,7 @@ let handle_tool t client name args mgr =
     ]])
   | "interrupt" ->
     (match tab.session with
-     | Some s ->
-       (try Unix.kill (Session.pid s) Sys.sigint with _ -> ())
+     | Some s -> Session.interrupt s
      | None -> ());
     (false, `Assoc ["content", `List [
       `Assoc ["type", `String "text"; "text", `String "OK"]

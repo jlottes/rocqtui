@@ -102,10 +102,17 @@ type fetch_op_state = {
 (* In-flight rewind to [ros_target_id]. On Good, sentences whose
    state_id is "above" target_id are dropped (their state was
    rolled back by rocq). On Fail, [safe_id] tells us where rocq
-   actually landed and we drop accordingly. *)
+   actually landed and we drop accordingly.
+
+   [ros_retry_drained] guards against infinite retries on the
+   [Fail (Stateid.dummy, …)] branch: if we already re-issued
+   [edit_at] once (defensively, in case a leftover [Sys.Break]
+   absorbed the previous call without moving coqtop), a second
+   dummy-Fail falls back to a local-only trim. *)
 type rewinding_op_state = {
   ros_target_id : Stateid.t;
   ros_pending : Interface.edit_at_rty Rocq_protocol.handle;
+  ros_retry_drained : bool;
 }
 
 type op_state =
@@ -461,14 +468,34 @@ let target_id_for_target_end t =
   in
   walk t.sentences
 
-(* Begin a rewind op: issue [edit_at target_id] and stash it. *)
-let start_rewinding t target_id =
+(* Begin a rewind op: issue [edit_at target_id] and stash it.
+   [retry_drained=true] marks this as the one-shot defensive retry
+   after a prior [Fail (Stateid.dummy, …)]; see [advance_rewinding_op]. *)
+let start_rewinding ?(retry_drained=false) t target_id =
   let pending = Rocq_protocol.submit t.rocq (Xmlprotocol.edit_at target_id) in
   t.current_op <- Some (Op_rewinding {
     ros_target_id = target_id;
     ros_pending = pending;
+    ros_retry_drained = retry_drained;
   });
   t.state_changed <- true
+
+(* Compute (trimmed_sentences, tip) for the contiguous Verified
+   suffix of [t.sentences] (the most-we-can-be-sure-of fallback). *)
+let verified_suffix_trim t =
+  let oldest_first = List.rev t.sentences in
+  let rec take_verified = function
+    | s :: rest
+      when (match s.status with Verified -> true | _ -> false) ->
+      s :: take_verified rest
+    | _ -> []
+  in
+  let trimmed = List.rev (take_verified oldest_first) in
+  let tip = match trimmed with
+    | s :: _ -> s.state_id
+    | [] -> Stateid.initial
+  in
+  (trimmed, tip)
 
 let advance_rewinding_op t r =
   match Rocq_protocol.poll_response r.ros_pending with
@@ -479,37 +506,45 @@ let advance_rewinding_op t r =
      | Interface.Good _ ->
        t.sentences <- drop_above_state r.ros_target_id t.sentences;
        t.tip <- r.ros_target_id;
-       t.goals_dirty <- true
+       t.target_end <- verified_end t;
+       t.goals_dirty <- true;
+       t.current_op <- None
      | Interface.Fail (safe_id, _, msg) ->
-       t.msgs <- t.msgs @ [Pp.(str "Undo failed: " ++ msg)];
        if not (Stateid.equal safe_id Stateid.dummy) then begin
          (* Rocq landed at safe_id instead. Drop above it. *)
+         t.msgs <- t.msgs @ [Pp.(str "Undo failed: " ++ msg)];
          t.sentences <- drop_above_state safe_id t.sentences;
-         t.tip <- safe_id
+         t.tip <- safe_id;
+         t.target_end <- verified_end t;
+         t.goals_dirty <- true;
+         t.current_op <- None
+       end else if not r.ros_retry_drained then begin
+         (* Rocq couldn't tell us a safe state. This often means a
+            leftover [Sys.Break] was consumed by [check_for_interrupt]
+            before [edit_at] could run — so coqtop's [VCS.cur_tip]
+            hasn't actually moved. Compute a conservative target
+            (the verified-suffix tip) and re-issue [edit_at] once;
+            with [Control.interrupt] now clear, the call should run
+            for real. The retry flag prevents an infinite loop if
+            coqtop is genuinely wedged (e.g. universe-binding errors
+            that legitimately block undo). Don't surface the
+            transient Fail to the user — if the retry succeeds, the
+            "Undo failed" message would be misleading. *)
+         let (_, trim_target) = verified_suffix_trim t in
+         start_rewinding ~retry_drained:true t trim_target
        end else begin
-         (* Rocq couldn't tell us a safe state. If we leave Error
-            sentences in [t.sentences], [has_error] stays true and
-            [dispatch_idle_work] will issue the same rewind again
-            forever (e.g. universe-binding errors that block undo).
-            Trim the stack to its contiguous Verified suffix — the
-            most we can be sure of — so the loop terminates. The
-            user can step manually if they want to recover further. *)
-         let oldest_first = List.rev t.sentences in
-         let rec take_verified = function
-           | s :: rest
-             when (match s.status with Verified -> true | _ -> false) ->
-             s :: take_verified rest
-           | _ -> []
-         in
-         t.sentences <- List.rev (take_verified oldest_first);
-         t.tip <- (match t.sentences with
-                   | s :: _ -> s.state_id
-                   | [] -> Stateid.initial)
-       end;
-       (* Snap target up to where we ended up so we don't loop. *)
-       t.target_end <- verified_end t;
-       t.goals_dirty <- true);
-    t.current_op <- None;
+         (* Retry also failed with no safe_id. Last resort: trim
+            locally so [has_error] clears and [dispatch_idle_work]
+            doesn't keep looping. The user may need to step
+            manually to recover. *)
+         t.msgs <- t.msgs @ [Pp.(str "Undo failed: " ++ msg)];
+         let (trimmed, tip) = verified_suffix_trim t in
+         t.sentences <- trimmed;
+         t.tip <- tip;
+         t.target_end <- verified_end t;
+         t.goals_dirty <- true;
+         t.current_op <- None
+       end);
     t.state_changed <- true
 
 (* Find the OLDEST errored sentence (deepest in the most-recent-first
@@ -892,6 +927,24 @@ let sync_options_and_refresh t =
   t.state_changed <- true
 
 let pid t = Rocq_protocol.pid t.rocq
+
+(* Send SIGINT to rocqtop and immediately enqueue a Status call.
+   Rationale: when the signal arrives between interruptible calls in
+   coqtop's main thread (e.g. async-proof workers are running the
+   slow work), the handler sets [Control.interrupt := true] without
+   raising — and the flag stays poisoned until some later call's
+   [check_for_interrupt] consumes it by raising [Sys.Break]. If the
+   next call to land there is our own [edit_at] (issued by the
+   error-recovery rewind), it fails with [Fail (Stateid.dummy, …)]
+   without actually moving coqtop's tip, leaving our [t.tip] and
+   coqtop's [VCS.cur_tip] out of sync. The status call acts as a
+   benign drain: it absorbs the leftover [Sys.Break] so subsequent
+   ops run cleanly. Response is discarded — Fail is expected when
+   draining, and Good is informational only. *)
+let interrupt t =
+  (try Unix.kill (Rocq_protocol.pid t.rocq) Sys.sigint with _ -> ());
+  let _ = Rocq_protocol.submit t.rocq (Xmlprotocol.status false) in
+  ()
 
 let quit t =
   (try Rocq_protocol.quit t.rocq with _ -> ())

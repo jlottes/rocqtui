@@ -60,6 +60,12 @@ val is_busy : t -> bool
 val is_busy_opt : t option -> bool
 val pid : t -> int
 
+(** Interrupt the running rocqtop. Sends SIGINT and enqueues a
+    benign drain call so a leftover [Control.interrupt] in coqtop's
+    main thread (set when the signal arrives between interruptible
+    calls) doesn't trip the next [edit_at] / [Add]. *)
+val interrupt : t -> unit
+
 (** Mark this session as having a user-initiated step in flight.
     Call before {!step_forward}/{!step_backward}/{!go_to_offset}/
     {!go_to_cursor} when the step originates from a user action

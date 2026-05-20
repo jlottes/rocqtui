@@ -252,7 +252,7 @@ let handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r =
     end
     else if Keymatch.match_binding ev Keys.interrupt then begin
       (match session with
-       | Some s -> (try Unix.kill (Session.pid s) Sys.sigint with _ -> ())
+       | Some s -> Session.interrupt s
        | None -> ());
       Some Continue
     end
