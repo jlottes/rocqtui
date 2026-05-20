@@ -3,6 +3,11 @@
 
 open Rocqtui_lib
 
+(* cursor_col uses wcwidth, which only classifies non-ASCII codepoints
+   correctly once a UTF-8 locale is in effect. *)
+external setlocale : int -> string -> string = "caml_curses_setlocale"
+let () = ignore (setlocale 0 "")
+
 let check name cond =
   if cond then Printf.printf "OK: %s\n" name
   else (Printf.printf "FAIL: %s\n" name; exit 1)
