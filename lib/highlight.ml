@@ -124,7 +124,7 @@ let tactics = List.fold_left (fun s x -> SS.add x s) SS.empty [
 let vernac_keywords = List.fold_left (fun s x -> SS.add x s) SS.empty [
   "Theorem"; "Lemma"; "Definition"; "Fixpoint"; "CoFixpoint";
   "Inductive"; "CoInductive"; "Record"; "Structure"; "Module"; "Section";
-  "End"; "Require"; "Import"; "Export"; "Open"; "Scope";
+  "End"; "Require"; "Import"; "Export"; "Open"; "Close"; "Scope";
   "Notation"; "Infix"; "Set"; "Unset"; "Check"; "Print"; "Compute";
   "Eval"; "Search"; "About"; "Proof"; "Qed"; "Defined"; "Admitted";
   "Abort"; "Let"; "Example"; "Fact"; "Corollary"; "Proposition";
