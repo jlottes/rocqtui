@@ -169,6 +169,10 @@ let fill t pane ~row ~col ~width ch attr =
 let chgat t pane ~row ~col ~width attr =
   Grid.chgat_in_rect t.curr (rect_of_pane t pane) ~row ~col ~width attr
 
+let set_underline t pane ~row ~col ~width ~style ~color =
+  Grid.set_underline_in_rect t.curr (rect_of_pane t pane)
+    ~row ~col ~width ~style ~color
+
 (* Clear a pane — content panes use theme default, UI panes use their own *)
 let clear_pane t pane =
   let attr = match pane with

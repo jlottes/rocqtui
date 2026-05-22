@@ -245,6 +245,15 @@ let chgat g ~row ~col ~width attr =
       g.cells.(row).(c).attr <- attr
     done
 
+(* Overlay just the underline style and underline color on a row region,
+   leaving every other attribute slot (fg/bg/bold/italic/...) alone. *)
+let set_underline g ~row ~col ~width ~style ~color =
+  if row >= 0 && row < g.rows then
+    for c = max 0 col to min (col + width - 1) (g.cols - 1) do
+      let cell = g.cells.(row).(c) in
+      cell.attr <- { cell.attr with underline = style; ul = color }
+    done
+
 (* --- Rect-aware drawing primitives --- *)
 
 (* All [_in_rect] functions take rect-relative coordinates and clip
@@ -312,6 +321,16 @@ let chgat_in_rect g rect ~row ~col ~width attr =
     if abs_col_start <= abs_col_end then
       chgat g ~row:abs_row ~col:abs_col_start
         ~width:(abs_col_end - abs_col_start + 1) attr
+
+let set_underline_in_rect g rect ~row ~col ~width ~style ~color =
+  if row >= 0 && row < rect.height then
+    let abs_row = rect.row + row in
+    let abs_col_start = max (rect.col + col) rect.col in
+    let abs_col_end =
+      min (rect.col + col + width - 1) (rect.col + rect.width - 1) in
+    if abs_col_start <= abs_col_end then
+      set_underline g ~row:abs_row ~col:abs_col_start
+        ~width:(abs_col_end - abs_col_start + 1) ~style ~color
 
 let clear_rect g rect ~attr =
   clear_region g ~row:rect.row ~col:rect.col

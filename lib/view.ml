@@ -598,6 +598,43 @@ let render_script (ctx : Editor_context.t) r (tab : Tab.t) =
      | Some (a_pos, b_pos) ->
        overlay_range a_pos (a_pos + 1) a.ga_paren_match;
        overlay_range b_pos (b_pos + 1) a.ga_paren_match);
+  (* Curly underline on build-error / warning ranges. Layered last so
+     it survives every prior overlay; only the underline + ul color
+     slots are touched, so fg/bg from syntax and sentence status are
+     preserved. *)
+  (match buf_filename with
+   | None -> ()
+   | Some f ->
+     let line_count = Buffer.line_count buf in
+     List.iter (fun (e : Build_errors.entry) ->
+       let line_idx = e.line - 1 in
+       let row = line_idx - scroll in
+       if row >= 0 && row < rows && line_idx >= 0 && line_idx < line_count
+       then begin
+         let line = Buffer.get_line buf line_idx in
+         let line_len = String.length line in
+         let bs = max 0 (min e.col_start line_len) in
+         let be = max bs (min e.col_end line_len) in
+         (* Cosmetic: if Rocq points at zero-width position (cs = ce),
+            still mark one column so the user sees something. *)
+         let be = if be = bs && bs < line_len then bs + 1 else be in
+         let scol = Utf8.byte_to_col line bs - hscroll in
+         let ecol = Utf8.byte_to_col line be - hscroll in
+         let scol = max 0 scol in
+         let ecol = min content_cols ecol in
+         let w = ecol - scol in
+         if w > 0 && scol < content_cols then
+           let color =
+             let attr = match e.severity with
+               | Build_errors.Error -> a.ga_marker_error
+               | Build_errors.Warning -> a.ga_marker_warning
+             in
+             attr.Grid.fg
+           in
+           Render.set_underline r Render.PScript ~row
+             ~col:(gw + scol) ~width:w ~style:Grid.UL_curly ~color
+       end
+     ) (Build_errors.for_file f));
   (* Minimap -- render into the minimap pane *)
   if Render.minimap_width r > 0 then begin
     let mm_rect = Render.pane_rect r Render.PMinimap in

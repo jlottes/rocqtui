@@ -96,6 +96,13 @@ val fill : t -> row:int -> col:int -> width:int -> char -> attr -> unit
 (** Change attributes of a row region without touching the text. *)
 val chgat : t -> row:int -> col:int -> width:int -> attr -> unit
 
+(** Overlay just the underline style and underline color on a row region.
+    Every other attribute slot is preserved, so this layers cleanly on top
+    of cells that already carry syntax / status colors. *)
+val set_underline :
+  t -> row:int -> col:int -> width:int ->
+  style:underline_style -> color:color -> unit
+
 (** Rect-aware drawing. Coordinates are relative to [rect]'s top-left;
     writes are clipped to [rect] so neighbouring panes are never
     touched. Each variant mirrors the corresponding unclipped function.
@@ -112,6 +119,10 @@ val fill_in_rect :
 
 val chgat_in_rect :
   t -> rect -> row:int -> col:int -> width:int -> attr -> unit
+
+val set_underline_in_rect :
+  t -> rect -> row:int -> col:int -> width:int ->
+  style:underline_style -> color:color -> unit
 
 val clear_rect : t -> rect -> attr:attr -> unit
 

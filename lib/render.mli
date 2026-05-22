@@ -29,6 +29,9 @@ val put_str : t -> pane_id -> row:int -> col:int -> string -> Grid.attr -> int
 val set_cell : t -> pane_id -> row:int -> col:int -> string -> Grid.attr -> unit
 val fill : t -> pane_id -> row:int -> col:int -> width:int -> char -> Grid.attr -> unit
 val chgat : t -> pane_id -> row:int -> col:int -> width:int -> Grid.attr -> unit
+val set_underline :
+  t -> pane_id -> row:int -> col:int -> width:int ->
+  style:Grid.underline_style -> color:Grid.color -> unit
 val clear_pane : t -> pane_id -> unit
 
 (** Get pane dimensions (height, width) *)
