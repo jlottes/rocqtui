@@ -43,6 +43,10 @@ val set_current : entry -> unit
 (** Drop all entries and the current index. *)
 val clear : unit -> unit
 
+(** Project-relative .v paths of files with at least one [Error] entry
+    in the current parse. Excludes warning-only files. *)
+val error_files : project_dir:string -> string list
+
 (** Render the Errors-tab body. The active entry (if any) is expanded
     with its full message; others are one-line. Updates an internal
     [row → entry] map used by [lookup_errors_tab_row]. Also returns the

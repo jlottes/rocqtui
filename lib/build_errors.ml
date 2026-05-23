@@ -197,6 +197,32 @@ let clear () =
 (* Cache of the last Errors-tab rendering's row → entry-index map. *)
 let errors_tab_row_to_idx : int array ref = ref [||]
 
+(* Project-relative .v paths of every file with at least one Error
+   entry in the current parse. Excludes warning-only files. Result is
+   deduped, order is first-seen. *)
+let error_files ~project_dir =
+  let seen = Hashtbl.create 8 in
+  let out = ref [] in
+  List.iter (fun e ->
+    if e.severity = Error then begin
+      let rel =
+        let project_dir = Tab.canonical_path project_dir in
+        let prefix = project_dir ^ "/" in
+        let plen = String.length prefix in
+        if String.length e.file >= plen
+           && String.length prefix > 0
+           && String.sub e.file 0 plen = prefix then
+          String.sub e.file plen (String.length e.file - plen)
+        else e.file
+      in
+      if not (Hashtbl.mem seen rel) then begin
+        Hashtbl.add seen rel ();
+        out := rel :: !out
+      end
+    end
+  ) !entries;
+  List.rev !out
+
 let format_relpath ~project_dir path =
   let project_dir = Tab.canonical_path project_dir in
   let prefix = project_dir ^ "/" in

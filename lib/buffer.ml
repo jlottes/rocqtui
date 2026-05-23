@@ -159,6 +159,9 @@ let set_text buf text =
     buf.cur_col <- String.length buf.lines.(buf.cur_line);
   update_desired_vcol buf
 
+let save_hook : (string -> unit) ref = ref (fun _ -> ())
+let on_save f = save_hook := f
+
 let save buf =
   match buf.filename with
   | None -> false
@@ -172,6 +175,7 @@ let save buf =
       close_out oc;
       buf.modified <- false;
       buf.disk_changed <- false;
+      (try !save_hook path with _ -> ());
       true
     with Sys_error _ -> false
 

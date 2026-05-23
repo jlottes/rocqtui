@@ -681,7 +681,30 @@ let render t r ~open_files ~focused =
         let used = Render.put_str r Render.PFileTree ~row ~col:0 text attr in
         if idx = st.selected && used < rect.width then
           Render.fill r Render.PFileTree ~row ~col:used
-            ~width:(rect.width - used) ' ' attr
+            ~width:(rect.width - used) ' ' attr;
+        (* Right-margin build-status marker for .v files. Drawn last so
+           it punches through any selection fill and keeps its own
+           color regardless of the highlighted row. *)
+        if not entry.is_dir
+           && Filename.check_suffix entry.name ".v"
+           && rect.width >= 2
+        then begin
+          let a = Theme.attrs () in
+          let marker = match Build_status.get entry.rel_path with
+            | Build_status.Built_fresh ->
+              Some ("\xe2\x9c\x94", a.ga_marker_success)        (* ✔ *)
+            | Build_status.Build_error ->
+              Some ("\xe2\x9c\x98", a.ga_marker_error)          (* ✘ *)
+            | Build_status.Stale ->
+              Some ("\xe2\x97\x8b", dim_attr)                   (* ○ *)
+            | Build_status.Never_built -> None
+          in
+          match marker with
+          | None -> ()
+          | Some (g, mattr) ->
+            Render.set_cell r Render.PFileTree ~row
+              ~col:(rect.width - 1) g mattr
+        end
       end
     done;
     if filter_visible then begin

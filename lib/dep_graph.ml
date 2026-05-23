@@ -94,6 +94,8 @@ let nodes t = List.rev t.order
 
 let has t path = Hashtbl.mem t.nodes path
 
+let deps t path = neighbours t.reverse path
+
 (* Kahn's algorithm with deterministic tie-breaking by insertion order.
    Tolerates cycles: appends any unsortable remainder at the end so
    the output always covers every node. *)

@@ -19,6 +19,10 @@ val nodes : t -> string list
 
 val has : t -> string -> bool
 
+(** Direct dependencies of [path] — the files mentioned to the right of
+    the [path].vo: ... rule. Returns [[]] for unknown paths. *)
+val deps : t -> string -> string list
+
 (** Project files in dependency order (dependencies before dependents).
     Tie-breaks deterministically by insertion order. Tolerates cycles
     by appending any unsortable remainder in insertion order. *)

@@ -47,6 +47,10 @@ type t = {
   (* Matching paren / bracket highlight *)
   paren_match_bg : color;
   paren_match_fg : color;
+
+  (* "Success" marker — green check used for built-and-fresh files in
+     the file-tree panel. *)
+  marker_success_fg : color;
 }
 
 (** List of available theme names. *)
@@ -98,6 +102,7 @@ type grid_attrs = {
   ga_gutter : Grid.attr;
   ga_marker_error : Grid.attr;
   ga_marker_warning : Grid.attr;
+  ga_marker_success : Grid.attr;
 }
 
 (** Get the current theme's Grid.attr values. *)

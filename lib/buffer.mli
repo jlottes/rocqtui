@@ -16,6 +16,11 @@ val save : t -> bool
 (** Save buffer to a specific file. *)
 val save_as : t -> string -> unit
 
+(** Install a global hook that fires with the saved path after every
+    successful [save] / [save_as]. Most recently-installed callback
+    wins; defaults to a no-op. Exceptions are swallowed. *)
+val on_save : (string -> unit) -> unit
+
 (** Get/set the filename. *)
 val filename : t -> string option
 val set_filename : t -> string -> unit

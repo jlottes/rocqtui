@@ -135,11 +135,25 @@ let () =
   (* Editor context *)
   let fm = File_manager.create () in
   let dr = Dep_runner.create () in
+  let current_project_dir : string option ref = ref None in
   let refresh_dep_runner_for_dir dir =
+    current_project_dir := Some dir;
     match Project.find dir with
     | Some p -> Dep_runner.refresh dr ~project_file:p.path
     | None -> ()
   in
+  let refresh_build_status () =
+    match !current_project_dir, Dep_runner.graph dr with
+    | Some pd, Some g ->
+      let error_files = Build_errors.error_files ~project_dir:pd in
+      Build_status.refresh ~project_dir:pd ~graph:g ~error_files
+    | _ -> ()
+  in
+  (* Saves bump the .v mtime — flip the tree marker to Stale right
+     away rather than waiting for the next build to surface it. *)
+  Buffer.on_save (fun _ ->
+    refresh_build_status ();
+    Render_need.request ());
   let ctx = Editor_context.create
     ~switch_tab:(fun x ->
       match Tab.tab_at_x mgr x with
@@ -359,12 +373,25 @@ let () =
         Render.set_tab_bar r true
     end;
     (* Poll build subprocess *)
+    let was_building = Build.is_running () in
     if Build.poll () then Render_need.request ();
+    if was_building && not (Build.is_running ()) then begin
+      (* Build just finished — refresh parsed errors so the file-tree
+         marker reflects the new state, then recompute per-file
+         build_status. *)
+      (match !current_project_dir with
+       | Some pd -> Build_errors.refresh ~project_dir:pd (Build.output ())
+       | None -> ());
+      refresh_build_status ()
+    end;
     (* Keep redrawing while the build spinner / result indicator is live. *)
     if Build.needs_repaint () then Render_need.request ();
     (* Poll the dep runner; a fresh graph triggers a re-render so the
        panel header transitions from "computing…" to the new state. *)
-    if Dep_runner.poll dr then Render_need.request ();
+    if Dep_runner.poll dr then begin
+      refresh_build_status ();
+      Render_need.request ()
+    end;
     (* Step the project-wide search scanner. Cheap when idle. *)
     if Project_search.step ctx.project_search then Render_need.request ();
     (* Poll file manager *)

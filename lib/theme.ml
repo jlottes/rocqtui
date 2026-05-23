@@ -30,6 +30,11 @@ type t = {
   (* Matching paren / bracket highlight *)
   paren_match_bg : color;
   paren_match_fg : color;
+
+  (* "Success" marker — green check used for built-and-fresh files in
+     the file-tree panel. Paired with [error_bg] (red) and
+     [string_fg] (yellow) for the existing error / warning markers. *)
+  marker_success_fg : color;
 }
 
 (* Shorthand constructors *)
@@ -60,7 +65,7 @@ let sol_magenta = c 125    (* #d33682 *)
 let _sol_violet = c 61     (* #6c71c4 *)
 let sol_blue    = c 33   (* #268bd2 *)
 let sol_cyan    = c 37   (* #2aa198 *)
-let _sol_green  = c 64   (* #859900 *)
+let sol_green  = c 64   (* #859900 *)
 
 let solarized_dark = {
   name = "solarized-dark";
@@ -88,6 +93,7 @@ let solarized_dark = {
   search_current_fg = sol_base03;
   paren_match_bg = sol_base01;
   paren_match_fg = grey_fg;
+  marker_success_fg = sol_green;
 }
 
 let solarized_light = {
@@ -116,6 +122,7 @@ let solarized_light = {
   search_current_fg = sol_base03;
   paren_match_bg = sol_base1;
   paren_match_fg = c 230;
+  marker_success_fg = sol_green;
 }
 
 (* Classic: basic 8-color theme, works on any terminal *)
@@ -145,6 +152,7 @@ let classic = {
   search_current_fg = c 0;  (* black *)
   paren_match_bg = c 5;  (* magenta *)
   paren_match_fg = c 0;  (* black *)
+  marker_success_fg = c 2;  (* green *)
 }
 
 (* Monokai-inspired *)
@@ -174,6 +182,7 @@ let monokai = {
   search_current_fg = c 235;
   paren_match_bg = c 240;
   paren_match_fg = c 255;
+  marker_success_fg = c 148;  (* monokai-ish green *)
 }
 
 (* Nord *)
@@ -203,6 +212,7 @@ let nord = {
   search_current_fg = c 236;
   paren_match_bg = c 60;
   paren_match_fg = c 253;
+  marker_success_fg = c 108;  (* nord aurora green *)
 }
 
 let default = solarized_dark
@@ -259,6 +269,7 @@ type grid_attrs = {
   ga_gutter : Grid.attr;
   ga_marker_error : Grid.attr;
   ga_marker_warning : Grid.attr;
+  ga_marker_success : Grid.attr;
 }
 
 let make_attr ?(bold=false) ?(dim=false) (fg : color) (bg : color) : Grid.attr =
@@ -308,6 +319,7 @@ let grid_attrs_of_theme (theme : t) : grid_attrs =
     ga_gutter = make_attr theme.border_fg theme.bg;
     ga_marker_error = make_attr ~bold:true theme.error_bg theme.bg;
     ga_marker_warning = make_attr ~bold:true theme.string_fg theme.bg;
+    ga_marker_success = make_attr ~bold:true theme.marker_success_fg theme.bg;
   }
 
 let current_attrs : grid_attrs ref = ref (grid_attrs_of_theme default)
