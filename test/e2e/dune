@@ -10,7 +10,7 @@
         test_error_recovery test_buffer_mutation test_save test_open_file
         test_bridge_validation test_replace_after test_undo_redo
         test_mid_file_error test_subprocess_death test_step_msg_dedup
-        test_interrupt_recovery)
+        test_interrupt_recovery test_err_attribution)
  (libraries rocqtui_lib unix yojson str))
 
 ; The harness locates rocqtui and the bridge by walking up from cwd
@@ -62,3 +62,6 @@
 (rule (alias e2e)
  (deps %{exe:../../bin/main.exe} %{exe:../../bridge/rocqtui_mcp.exe})
  (action (run %{dep:test_interrupt_recovery.exe})))
+(rule (alias e2e)
+ (deps %{exe:../../bin/main.exe} %{exe:../../bridge/rocqtui_mcp.exe})
+ (action (run %{dep:test_err_attribution.exe})))

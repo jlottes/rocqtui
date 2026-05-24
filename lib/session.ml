@@ -677,8 +677,21 @@ let advance_verifying_op t v =
        (match t.sentences with
         | hd :: rest when hd == v.vos_sentence -> t.sentences <- rest
         | _ -> ());
-       t.msgs <- t.msgs @ [msg];
-       t.err_range <- Some (v.vos_sentence.start_off, v.vos_sentence.end_off);
+       (* If an earlier async-feedback Error already attributed the
+          root cause (e.g. a bad Lemma whose Error feedback arrived
+          before its enclosing End-Section's Add returned Fail), this
+          Fail is a cascade — preserve the earlier attribution and
+          drop the redundant cascade message. Otherwise this is the
+          first error we know about, so it owns err_range and msgs. *)
+       let cascade =
+         List.exists (fun si ->
+           match si.status with Error _ -> true | _ -> false
+         ) t.sentences
+       in
+       if not cascade then begin
+         t.msgs <- t.msgs @ [msg];
+         t.err_range <- Some (v.vos_sentence.start_off, v.vos_sentence.end_off)
+       end;
        t.target_end <- verified_end t;
        (* Don't call rewind_to_state here — defer to poll. Just record
           that we need to rewind. *)
