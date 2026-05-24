@@ -629,9 +629,6 @@ let render t r ~open_files ~focused =
     let n = Array.length st.lines in
     let max_scroll = max 0 (n - visible_rows) in
     if st.scroll > max_scroll then st.scroll <- max_scroll;
-    if st.selected < st.scroll then st.scroll <- st.selected
-    else if st.selected >= st.scroll + visible_rows then
-      st.scroll <- max 0 (st.selected - visible_rows + 1);
     (* Closure dimming only applies in dep view, and only when a
        graph + non-empty closure exist. *)
     let apply_dim_for_closure =
