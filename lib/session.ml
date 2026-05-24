@@ -862,7 +862,22 @@ let goals_text ?(all_hyps=true) ?(width=default_width) t =
   | Some gs -> Some (format_goals ~all_hyps ~width gs)
 
 let messages ?(width=default_width) t =
-  List.map (string_of_pp ~width) t.msgs
+  (* Hide raw output while an [on_done]-callback query is in flight.
+     [start_query] clears [t.msgs] and the per-phase feedback drains
+     into it (the coercion-graph "Print Graph." dump, the Locate /
+     Locate-Library chain behind jump-to-definition, etc.) — without
+     this, the user briefly sees that intermediate text flash in the
+     messages pane before the callback replaces it with its filtered
+     result. [Qr_msgs] queries (no callback) are the editor's own,
+     so we still show their accumulating output. *)
+  let visible = match t.current_op with
+    | Some (Op_query qos) ->
+      (match qos.qos_pq.pq_reply with
+       | Qr_external _ -> qos.qos_msgs_before
+       | Qr_msgs -> t.msgs)
+    | _ -> t.msgs
+  in
+  List.map (string_of_pp ~width) visible
 
 let clear_messages t = t.msgs <- []
 
