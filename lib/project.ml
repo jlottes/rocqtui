@@ -188,10 +188,15 @@ let rec find_v_files dir =
   let files = ref [] in
   Array.iter (fun name ->
     let path = Filename.concat dir name in
-    if Sys.is_directory path then
-      files := find_v_files path @ !files
-    else if Filename.check_suffix name ".v" then
-      files := path :: !files
+    (* Stat may race with a concurrent process (a make run dropping
+       a transient file like [.hasfile] between our readdir and
+       this is_directory). Skip vanished or unreadable entries. *)
+    try
+      if Sys.is_directory path then
+        files := find_v_files path @ !files
+      else if Filename.check_suffix name ".v" then
+        files := path :: !files
+    with Sys_error _ -> ()
   ) entries;
   List.sort String.compare !files
 
