@@ -32,6 +32,7 @@ type event =
   | FileChanged of string
   | DirEntryAdded of { dir : string; name : string; is_dir : bool }
   | DirEntryRemoved of { dir : string; name : string; is_dir : bool }
+  | DirEntryModified of { dir : string; name : string }
 
 type t = {
   fd : Unix.file_descr;
@@ -42,6 +43,7 @@ type t = {
 let file_mask = in_close_write () lor in_move_self () lor in_delete_self ()
 let dir_mask = in_create () lor in_delete ()
                lor in_moved_from () lor in_moved_to ()
+               lor in_close_write ()
 
 let mask_delete_self = in_delete_self ()
 let mask_move_self = in_move_self ()
@@ -49,6 +51,7 @@ let mask_create = in_create ()
 let mask_delete = in_delete ()
 let mask_moved_from = in_moved_from ()
 let mask_moved_to = in_moved_to ()
+let mask_close_write = in_close_write ()
 let mask_isdir = in_isdir ()
 let mask_ignored = in_ignored ()
 
@@ -145,10 +148,13 @@ let poll t =
             emask land mask_delete <> 0
             || emask land mask_moved_from <> 0
           in
+          let modified = emask land mask_close_write <> 0 in
           if added then
             push (DirEntryAdded { dir = w.path; name; is_dir })
           else if removed then
             push (DirEntryRemoved { dir = w.path; name; is_dir })
+          else if modified && name <> "" then
+            push (DirEntryModified { dir = w.path; name })
         end
   ) raw;
   List.rev !events

@@ -212,12 +212,200 @@ let test_project_file_content_change () =
   File_manager.close fm;
   rm_rf dir
 
+(* IN_CLOSE_WRITE on the dir watch must fire DirEntryModified when an
+   existing file inside the directory is rewritten (the typical
+   [rocqc] in-place .vo clobber). Pure creation already fires
+   DirEntryAdded; this catches the "file already there" case. *)
+let test_dir_watch_modify () =
+  let dir = mkdtemp "rocqtui_fw_mod_" in
+  let f = Filename.concat dir "edit.vo" in
+  let oc = open_out f in
+  output_string oc "v0";
+  close_out oc;
+  let w = File_watch.create () in
+  File_watch.add_dir_watch w dir;
+  let oc = open_out f in
+  output_string oc "v1";
+  close_out oc;
+  wait ();
+  let events = File_watch.poll w in
+  let saw_mod = any_match events (function
+    | File_watch.DirEntryModified { name = "edit.vo"; _ } -> true
+    | _ -> false)
+  in
+  check "DirEntryModified fires when a file in a watched dir is rewritten"
+    saw_mod;
+  File_watch.close w;
+  rm_rf dir
+
+(* File_manager should surface BuildArtifactChanged when a .vo is
+   written inside a watched project subdirectory — both for new
+   files (DirEntryAdded) and in-place rewrites (DirEntryModified).
+   The new-file case must NOT also fire ProjectChanged (it's a build
+   artifact, not a tree-shape change). *)
+let test_build_artifact_create () =
+  let dir = mkdtemp "rocqtui_fw_ba_create_" in
+  let fm = File_manager.create () in
+  File_manager.set_project_dir fm dir;
+  let vo = Filename.concat dir "foo.vo" in
+  let oc = open_out vo in
+  output_string oc "stub";
+  close_out oc;
+  wait ();
+  let events = File_manager.poll fm [] in
+  let saw_build = any_match events (function
+    | File_manager.BuildArtifactChanged -> true
+    | _ -> false)
+  in
+  let saw_project = any_match events (function
+    | File_manager.ProjectChanged -> true
+    | _ -> false)
+  in
+  check "creating a .vo fires BuildArtifactChanged" saw_build;
+  check "creating a .vo does NOT fire ProjectChanged"
+    (not saw_project);
+  File_manager.close fm;
+  rm_rf dir
+
+let test_build_artifact_rewrite () =
+  let dir = mkdtemp "rocqtui_fw_ba_rewrite_" in
+  let vo = Filename.concat dir "foo.vo" in
+  let oc = open_out vo in
+  output_string oc "v0";
+  close_out oc;
+  let fm = File_manager.create () in
+  File_manager.set_project_dir fm dir;
+  let oc = open_out vo in
+  output_string oc "v1";
+  close_out oc;
+  wait ();
+  let events = File_manager.poll fm [] in
+  let saw_build = any_match events (function
+    | File_manager.BuildArtifactChanged -> true
+    | _ -> false)
+  in
+  check "in-place .vo rewrite fires BuildArtifactChanged" saw_build;
+  File_manager.close fm;
+  rm_rf dir
+
+(* External .v edits should surface BuildArtifactChanged (their mtime
+   advancing past their .vo's makes them Stale) AND SourcesChanged
+   (Require/Import lines might have changed, so the dep graph needs
+   rerunning). They should NOT fire ProjectChanged — the tree shape
+   didn't change. *)
+let test_build_artifact_v_modified () =
+  let dir = mkdtemp "rocqtui_fw_ba_v_" in
+  let v = Filename.concat dir "foo.v" in
+  let oc = open_out v in
+  output_string oc "Lemma t : True. Proof. trivial. Qed.\n";
+  close_out oc;
+  let fm = File_manager.create () in
+  File_manager.set_project_dir fm dir;
+  let oc = open_out v in
+  output_string oc "Lemma t : True. Proof. exact I. Qed.\n";
+  close_out oc;
+  wait ();
+  let events = File_manager.poll fm [] in
+  let saw_build = any_match events (function
+    | File_manager.BuildArtifactChanged -> true
+    | _ -> false)
+  in
+  let saw_sources = any_match events (function
+    | File_manager.SourcesChanged -> true
+    | _ -> false)
+  in
+  let saw_project = any_match events (function
+    | File_manager.ProjectChanged -> true
+    | _ -> false)
+  in
+  check "external .v edit fires BuildArtifactChanged" saw_build;
+  check "external .v edit fires SourcesChanged" saw_sources;
+  check "external .v edit does NOT fire ProjectChanged"
+    (not saw_project);
+  File_manager.close fm;
+  rm_rf dir
+
+(* .vo writes must NOT fire SourcesChanged — that's the core fix for
+   the "every compile reruns rocq dep" problem. *)
+let test_vo_does_not_fire_sources_changed () =
+  let dir = mkdtemp "rocqtui_fw_vo_no_sources_" in
+  let fm = File_manager.create () in
+  File_manager.set_project_dir fm dir;
+  let vo = Filename.concat dir "foo.vo" in
+  (* Create then rewrite — cover both DirEntryAdded and DirEntryModified. *)
+  let oc = open_out vo in output_string oc "v0"; close_out oc;
+  let oc = open_out vo in output_string oc "v1"; close_out oc;
+  wait ();
+  let events = File_manager.poll fm [] in
+  let saw_sources = any_match events (function
+    | File_manager.SourcesChanged -> true
+    | _ -> false)
+  in
+  check ".vo create / rewrite does NOT fire SourcesChanged"
+    (not saw_sources);
+  File_manager.close fm;
+  rm_rf dir
+
+(* The build by-products [make] sprays around (.glob alongside every
+   .vo, .vos/.vok in -native modes) must not trigger ProjectChanged
+   — otherwise every compile would rerun [rocq dep]. *)
+let test_glob_does_not_fire_project_changed () =
+  let dir = mkdtemp "rocqtui_fw_glob_" in
+  let fm = File_manager.create () in
+  File_manager.set_project_dir fm dir;
+  List.iter (fun ext ->
+    let p = Filename.concat dir ("foo" ^ ext) in
+    let oc = open_out p in
+    output_string oc "x";
+    close_out oc
+  ) [".glob"; ".vos"; ".vok"];
+  wait ();
+  let events = File_manager.poll fm [] in
+  let saw_project = any_match events (function
+    | File_manager.ProjectChanged -> true
+    | _ -> false)
+  in
+  check ".glob / .vos / .vok writes do not fire ProjectChanged"
+    (not saw_project);
+  File_manager.close fm;
+  rm_rf dir
+
+(* A burst of .vo writes (parallel make) should collapse to one
+   BuildArtifactChanged per poll. *)
+let test_build_artifact_coalesced () =
+  let dir = mkdtemp "rocqtui_fw_ba_coalesce_" in
+  let fm = File_manager.create () in
+  File_manager.set_project_dir fm dir;
+  for i = 1 to 5 do
+    let vo = Filename.concat dir (Printf.sprintf "f%d.vo" i) in
+    let oc = open_out vo in
+    output_string oc "x";
+    close_out oc
+  done;
+  wait ();
+  let events = File_manager.poll fm [] in
+  let n_build = List.length (List.filter (function
+    | File_manager.BuildArtifactChanged -> true
+    | _ -> false) events)
+  in
+  check "five .vo writes coalesce to a single BuildArtifactChanged"
+    (n_build = 1);
+  File_manager.close fm;
+  rm_rf dir
+
 let () =
   Random.self_init ();
   test_dir_watch_create ();
   test_dir_watch_delete ();
   test_dir_watch_subdir_create ();
+  test_dir_watch_modify ();
   test_file_watch_close_write ();
   test_file_watch_atomic_rename ();
   test_project_file_content_change ();
-  test_project_file_atomic_rename ()
+  test_project_file_atomic_rename ();
+  test_build_artifact_create ();
+  test_build_artifact_rewrite ();
+  test_build_artifact_v_modified ();
+  test_vo_does_not_fire_sources_changed ();
+  test_glob_does_not_fire_project_changed ();
+  test_build_artifact_coalesced ()

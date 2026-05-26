@@ -404,8 +404,23 @@ let () =
         (match ctx.Editor_context.file_tree with
          | Some ft -> File_tree.refresh ft
          | None -> ());
-        (* Also re-run rocq dep so the dep-order view stays current. *)
+        Render_need.request ()
+      | File_manager.SourcesChanged ->
+        (* A .v or the project file changed in a way that could shift
+           Require / search-path edges. Rerun rocq dep — its kill-and-
+           restart semantics self-throttle bursty events like git
+           checkouts. *)
         Dep_runner.refresh_last dr;
+        Render_need.request ()
+      | File_manager.BuildArtifactChanged ->
+        (* A .vo (or external .v save) landed inside the project.
+           Refresh per-file build status so the file-tree marker
+           updates incrementally during long builds, and also catches
+           external [make]/[dune]/[rocqc] invocations. *)
+        (match !current_project_dir with
+         | Some pd -> Build_errors.refresh ~project_dir:pd (Build.output ())
+         | None -> ());
+        refresh_build_status ();
         Render_need.request ()
       | _ ->
         let msg = match ev with
@@ -417,7 +432,9 @@ let () =
           | File_manager.VerifiedAffected p ->
             Printf.sprintf "%s changed on disk (verified region affected)"
               (Filename.basename p)
-          | File_manager.ProjectChanged -> ""  (* handled above *)
+          | File_manager.ProjectChanged
+          | File_manager.SourcesChanged
+          | File_manager.BuildArtifactChanged -> ""  (* handled above *)
         in
         Render.set_status r msg;
         Render_need.request ()

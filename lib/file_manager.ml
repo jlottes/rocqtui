@@ -7,6 +7,8 @@ type file_event =
   | DiskChanged of string       (* file changed, buffer is dirty — notify only *)
   | VerifiedAffected of string  (* file changed within verified region — notify only *)
   | ProjectChanged              (* project tree gained/lost entries *)
+  | SourcesChanged              (* .v contents or project file changed — rerun rocq dep *)
+  | BuildArtifactChanged        (* .vo / .v inside project written — refresh build status *)
 
 type t = {
   watcher : File_watch.t;
@@ -83,6 +85,27 @@ let clear_project_watches t =
    [Project.filenames]; duplicated here to avoid an upward dependency
    from File_manager onto Project. *)
 let project_file_candidates = ["_RocqProject"; "_CoqProject"]
+
+(* Filenames whose write/create/delete inside a watched project
+   subdirectory should trigger a build-status refresh. .v because make
+   compares .v vs .vo mtimes; .vo because that's the artifact whose
+   freshness we report. Other build by-products (.glob, .vos, .vok)
+   change in lockstep with .vo and add nothing. *)
+let affects_build_status name =
+  Filename.check_suffix name ".v"
+  || Filename.check_suffix name ".vo"
+
+(* Filenames whose appearance / disappearance changes the visible file
+   tree (only .v files are rendered) or the dep / search paths
+   (project file). The same predicate also covers everything whose
+   appearance / disappearance would change what [rocq dep] sees, so
+   [ProjectChanged] and [SourcesChanged] are emitted together. Build
+   by-products like .vo, .glob, .vos, .vok, .v.d, etc. don't qualify
+   — neither does a tmp file from an external editor. *)
+let affects_tree_shape name is_dir =
+  is_dir
+  || Filename.check_suffix name ".v"
+  || List.mem name project_file_candidates
 
 let find_project_file_in dir =
   List.find_map (fun name ->
@@ -178,14 +201,21 @@ let poll t (tabs : Tab.t list) =
   let raw_events = File_watch.poll t.watcher in
   let file_paths = ref [] in
   let project_touched = ref false in
+  let sources_touched = ref false in
+  let build_touched = ref false in
   List.iter (function
     | File_watch.FileChanged p ->
-      if t.project_file_watched = Some p then
-        project_touched := true
-      else
+      if t.project_file_watched = Some p then begin
+        project_touched := true;
+        sources_touched := true
+      end else
         file_paths := p :: !file_paths
     | File_watch.DirEntryAdded { dir; name; is_dir } ->
-      project_touched := true;
+      if affects_tree_shape name is_dir then begin
+        project_touched := true;
+        sources_touched := true
+      end;
+      if affects_build_status name then build_touched := true;
       if is_dir && name <> "" && not (skip_dir name) then begin
         let path = Filename.concat dir name in
         try add_project_subtree t path with _ -> ()
@@ -197,17 +227,31 @@ let poll t (tabs : Tab.t list) =
         File_watch.add_watch t.watcher path;
         t.project_file_watched <- Some path
       end
-    | File_watch.DirEntryRemoved { dir; name; _ } ->
-      project_touched := true;
+    | File_watch.DirEntryRemoved { dir; name; is_dir } ->
+      if affects_tree_shape name is_dir then begin
+        project_touched := true;
+        sources_touched := true
+      end;
+      if affects_build_status name then build_touched := true;
       let path = Filename.concat dir name in
       if t.project_file_watched = Some path then begin
         File_watch.remove_watch t.watcher path;
         t.project_file_watched <- None
       end
+    | File_watch.DirEntryModified { name; _ } ->
+      (* In-place rewrite. Tree shape can't change. A .v rewrite might
+         have changed its Require/Import lines, so rerun rocq dep; a
+         .vo rewrite only affects build status. *)
+      if affects_build_status name then build_touched := true;
+      if Filename.check_suffix name ".v" then sources_touched := true
   ) raw_events;
   let file_events =
     if !file_paths = [] && t.deferred = [] then []
     else process_file_changes t tabs (List.rev !file_paths)
   in
-  if !project_touched then file_events @ [ProjectChanged]
-  else file_events
+  let extras =
+    (if !project_touched then [ProjectChanged] else [])
+    @ (if !sources_touched then [SourcesChanged] else [])
+    @ (if !build_touched then [BuildArtifactChanged] else [])
+  in
+  file_events @ extras

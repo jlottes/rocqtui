@@ -5,6 +5,15 @@ type file_event =
   | DiskChanged of string       (** file changed but buffer is dirty *)
   | VerifiedAffected of string  (** file changed within verified region *)
   | ProjectChanged              (** project tree gained or lost entries *)
+  | SourcesChanged
+      (** Something that could change what [rocq dep] outputs happened:
+          a .v file was added, removed, or its contents changed; or the
+          project file was added, removed, or edited. Coalesced to at
+          most one per [poll] call. *)
+  | BuildArtifactChanged
+      (** A .v or .vo inside a watched project subdirectory was written,
+          created, or removed. Refresh per-file build status. Coalesced
+          to at most one per [poll] call. *)
 
 type t
 

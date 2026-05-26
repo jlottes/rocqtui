@@ -8,6 +8,8 @@ type event =
   | FileChanged of string
   | DirEntryAdded of { dir : string; name : string; is_dir : bool }
   | DirEntryRemoved of { dir : string; name : string; is_dir : bool }
+  | DirEntryModified of { dir : string; name : string }
+      (** A file inside a watched directory was written and closed. *)
 
 val create : unit -> t
 
@@ -21,9 +23,9 @@ val watch_fd : t -> Unix.file_descr
 val add_watch : t -> string -> unit
 
 (** Watch a directory's entries (mask: CREATE | DELETE | MOVED_FROM |
-    MOVED_TO). Recursion is the caller's job — fire [add_dir_watch] on
-    each subdirectory you care about, and on [DirEntryAdded] events
-    where [is_dir] is true. *)
+    MOVED_TO | CLOSE_WRITE). Recursion is the caller's job — fire
+    [add_dir_watch] on each subdirectory you care about, and on
+    [DirEntryAdded] events where [is_dir] is true. *)
 val add_dir_watch : t -> string -> unit
 
 (** Stop watching a path. *)
