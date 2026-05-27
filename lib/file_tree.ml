@@ -668,6 +668,7 @@ let render t r ~open_files ~focused =
         let base_attr =
           if not in_closure then dim_attr
           else if entry.is_dir then bold_attr
+          else if not entry.in_project then dim_attr
           else normal_attr
         in
         let attr =
