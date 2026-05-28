@@ -170,27 +170,85 @@ let create ?(prog="coqidetop") ?(args=[]) buf =
 let find_sentence t sid =
   List.find_opt (fun s -> Stateid.equal s.state_id sid) t.sentences
 
+let verified_end t =
+  match t.sentences with
+  | s :: _ -> s.end_off
+  | [] -> 0
+
+(* --- Diagnostic logging (gated by ROCQTUI_LOG; see lib/log.ml) --- *)
+
+let status_char = function
+  | Processing -> 'P'
+  | Verified -> 'V'
+  | Error _ -> 'E'
+
+let op_tag = function
+  | Op_query _ -> "query"
+  | Op_verifying _ -> "verify"
+  | Op_refreshing_goals _ -> "refresh_goals"
+  | Op_fetch_goals _ -> "fetch_goals"
+  | Op_rewinding _ -> "rewind"
+
+let sid_str id =
+  if Stateid.equal id Stateid.dummy then "dummy"
+  else if Stateid.equal id Stateid.initial then "init"
+  else string_of_int (Stateid.to_int id)
+
+(* Compact one-line state snapshot. Sentences are printed oldest→newest
+   (the reverse of the internal most-recent-first stack), each as a
+   status char (V/P/E) tagged with its end offset, so a stuck/errored
+   sentence and where it sits relative to [verified_end] is visible at
+   a glance. *)
+let log_state t label =
+  if Log.enabled () then begin
+    let sents =
+      List.rev_map (fun s ->
+        Printf.sprintf "%c@%d" (status_char s.status) s.end_off
+      ) t.sentences
+    in
+    Log.logf
+      "state[%s]: tip=%s ve=%d target=%d op=%s needs_rewind=%s err=%s \
+       dirty=%b pq=%b pf=%b sents=[%s]"
+      label (sid_str t.tip) (verified_end t) t.target_end
+      (match t.current_op with Some op -> op_tag op | None -> "-")
+      (match t.needs_rewind with Some id -> sid_str id | None -> "-")
+      (match t.err_range with
+       | Some (a, b) -> Printf.sprintf "(%d,%d)" a b | None -> "-")
+      t.goals_dirty (t.pending_query <> None) (t.pending_fetch <> None)
+      (String.concat " " sents)
+  end
+
 (* Process a single feedback message *)
 let process_one_feedback t (fb : Feedback.feedback) =
   let sid = fb.Feedback.span_id in
   match fb.Feedback.contents with
   | Feedback.Processed ->
     (match find_sentence t sid with
-     | Some s -> s.status <- Verified; t.state_changed <- true
-     | None -> ())
+     | Some s ->
+       Log.logf "fb Processed sid=%s -> Verified @%d"
+         (sid_str sid) s.end_off;
+       s.status <- Verified; t.state_changed <- true
+     | None ->
+       Log.logf "fb Processed sid=%s (no matching sentence)" (sid_str sid))
   | Feedback.Message (Feedback.Error, _, _, msg) ->
     (match find_sentence t sid with
      | Some s ->
+       Log.logf "fb Error sid=%s -> mark sentence (%d,%d), set err_range: %s"
+         (sid_str sid) s.start_off s.end_off (string_of_pp msg);
        s.status <- Error (string_of_pp msg);
        t.msgs <- t.msgs @ [msg];
        t.err_range <- Some (s.start_off, s.end_off);
        t.state_changed <- true
      | None ->
+       Log.logf "fb Error sid=%s (no matching sentence): %s"
+         (sid_str sid) (string_of_pp msg);
        t.msgs <- t.msgs @ [msg])
   | Feedback.Message (Feedback.Warning, _, _, msg) ->
+    Log.logf "fb Warning sid=%s: %s" (sid_str sid) (string_of_pp msg);
     t.msgs <- t.msgs @ [Pp.(str "Warning: " ++ msg)];
     t.state_changed <- true
   | Feedback.Message (_, _, _, msg) ->
+    Log.logf "fb Message sid=%s: %s" (sid_str sid) (string_of_pp msg);
     t.msgs <- t.msgs @ [msg];
     t.state_changed <- true
   | _ -> ()
@@ -198,11 +256,6 @@ let process_one_feedback t (fb : Feedback.feedback) =
 let process_feedback t =
   let fbs = Rocq_protocol.drain_feedback t.rocq in
   List.iter (process_one_feedback t) fbs
-
-let verified_end t =
-  match t.sentences with
-  | s :: _ -> s.end_off
-  | [] -> 0
 
 
 (* Format goals for display.
@@ -265,6 +318,8 @@ let format_goals ?(all_hyps=true) ?(width=default_width) (gs : Interface.goals) 
   Stdlib.Buffer.contents ob
 
 let rewind_to_state t safe_id =
+  Log.logf "rewind_to_state safe_id=%s (local drop, no edit_at)"
+    (sid_str safe_id);
   let rec drop = function
     | s :: rest when not (Stateid.equal s.state_id safe_id) -> drop rest
     | remaining -> remaining
@@ -326,6 +381,10 @@ let start_verify t =
     let call = mk_add_call ~phrase ~edit_id:eid ~tip:prev_tip
       ~verbose:true ~bp:vend ~line ~bol in
     let pending = Rocq_protocol.submit t.rocq call in
+    Log.logf "start_verify: Add (%d,%d) eid=%d tip=%s phrase=%S"
+      vend end_off eid (sid_str prev_tip)
+      (if String.length phrase > 60 then String.sub phrase 0 60 ^ "…"
+       else phrase);
     t.current_op <- Some (Op_verifying { vos_sentence = s; vos_pending = pending });
     t.state_changed <- true
 
@@ -396,6 +455,8 @@ let advance_query_op t qos =
      | Some (Interface.Good (new_id, _)) ->
        process_feedback t;
        t.msgs <- [];  (* discard setup feedback *)
+       Log.logf "advance_query: setup Good -> tip=%s, %d setup left"
+         (sid_str new_id) (List.length s.remaining);
        let phase = match s.remaining with
          | [] -> issue_query t ~pq:qos.qos_pq ~tip:new_id
          | next :: rest -> issue_setup_add t ~remaining:rest ~tip:new_id ~next
@@ -405,6 +466,8 @@ let advance_query_op t qos =
      | Some (Interface.Fail _) ->
        process_feedback t;
        t.msgs <- [];
+       Log.logf "advance_query: setup Fail -> run query at original_tip=%s"
+         (sid_str qos.qos_original_tip);
        (* Setup failed. Run the query at [original_tip] regardless of
           whether earlier setup sentences succeeded — matches prior
           synchronous behavior. If the tip did move, [Qp_query] will
@@ -420,10 +483,14 @@ let advance_query_op t qos =
        let query_msgs = t.msgs in
        if Stateid.equal r.tip qos.qos_original_tip then begin
          (* No restore needed; deliver immediately. *)
+         Log.logf "advance_query: query done at tip=%s (no restore), deliver"
+           (sid_str r.tip);
          deliver_query_result t qos query_msgs;
          t.current_op <- None;
          t.state_changed <- true
        end else begin
+         Log.logf "advance_query: query done, edit_at restore to original_tip=%s"
+           (sid_str qos.qos_original_tip);
          let h = Rocq_protocol.submit t.rocq
            (Xmlprotocol.edit_at qos.qos_original_tip) in
          t.current_op <- Some (Op_query {
@@ -438,6 +505,7 @@ let advance_query_op t qos =
      | None -> ()
      | Some _ ->
        process_feedback t;
+       Log.logf "advance_query: restore done, deliver";
        (* edit_at may have appended its own feedback to t.msgs; we
           deliver only the previously-captured query_msgs. *)
        deliver_query_result t qos qos.qos_query_msgs;
@@ -472,6 +540,8 @@ let target_id_for_target_end t =
    [retry_drained=true] marks this as the one-shot defensive retry
    after a prior [Fail (Stateid.dummy, …)]; see [advance_rewinding_op]. *)
 let start_rewinding ?(retry_drained=false) t target_id =
+  Log.logf "start_rewinding: edit_at target=%s retry_drained=%b"
+    (sid_str target_id) retry_drained;
   let pending = Rocq_protocol.submit t.rocq (Xmlprotocol.edit_at target_id) in
   t.current_op <- Some (Op_rewinding {
     ros_target_id = target_id;
@@ -504,14 +574,19 @@ let advance_rewinding_op t r =
     process_feedback t;
     (match result with
      | Interface.Good _ ->
+       Log.logf "advance_rewinding: Good -> landed at target=%s, dropping above"
+         (sid_str r.ros_target_id);
        t.sentences <- drop_above_state r.ros_target_id t.sentences;
        t.tip <- r.ros_target_id;
        t.target_end <- verified_end t;
        t.goals_dirty <- true;
        t.current_op <- None
      | Interface.Fail (safe_id, _, msg) ->
+       Log.logf "advance_rewinding: Fail safe_id=%s retry_drained=%b: %s"
+         (sid_str safe_id) r.ros_retry_drained (string_of_pp msg);
        if not (Stateid.equal safe_id Stateid.dummy) then begin
          (* Rocq landed at safe_id instead. Drop above it. *)
+         Log.logf "advance_rewinding: dropping above safe_id=%s" (sid_str safe_id);
          t.msgs <- t.msgs @ [Pp.(str "Undo failed: " ++ msg)];
          t.sentences <- drop_above_state safe_id t.sentences;
          t.tip <- safe_id;
@@ -531,12 +606,15 @@ let advance_rewinding_op t r =
             transient Fail to the user — if the retry succeeds, the
             "Undo failed" message would be misleading. *)
          let (_, trim_target) = verified_suffix_trim t in
+         Log.logf "advance_rewinding: dummy Fail, defensive retry to verified-suffix tip=%s"
+           (sid_str trim_target);
          start_rewinding ~retry_drained:true t trim_target
        end else begin
          (* Retry also failed with no safe_id. Last resort: trim
             locally so [has_error] clears and [dispatch_idle_work]
             doesn't keep looping. The user may need to step
             manually to recover. *)
+         Log.logf "advance_rewinding: retry also dummy-Failed, local-only trim (last resort)";
          t.msgs <- t.msgs @ [Pp.(str "Undo failed: " ++ msg)];
          let (trimmed, tip) = verified_suffix_trim t in
          t.sentences <- trimmed;
@@ -574,8 +652,12 @@ let start_rewind_errors_op t =
         | _ -> None
   in
   match find_oldest_err t.sentences with
-  | None -> ()
+  | None ->
+    Log.logf "start_rewind_errors: no errored sentence found (nothing to do)"
   | Some (surviving, target_id, err_s) ->
+    Log.logf "start_rewind_errors: oldest err sentence (%d,%d), target=%s, new target_end=%d"
+      err_s.start_off err_s.end_off (sid_str target_id)
+      (match surviving with s :: _ -> s.end_off | [] -> 0);
     t.err_range <- Some (err_s.start_off, err_s.end_off);
     t.target_end <- (match surviving with s :: _ -> s.end_off | [] -> 0);
     start_rewinding t target_id
@@ -584,6 +666,7 @@ let start_rewind_errors_op t =
    then fetch goals at the current tip. The formatted result is
    delivered to [pf.pf_on_done] at the end. *)
 let start_fetch_goals t (pf : pending_fetch) =
+  Log.logf "start_fetch_goals: set_options at tip=%s" (sid_str t.tip);
   let opts = Printopts.to_set_options_with pf.pf_extra_opts in
   let pending = Rocq_protocol.submit t.rocq (Xmlprotocol.set_options opts) in
   t.current_op <- Some (Op_fetch_goals {
@@ -623,6 +706,7 @@ let advance_fetch_goals_op t fos =
    fetch in the second phase. Caller has already cleared
    [goals_dirty]. *)
 let start_refresh_goals t =
+  Log.logf "start_refresh_goals: set_options at tip=%s" (sid_str t.tip);
   let opts = Printopts.to_set_options () in
   let pending = Rocq_protocol.submit t.rocq (Xmlprotocol.set_options opts) in
   t.current_op <- Some (Op_refreshing_goals (Rp_set_options pending));
@@ -670,6 +754,8 @@ let advance_verifying_op t v =
     process_feedback t;
     (match result with
      | Interface.Good (new_id, _) ->
+       Log.logf "advance_verifying: Add Good (%d,%d) -> tip=%s"
+         v.vos_sentence.start_off v.vos_sentence.end_off (sid_str new_id);
        t.tip <- new_id;
        t.goals_dirty <- true
      | Interface.Fail (safe_id, _, msg) ->
@@ -688,6 +774,9 @@ let advance_verifying_op t v =
            match si.status with Error _ -> true | _ -> false
          ) t.sentences
        in
+       Log.logf "advance_verifying: Add Fail safe_id=%s cascade=%b (%d,%d): %s"
+         (sid_str safe_id) cascade
+         v.vos_sentence.start_off v.vos_sentence.end_off (string_of_pp msg);
        if not cascade then begin
          t.msgs <- t.msgs @ [msg];
          t.err_range <- Some (v.vos_sentence.start_off, v.vos_sentence.end_off)
@@ -696,9 +785,10 @@ let advance_verifying_op t v =
        (* Don't call rewind_to_state here — defer to poll. Just record
           that we need to rewind. *)
        if not (Stateid.equal safe_id t.tip
-               || Stateid.equal safe_id Stateid.dummy) then
+               || Stateid.equal safe_id Stateid.dummy) then begin
+         Log.logf "advance_verifying: needs_rewind <- %s" (sid_str safe_id);
          t.needs_rewind <- Some safe_id
-       else
+       end else
          t.tip <- (match t.sentences with
                    | si :: _ -> si.state_id
                    | [] -> Stateid.initial));
@@ -718,32 +808,44 @@ let dispatch_idle_work t =
   (* Handle deferred rewind from callback *)
   (match t.needs_rewind with
    | Some safe_id ->
+     Log.logf "dispatch: deferred needs_rewind -> rewind_to_state %s"
+       (sid_str safe_id);
      t.needs_rewind <- None;
      rewind_to_state t safe_id
    | None -> ());
   let has_error = List.exists (fun si ->
     match si.status with Error _ -> true | _ -> false
   ) t.sentences in
-  if has_error then
+  if has_error then begin
+    Log.logf "dispatch: has_error -> start_rewind_errors";
     start_rewind_errors_op t
-  else if verified_end t > t.target_end then
+  end
+  else if verified_end t > t.target_end then begin
     (* Deferred rewind from step_backward / go_to_cursor / etc. *)
+    Log.logf "dispatch: ve=%d > target=%d -> rewind to target"
+      (verified_end t) t.target_end;
     start_rewinding t (target_id_for_target_end t)
+  end
   else begin
     let vend = verified_end t in
-    if vend < t.target_end then
+    if vend < t.target_end then begin
+      Log.logf "dispatch: ve=%d < target=%d -> verify" vend t.target_end;
       start_verify t
+    end
     else if t.goals_dirty then begin
+      Log.logf "dispatch: goals_dirty -> refresh_goals";
       t.goals_dirty <- false;
       start_refresh_goals t
     end
     else match t.pending_query with
       | Some pq ->
+        Log.logf "dispatch: pending_query -> start_query";
         t.pending_query <- None;
         start_query t pq
       | None ->
         match t.pending_fetch with
         | Some pf ->
+          Log.logf "dispatch: pending_fetch -> start_fetch_goals";
           t.pending_fetch <- None;
           start_fetch_goals t pf
         | None -> ()
@@ -767,6 +869,7 @@ let poll t =
   if t.current_op = None && not (Rocq_protocol.is_busy t.rocq) then
     dispatch_idle_work t;
   let changed = t.state_changed in
+  if changed then log_state t "poll";
   t.state_changed <- false;
   changed
 
@@ -781,6 +884,7 @@ let cursor_byte_offset t =
   !off + cc
 
 let step_forward t =
+  Log.logf "intent step_forward (target=%d ve=%d)" t.target_end (verified_end t);
   t.msgs <- [];
   t.err_range <- None;
   let text = Buffer.text t.buf in
@@ -796,6 +900,7 @@ let step_forward t =
     t.state_changed <- true
 
 let step_backward t =
+  Log.logf "intent step_backward (target=%d ve=%d)" t.target_end (verified_end t);
   t.msgs <- [];
   t.err_range <- None;
   if t.target_end = 0 then
@@ -815,6 +920,8 @@ let step_backward t =
   end
 
 let go_to_offset t offset =
+  Log.logf "intent go_to_offset %d (target=%d ve=%d)"
+    offset t.target_end (verified_end t);
   t.err_range <- None;
   t.msgs <- [];
   (* Snap target to the last sentence boundary at or before offset *)
@@ -923,12 +1030,14 @@ let is_busy_opt = function
    receives the result and the editor's prior [t.msgs] are restored. *)
 let query ?(extra_opts=[]) ?on_done t phrase =
   match t.pending_query with
-  | Some _ -> ()  (* already pending; drop *)
+  | Some _ ->
+    Log.logf "intent query DROPPED (already pending): %S" phrase
   | None ->
     let reply = match on_done with
       | None -> Qr_msgs
       | Some k -> Qr_external k
     in
+    Log.logf "intent query: %S" phrase;
     t.pending_query <- Some {
       pq_phrase = phrase;
       pq_extra_opts = extra_opts;
@@ -970,6 +1079,8 @@ let pid t = Rocq_protocol.pid t.rocq
    ops run cleanly. Response is discarded — Fail is expected when
    draining, and Good is informational only. *)
 let interrupt t =
+  Log.logf "interrupt: SIGINT pid=%d + Status drain" (Rocq_protocol.pid t.rocq);
+  log_state t "interrupt";
   (try Unix.kill (Rocq_protocol.pid t.rocq) Sys.sigint with _ -> ());
   let _ = Rocq_protocol.submit t.rocq (Xmlprotocol.status false) in
   ()

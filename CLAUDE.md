@@ -42,6 +42,18 @@ dune exec tools/grid_cat.exe -- -color file.v
 dune exec tools/braille_cat.exe -- file.v
 ```
 
+## Debug logging
+
+Set `ROCQTUI_LOG` to a file path (or `1` for `/tmp/rocqtui.log`) to
+enable diagnostic logging of the Rocq session state machine
+(`lib/log.ml`). Logs every op start/advance, feedback message,
+`dispatch_idle_work` decision, interrupt, and a compact state snapshot
+(`tip ve target op err sents=[V@.. P@.. E@..]`) on each poll cycle that
+changed state. Lines are timestamped (seconds since start) and flushed
+immediately, so the log survives a hang. Works for both the normal and
+`--headless` binaries. Use it to reconstruct what happened when a
+session misbehaves rather than guessing blind.
+
 ## Docs you should read when relevant
 
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — module map, design decisions
