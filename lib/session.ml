@@ -194,28 +194,38 @@ let sid_str id =
   else if Stateid.equal id Stateid.initial then "init"
   else string_of_int (Stateid.to_int id)
 
-(* Compact one-line state snapshot. Sentences are printed oldest→newest
-   (the reverse of the internal most-recent-first stack), each as a
-   status char (V/P/E) tagged with its end offset, so a stuck/errored
-   sentence and where it sits relative to [verified_end] is visible at
-   a glance. *)
+(* Compact one-line state snapshot. Reports per-status sentence counts,
+   the top-of-stack sentence (its status char + end offset == the
+   verified boundary), and the end offsets of any Error-status
+   sentences. Deliberately does NOT dump the whole sentence list — for
+   a large file over a long session that bloats the log to tens of MB.
+   The counts + error offsets are enough to spot the failure mode where
+   [err_range] is set but no sentence carries Error status (E:0), which
+   leaves the errored span stuck inside the verified region. *)
 let log_state t label =
   if Log.enabled () then begin
-    let sents =
-      List.rev_map (fun s ->
-        Printf.sprintf "%c@%d" (status_char s.status) s.end_off
-      ) t.sentences
+    let nv = ref 0 and np = ref 0 and ne = ref 0 and errs = ref [] in
+    List.iter (fun s ->
+      match s.status with
+      | Verified -> incr nv
+      | Processing -> incr np
+      | Error _ -> incr ne; errs := s.end_off :: !errs
+    ) t.sentences;
+    let (top_c, top_off) = match t.sentences with
+      | s :: _ -> (status_char s.status, s.end_off)
+      | [] -> ('-', 0)
     in
     Log.logf
       "state[%s]: tip=%s ve=%d target=%d op=%s needs_rewind=%s err=%s \
-       dirty=%b pq=%b pf=%b sents=[%s]"
+       dirty=%b pq=%b pf=%b nsent=%d (V:%d P:%d E:%d) top=%c@%d errs=[%s]"
       label (sid_str t.tip) (verified_end t) t.target_end
       (match t.current_op with Some op -> op_tag op | None -> "-")
       (match t.needs_rewind with Some id -> sid_str id | None -> "-")
       (match t.err_range with
        | Some (a, b) -> Printf.sprintf "(%d,%d)" a b | None -> "-")
       t.goals_dirty (t.pending_query <> None) (t.pending_fetch <> None)
-      (String.concat " " sents)
+      (List.length t.sentences) !nv !np !ne top_c top_off
+      (String.concat " " (List.rev_map string_of_int !errs))
   end
 
 (* Process a single feedback message *)
@@ -225,9 +235,22 @@ let process_one_feedback t (fb : Feedback.feedback) =
   | Feedback.Processed ->
     (match find_sentence t sid with
      | Some s ->
-       Log.logf "fb Processed sid=%s -> Verified @%d"
-         (sid_str sid) s.end_off;
-       s.status <- Verified; t.state_changed <- true
+       (match s.status with
+        | Error _ ->
+          (* Error wins over Processed regardless of arrival order. With
+             async proof checking, the document-level [Processed] and the
+             worker's [Error] both carry the same span_id and can arrive
+             in either order (e.g. on Alt+. interrupt: the worker's "User
+             interrupt." Error, then a trailing Processed). Letting
+             Processed downgrade the sentence back to Verified leaves it
+             in the verified region — uneditable — while [has_error]
+             reads false, so the recovery rewind never fires. *)
+          Log.logf "fb Processed sid=%s IGNORED (sentence already Error @%d)"
+            (sid_str sid) s.end_off
+        | _ ->
+          Log.logf "fb Processed sid=%s -> Verified @%d"
+            (sid_str sid) s.end_off;
+          s.status <- Verified; t.state_changed <- true)
      | None ->
        Log.logf "fb Processed sid=%s (no matching sentence)" (sid_str sid))
   | Feedback.Message (Feedback.Error, _, _, msg) ->
