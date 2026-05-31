@@ -3,6 +3,11 @@
 (** Whether a build is currently running. *)
 val is_running : unit -> bool
 
+(** Generation counter, bumped each time a new build is [start]ed.
+    Stable while the same build runs and after it finishes — only
+    changes when a fresh build replaces it. *)
+val generation : unit -> int
+
 (** Description of the current build (e.g. "make theory/groups.vo"). *)
 val description : unit -> string option
 

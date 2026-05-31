@@ -15,6 +15,12 @@ type t = {
 
 let active : t option ref = ref None
 
+(* Incremented each time [start] succeeds. Lets viewers (e.g. the
+   messages-pane Build sub-tab) notice "this is a different build"
+   and drop state — selection, scroll — tied to the previous run. *)
+let gen = ref 0
+let generation () = !gen
+
 (* Braille spinner frames for the status-bar build indicator. *)
 let spinner_chars = [|
   "\xe2\xa0\x8b"; (* ⠋ *) "\xe2\xa0\x99"; (* ⠙ *)
@@ -54,6 +60,7 @@ let start ~project_dir ~cmd ~args ~desc =
       Unix.stdin write_fd write_fd in
     Unix.close write_fd;
     Unix.set_nonblock read_fd;
+    incr gen;
     active := Some {
       pid; fd = read_fd;
       output = []; buf = "";

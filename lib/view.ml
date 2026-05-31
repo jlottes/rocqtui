@@ -281,20 +281,38 @@ let render_goals (ctx : Editor_context.t) r (tab : Tab.t) =
    every frame. *)
 let errors_last_active : int option ref = ref None
 let search_last_active : int option ref = ref None
+let build_last_generation : int ref = ref 0
 
-(* Sync the global Msg_pane sub-tab list with current global state.
-   Purely passive — never changes which sub-tab is active. Auto-switch
-   is handled at action-handler call sites. *)
+(* Bring the global Msg_pane sub-tab list up to date with current
+   global state. This is the SINGLE point at which Msg_pane is
+   reconciled per frame — chrome rendering, render_messages, and
+   cursor placement all read mp.tabs / mp.active afterward and must
+   see the same state. Don't add lazy Msg_pane mutations downstream
+   of this call; they'd let the tab bar disagree with the content
+   area for one frame (e.g. closed-terminal flash). Purely passive
+   on which sub-tab is active; auto-switch lives at action-handler
+   call sites. *)
 let update_msg_tabs (ctx : Editor_context.t) r (tab : Tab.t) =
+  (* Terminal sub-tabs: drop any whose Terminal.t was destroyed and
+     append newly-spawned ones. Must run before the Build/Errors/etc
+     blocks so the rest of the function sees the post-sync tab list. *)
+  Msg_pane.sync_terminals ();
   (* Rocq tab is always present. Its content (and scroll/sel) is
      pulled at render time from the active file. *)
   ignore (Msg_pane.ensure Msg_pane.Rocq);
   let _ = r in
-  (* Build tab: ensured when there is build output or a running build. *)
+  (* Build tab: ensured when there is build output or a running build.
+     On a fresh build, clear the previous build's selection — line
+     indices into the old output would otherwise point at unrelated
+     new content as it streams in. *)
+  let build_gen = Build.generation () in
+  let new_build = build_gen <> !build_last_generation in
+  build_last_generation := build_gen;
   let build_output = Build.output () in
   let build_lines = Styled.of_strings build_output in
   if build_lines <> [] || Build.is_running () then begin
     let bt = Msg_pane.ensure Msg_pane.Build in
+    if new_build then clear_pane_selection bt.sel;
     if build_lines <> bt.lines then bt.lines <- build_lines
   end;
   (* Errors tab: ensure when entries exist; remove when empty. *)
@@ -370,7 +388,8 @@ let update_msg_tabs (ctx : Editor_context.t) r (tab : Tab.t) =
   ignore tab
 
 let render_messages (_ctx : Editor_context.t) r (tab : Tab.t) =
-  Msg_pane.sync_terminals ();
+  (* Msg_pane is already reconciled by update_msg_tabs, which runs
+     before chrome is drawn. *)
   (* Resize all terminals to current messages pane dims. No-op if
      unchanged, so safe to call every frame. *)
   let mrect = Render.pane_rect r Render.PMessages in
