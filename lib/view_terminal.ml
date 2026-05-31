@@ -2,8 +2,8 @@
 
 let body_rect r =
   let st = Render.pane_rect r Render.PStatus in
-  { Render.row = 1; col = 0;
-    height = max 0 (st.row - 1);
+  { Render.row = 0; col = 0;
+    height = max 0 st.row;
     width = st.width }
 
 (* Paint a leaf's tab strip into one row at [row], spanning [col..col

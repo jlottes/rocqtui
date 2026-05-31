@@ -7,12 +7,11 @@
     terminal in the body below it. *)
 
 val body_rect : Render.t -> Render.rect
-(** The whole-screen area available to the layout tree: from row 1
-    (right below where rocqtui would have its top file-tab bar; in
-    tterm it's empty when no splits, or covered by the root leaf's
-    own tab strip) through the row above the status bar. Used by
-    [bin/tterm.ml] for the per-frame [Layout.compute_rects] call
-    and for sizing newly spawned terminals. *)
+(** The whole-screen area available to the layout tree: from row 0
+    (the very top — each leaf paints its own tab strip into the
+    first row of its rect) through the row above the status bar.
+    Used by [bin/tterm.ml] for the per-frame [Layout.compute_rects]
+    call and for sizing newly spawned terminals. *)
 
 val render_all :
   Editor_context.t -> Render.t -> Layout.t ->
