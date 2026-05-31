@@ -1,3 +1,9 @@
+(* Re-export submodules so external callers (e.g. [bin/tterm.ml]) can
+   reach them via [Editor.Pty]. Inside this file, [editor.ml] shadows
+   the auto-generated [Editor] wrapper that would otherwise expose
+   them, so we re-publish them explicitly. *)
+module Pty = Pty
+
 let debug_input = try Sys.getenv "ROCQTUI_DEBUG_INPUT" <> "" with Not_found -> false
 
 type jump_point = Action.jump_point
@@ -80,7 +86,7 @@ let handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r =
              | Input.Special (Input.Escape, _) ->
                if not (Modals.logical_escape ctx tab) then begin
                  if term_focused then
-                   Pty.send_escape tab
+                   Pty.send_escape ()
                  else begin
                    Compose.start cs;
                    Render.set_status r (View.format_compose_status r cs);
@@ -146,58 +152,28 @@ let handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r =
   let handle_global () =
     (* When a terminal is focused and this is a keyboard event, only
        handle essential rocqtui keys. Mouse events always go through
-       the normal path so clicking, dragging, tab switching all work. *)
+       the normal path so clicking, dragging, tab switching all work.
+       The intercepted-key set lives in [Terminal_input], shared with
+       [bin/tterm.ml]. *)
     if term_focused && not is_mouse_event then begin
-      if Keymatch.match_binding ev Keys.quit then Some Quit
-      else if Keymatch.match_binding ev Keys.close_tab then begin
-        (* Ctrl+W on a focused terminal: destroy the terminal and
-           pop to the most-recently-used sub-tab. *)
-        (match active_term () with
-         | Some term ->
-           Terminal.destroy term;
-           Msg_pane.sync_terminals ();
-           (* Switch back to script pane so the user isn't stranded *)
-           ctx.focus <- FScript
-         | None -> ());
+      match Terminal_input.handle ctx ev ~active:(active_term ()) r with
+      | Terminal_input.Quit -> Some Quit
+      | Terminal_input.Closed_term ->
+        ctx.focus <- FScript;
         Some Continue
-      end
-      else if Keymatch.match_binding ev Keys.cycle_pane then begin
-        ctx.focus <- FScript; Some Continue end
-      else if Keymatch.match_binding ev Keys.save then Some Save_prompt
-      else if Keymatch.match_binding ev Keys.build_menu then begin
-        Modal.toggle ctx.modal Modal.BuildMenu; Some Continue end
-      else if Keymatch.match_binding ev Keys.help then begin
-        Modal.push ctx.modal (Modal.Help { scroll = 0 }); Some Continue end
-      else if Keymatch.match_binding ev Keys.copy
-              && not (match ev with Input.Key (3, _) -> true
-                | Input.Key (99, m) when m.ctrl -> true | _ -> false) then begin
-        (* Copy terminal selection (^Y only; ^C goes to terminal) *)
-        (match active_term () with
-         | Some term ->
-           let vt = Terminal.vterm term in
-           if Vterm_lib.Vterm_api.has_selection vt then
-             (match Vterm_lib.Vterm_api.sel_text vt with
-              | Some text ->
-                ctx.clipboard <- text;
-                Clipboard.copy_to_system text
-              | None -> ())
-         | None -> ());
-        Some Continue
-      end
-      else if Keymatch.match_binding ev Keys.open_terminal then begin
-        Pty.open_tab ctx tab r; Some Continue end
-      else if Keymatch.match_binding ev Keys.open_claude then begin
-        Pty.open_tab ~cmd:"claude" ctx tab r; Some Continue end
-      else if (match ev with Input.Special (Input.Escape, _) -> true | _ -> false) then begin
-        (* ESC starts compose mode; double-ESC sends ESC to terminal *)
-        (match ctx.compose with
-         | Some cs -> Compose.start cs;
-           Render.set_status r (View.format_compose_status r cs);
-           Render.present r
-         | None -> ());
-        Some Continue
-      end
-      else None
+      | Terminal_input.Open_term ->
+        Pty.open_tab ctx tab r; Some Continue
+      | Terminal_input.Open_claude ->
+        Pty.open_tab ~cmd:"claude" ctx tab r; Some Continue
+      | Terminal_input.Save_prompt -> Some Save_prompt
+      | Terminal_input.Cycle_pane ->
+        ctx.focus <- FScript; Some Continue
+      | Terminal_input.Build_menu ->
+        Modal.toggle ctx.modal Modal.BuildMenu; Some Continue
+      | Terminal_input.Help ->
+        Modal.push ctx.modal (Modal.Help { scroll = 0 }); Some Continue
+      | Terminal_input.Continue -> Some Continue
+      | Terminal_input.Pass_to_term -> None
     end
     else if Keymatch.match_binding ev Keys.quit then Some Quit
     else if Keymatch.match_binding ev Keys.close_tab then Some Close_tab
@@ -330,7 +306,7 @@ let handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r =
         | None ->
           (* Compose disabled: ESC is the logical-cancel key. *)
           if not (Modals.logical_escape ctx tab) then begin
-            if term_focused then Pty.send_escape tab
+            if term_focused then Pty.send_escape ()
           end
       end;
       Some Continue

@@ -29,83 +29,88 @@ let make_tab kind =
     sel = Tab.fresh_pane_sel ();
     lines_cache = [] }
 
-let global = { tabs = [make_tab Rocq]; active = 0; history = [] }
+let create () =
+  { tabs = []; active = 0; history = [] }
+
+let global = create ()
 
 let state () = global
 
-let find kind =
+(* --- Per-instance API. The singleton functions below are thin
+   wrappers that pass [global]. --- *)
+
+let find_in mp kind =
   let rec aux i = function
     | [] -> None
     | t :: _ when kind_eq t.kind kind -> Some (i, t)
     | _ :: rest -> aux (i + 1) rest
   in
-  aux 0 global.tabs
+  aux 0 mp.tabs
 
-let active_tab () =
-  let n = List.length global.tabs in
-  if n = 0 then make_tab Rocq  (* defensive: should never happen *)
-  else if global.active >= 0 && global.active < n then
-    List.nth global.tabs global.active
+let active_tab_in mp =
+  let n = List.length mp.tabs in
+  if n = 0 then failwith "Msg_pane.active_tab_in: no tabs"
+  else if mp.active >= 0 && mp.active < n then
+    List.nth mp.tabs mp.active
   else
-    List.hd global.tabs
+    List.hd mp.tabs
 
-let active_kind () = (active_tab ()).kind
+let active_kind_in mp = (active_tab_in mp).kind
 
-let ensure kind =
-  match find kind with
+let ensure_in mp kind =
+  match find_in mp kind with
   | Some (_, t) -> t
   | None ->
     let t = make_tab kind in
-    global.tabs <- global.tabs @ [t];
+    mp.tabs <- mp.tabs @ [t];
     t
 
 let history_remove kind hist =
   List.filter (fun k -> not (kind_eq k kind)) hist
 
-let pop_active_internal () =
-  let exists k = match find k with Some _ -> true | None -> false in
-  let rec find_existing = function
-    | [] -> Rocq
-    | k :: _ when exists k -> k
-    | _ :: rest -> find_existing rest
+let pop_active_internal mp =
+  let exists k = match find_in mp k with Some _ -> true | None -> false in
+  let rec find_existing_in_history = function
+    | [] -> None
+    | k :: _ when exists k -> Some k
+    | _ :: rest -> find_existing_in_history rest
   in
-  let target = find_existing global.history in
-  global.history <- history_remove target global.history;
-  (match find target with
-   | Some (i, _) -> global.active <- i
-   | None ->
-     ignore (ensure Rocq);
-     (match find Rocq with
-      | Some (i, _) -> global.active <- i
-      | None -> assert false))
+  match find_existing_in_history mp.history with
+  | Some target ->
+    mp.history <- history_remove target mp.history;
+    (match find_in mp target with
+     | Some (i, _) -> mp.active <- i
+     | None -> assert false)
+  | None ->
+    if mp.tabs <> [] then mp.active <- 0
 
-let pop_active () = pop_active_internal ()
+let pop_active_in mp = pop_active_internal mp
 
-let activate kind =
-  match find kind with
+let activate_in mp kind =
+  match find_in mp kind with
   | None -> ()
   | Some (i, _) ->
-    let cur = active_kind () in
+    let cur = active_kind_in mp in
     if not (kind_eq cur kind) then begin
-      global.history <-
-        cur :: history_remove cur (history_remove kind global.history);
-      global.active <- i
+      mp.history <-
+        cur :: history_remove cur (history_remove kind mp.history);
+      mp.active <- i
     end
 
-let activate_unless_terminal kind =
-  match active_kind () with
+let activate_unless_terminal_in mp kind =
+  match active_kind_in mp with
   | Terminal _ -> ()
-  | _ -> activate kind
+  | _ -> activate_in mp kind
 
-let remove kind =
-  match find kind with
+let remove_in mp kind =
+  match find_in mp kind with
   | None -> ()
   | Some (i, _) ->
-    let was_active = global.active = i in
-    global.tabs <- List.filteri (fun j _ -> j <> i) global.tabs;
-    global.history <- history_remove kind global.history;
-    if was_active then pop_active_internal ()
-    else if global.active > i then global.active <- global.active - 1
+    let was_active = mp.active = i in
+    mp.tabs <- List.filteri (fun j _ -> j <> i) mp.tabs;
+    mp.history <- history_remove kind mp.history;
+    if was_active then pop_active_internal mp
+    else if mp.active > i then mp.active <- mp.active - 1
 
 let display_name tab =
   match tab.kind with
@@ -115,12 +120,25 @@ let display_name tab =
   | Search -> "Search"
   | Terminal term -> Terminal.title term
 
-let sync_terminals () =
-  let live = Terminal.all () in
+let cycle_in mp delta =
+  let n = List.length mp.tabs in
+  if n > 1 then begin
+    let next_idx = ((mp.active + delta) mod n + n) mod n in
+    let next = List.nth mp.tabs next_idx in
+    activate_in mp next.kind
+  end
+
+let activate_prev_in mp = cycle_in mp (-1)
+let activate_next_in mp = cycle_in mp 1
+
+(* Sync [mp]'s tab list against [live]: drop Terminal tabs whose
+   terminal is not in [live]; append any [live] terminal that isn't
+   already in [mp.tabs]. Non-terminal tabs are untouched. *)
+let sync_terminals_in mp live =
   let term_alive t = List.exists (fun t' -> t' == t) live in
   let active_dead =
-    global.active >= 0 && global.active < List.length global.tabs &&
-    (match (List.nth global.tabs global.active).kind with
+    mp.active >= 0 && mp.active < List.length mp.tabs &&
+    (match (List.nth mp.tabs mp.active).kind with
      | Terminal t -> not (term_alive t)
      | _ -> false)
   in
@@ -128,24 +146,61 @@ let sync_terminals () =
     match tab.kind with
     | Terminal t when not (term_alive t) -> Some tab.kind
     | _ -> None
-  ) global.tabs in
-  global.tabs <- List.filter (fun tab ->
+  ) mp.tabs in
+  mp.tabs <- List.filter (fun tab ->
     match tab.kind with
     | Terminal t -> term_alive t
     | _ -> true
-  ) global.tabs;
-  global.history <- List.filter (fun k ->
+  ) mp.tabs;
+  mp.history <- List.filter (fun k ->
     not (List.exists (fun dk -> kind_eq k dk) dead_kinds)
-  ) global.history;
+  ) mp.history;
   List.iter (fun term ->
     let already = List.exists (fun tab ->
       match tab.kind with
       | Terminal t -> t == term
       | _ -> false
-    ) global.tabs in
+    ) mp.tabs in
     if not already then
-      global.tabs <- global.tabs @ [make_tab (Terminal term)]
+      mp.tabs <- mp.tabs @ [make_tab (Terminal term)]
   ) live;
-  let n = List.length global.tabs in
-  if global.active >= n then global.active <- max 0 (n - 1);
-  if active_dead then pop_active_internal ()
+  let n = List.length mp.tabs in
+  if mp.active >= n then mp.active <- max 0 (n - 1);
+  if active_dead then pop_active_internal mp
+
+(* Reorder / transplant primitives used by tterm's drag-tab
+   handling. They don't fit the singleton API and aren't wrapped. *)
+
+(* Remove [tab] from [mp] without dropping its data. Returns true if
+   it was present. Used by the drag-tab move: the [tab] record is
+   then handed to [insert_in target tab]. *)
+let take_tab_in mp tab =
+  let before = mp.tabs in
+  mp.tabs <- List.filter (fun t -> not (t == tab)) mp.tabs;
+  let removed = List.length before <> List.length mp.tabs in
+  if removed then begin
+    mp.history <- history_remove tab.kind mp.history;
+    let n = List.length mp.tabs in
+    if mp.active >= n then mp.active <- max 0 (n - 1)
+  end;
+  removed
+
+(* Append [tab] to [mp] at the end; activate it. The tab's terminal
+   (if any) must already be alive in the global list. *)
+let insert_in mp tab =
+  mp.tabs <- mp.tabs @ [tab];
+  mp.active <- List.length mp.tabs - 1
+
+(* --- Singleton API: thin wrappers. --- *)
+
+let find kind = find_in global kind
+let active_tab () = active_tab_in global
+let active_kind () = active_kind_in global
+let ensure kind = ensure_in global kind
+let pop_active () = pop_active_in global
+let activate kind = activate_in global kind
+let activate_unless_terminal kind = activate_unless_terminal_in global kind
+let remove kind = remove_in global kind
+let activate_prev () = activate_prev_in global
+let activate_next () = activate_next_in global
+let sync_terminals () = sync_terminals_in global (Terminal.all ())

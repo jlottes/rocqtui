@@ -129,6 +129,11 @@ let () =
       (try Unix.kill (Rocq_protocol.pid t) Sys.sigint with _ -> ())
     | _ -> ());
   Printexc.record_backtrace true;
+  (* Msg_pane no longer auto-creates the Rocq sub-tab on module load;
+     rocqtui ensures it here so the bordered tab strip always has a
+     Rocq entry. tterm doesn't make this call — it lives entirely on
+     Terminal sub-tabs. *)
+  ignore (Msg_pane.ensure Msg_pane.Rocq);
   let (mgr, project_dirs) = build_initial_state ~filenames ~extra_args in
   if Tab.count mgr > 1 then
     Render.set_tab_bar r true;

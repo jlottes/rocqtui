@@ -1,9 +1,9 @@
 ; To enable sanitizers, uncomment link_flags below
 ; and add flags in lib/vterm/dune. Then run with:
 ;   ASAN_OPTIONS=detect_leaks=0 dune exec bin/main.exe -- ...
-(executable
- (name main)
- (public_name rocqtui)
+(executables
+ (names main tterm)
+ (public_names rocqtui tterm)
  (package rocqtui)
  (libraries rocqtui_lib unix)
  ; (link_flags (-cclib -fsanitize=address,undefined))

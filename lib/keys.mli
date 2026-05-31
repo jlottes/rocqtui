@@ -90,6 +90,8 @@ val build_clean : binding
 val build_cancel : binding
 val open_terminal : binding
 val open_claude : binding
+val split_vertical : binding
+val split_horizontal : binding
 
 (** Binding groups for help/status generation *)
 val navigation_bindings : binding list

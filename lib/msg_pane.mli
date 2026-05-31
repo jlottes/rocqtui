@@ -1,14 +1,20 @@
-(** Global message-pane sub-tab manager.
+(** Message-pane sub-tab manager.
 
-    The message pane (the bordered region on the right showing Rocq
-    output, build output, errors, terminals) has its own bar of
-    sub-tabs. Those sub-tabs are global — they don't change shape
-    when the user switches between file tabs.
+    Two surfaces:
 
-    The [Rocq] sub-tab is special: its content is pulled from the
-    active file's [Session.messages] each frame, and its scroll /
-    selection are stored per-file on [Tab.t]. The sub-tabs for
-    [Build], [Errors], [Terminal _] each own their own state in
+    - The **singleton** API ({!ensure}, {!activate}, … no leading
+      [_in] suffix) operates on a private default instance. Rocqtui
+      uses this exclusively — the bordered message pane has one
+      shared tab strip.
+
+    - The **per-instance** API ({!ensure_in}, {!activate_in}, …,
+      plus {!create}) is used by [tterm], where each leaf of the
+      split layout owns its own sub-tab manager.
+
+    The [Rocq] sub-tab is special in rocqtui: its content is pulled
+    from the active file's [Session.messages] each frame, and its
+    scroll / selection are stored per-file on [Tab.t]. The sub-tabs
+    for [Build], [Errors], [Terminal _] each own their own state in
     full.
 
     Auto-switching policy lives at action handlers — they call
@@ -43,15 +49,54 @@ type t = {
   mutable history : kind list;
 }
 
-(** The single global instance. *)
-val state : unit -> t
+(** Display label for a tab — Rocq/Build/Errors are literal,
+    Terminal uses the terminal's dynamic title. *)
+val display_name : tab -> string
 
+(** {1 Per-instance API} *)
+
+val create : unit -> t
+
+val find_in : t -> kind -> (int * tab) option
+val active_tab_in : t -> tab
+val active_kind_in : t -> kind
+val ensure_in : t -> kind -> tab
+val remove_in : t -> kind -> unit
+val activate_in : t -> kind -> unit
+val activate_unless_terminal_in : t -> kind -> unit
+val pop_active_in : t -> unit
+val activate_prev_in : t -> unit
+val activate_next_in : t -> unit
+
+(** Sync the instance's sub-tab list against [live]: drop Terminal
+    sub-tabs whose terminal is not in [live]; append any [live]
+    terminal that isn't already a sub-tab. Non-terminal sub-tabs
+    untouched. Used by [tterm] so each leaf only "sees" the
+    terminals it owns. *)
+val sync_terminals_in : t -> Terminal.t list -> unit
+
+(** Remove [tab] from the instance, returning whether it was
+    present. The tab record is {b not} freed — the caller is
+    expected to hand it to {!insert_in} on the destination
+    instance. Used by tterm's drag-tab handling. *)
+val take_tab_in : t -> tab -> bool
+
+(** Append [tab] to the instance and make it active. *)
+val insert_in : t -> tab -> unit
+
+(** {1 Singleton API}
+
+    Wrappers over a private default instance. Rocqtui uses these. *)
+
+val state : unit -> t
+val find : kind -> (int * tab) option
 val active_tab : unit -> tab
 val active_kind : unit -> kind
-val find : kind -> (int * tab) option
 
-(** Idempotent insert. The [Rocq] tab is created on first access
-    and never removed. *)
+(** Idempotent insert. Callers are responsible for ensuring at
+    least one tab exists before invoking the [active_*] functions —
+    rocqtui ensures [Rocq] at startup; [tterm] ensures the initial
+    [Terminal _]. *)
 val ensure : kind -> tab
 
 (** Remove a sub-tab. If it was active, falls back via {!pop_active}.
@@ -70,16 +115,19 @@ val activate : kind -> unit
 val activate_unless_terminal : kind -> unit
 
 (** Restore the most-recently-used existing tab from {!history};
-    fallback to [Rocq] if the history is exhausted. Called when
+    if the history is exhausted, fall back to the first remaining
+    tab (or no-op when there are no tabs at all — the caller, e.g.
+    [tterm], is responsible for noticing that case). Called when
     the active tab vanishes (terminal destroyed, Errors emptied). *)
 val pop_active : unit -> unit
 
-(** Display label for a tab — Rocq/Build/Errors are literal,
-    Terminal uses the terminal's dynamic title. *)
-val display_name : tab -> string
+(** Cycle the active sub-tab. [activate_next] / [activate_prev]
+    wrap around. No-op when fewer than two tabs exist. Used by
+    [tterm]'s wheel-on-tab-bar handler. *)
+val activate_prev : unit -> unit
+val activate_next : unit -> unit
 
-(** Sync sub-tab list against [Terminal.all ()]: append entries
-    for new terminals, remove entries whose terminals were
-    destroyed. If the active tab was a destroyed terminal, falls
-    back via {!pop_active}. *)
+(** Sync the singleton's sub-tab list against [Terminal.all ()] —
+    rocqtui calls this once per render. Equivalent to
+    [sync_terminals_in (state ()) (Terminal.all ())]. *)
 val sync_terminals : unit -> unit

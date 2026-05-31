@@ -13,7 +13,7 @@ let open_tab ?cmd (ctx : Editor_context.t) (tab : Tab.t) r =
   Msg_pane.activate (Msg_pane.Terminal term);
   ctx.focus <- Editor_context.FMessages
 
-let send_escape (_tab : Tab.t) =
+let send_escape () =
   match Msg_pane.active_kind () with
   | Msg_pane.Terminal term ->
     let vt = Terminal.vterm term in

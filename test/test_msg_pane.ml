@@ -108,13 +108,33 @@ let () =
   assert_eq_kind "remove active -> pop"
     (Msg_pane.active_kind ()) Msg_pane.Rocq;
 
-  (* Rocq tab is recreated by pop_active fallback after total wipe *)
+  (* pop_active is a no-op when tabs is empty — the module no longer
+     auto-creates a Rocq fallback. Callers must [ensure] before
+     reading the active tab. *)
   reset ();
   let s = Msg_pane.state () in
   s.tabs <- [];
   s.history <- [];
   Msg_pane.pop_active ();
-  assert_eq_kind "pop with no tabs recreates Rocq"
+  assert_eq_int "pop with no tabs leaves tabs empty"
+    0 (List.length (Msg_pane.state ()).tabs);
+
+  (* activate_next / activate_prev cycle through tabs, wrapping. *)
+  reset ();
+  ignore (Msg_pane.ensure Msg_pane.Build);
+  ignore (Msg_pane.ensure Msg_pane.Errors);
+  (* tabs: [Rocq; Build; Errors], active = 0 (Rocq) *)
+  Msg_pane.activate_next ();
+  assert_eq_kind "next from Rocq -> Build"
+    (Msg_pane.active_kind ()) Msg_pane.Build;
+  Msg_pane.activate_next ();
+  assert_eq_kind "next from Build -> Errors"
+    (Msg_pane.active_kind ()) Msg_pane.Errors;
+  Msg_pane.activate_next ();
+  assert_eq_kind "next from Errors wraps to Rocq"
     (Msg_pane.active_kind ()) Msg_pane.Rocq;
+  Msg_pane.activate_prev ();
+  assert_eq_kind "prev from Rocq wraps to Errors"
+    (Msg_pane.active_kind ()) Msg_pane.Errors;
 
   Printf.printf "All msg_pane tests passed.\n"

@@ -1,5 +1,11 @@
 (** Editor: input handling. *)
 
+(** Re-exported so external callers (e.g. [bin/tterm.ml]) can reach
+    sibling modules via [Editor.Pty]. The auto-generated [Editor]
+    wrapper that would otherwise expose them is shadowed by
+    [editor.ml]. *)
+module Pty : module type of Pty
+
 type jump_point = Action.jump_point
 
 type action = Action.action =

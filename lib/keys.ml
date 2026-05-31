@@ -301,6 +301,31 @@ let open_claude = {
   name = "open_claude"; codes = [270]; kitty_codes = [];
   display = "F6"; context = Global; description = "Claude" }
 
+(* tterm-only: split the focused leaf. The kitty modifier byte is
+   [1 + shift + 2*alt + 4*ctrl], so Ctrl+Shift+X is 6.
+
+   Two encodings are matched so the binding works in both flavors of
+   "CSI u" reporting:
+
+   - Kitty keyboard protocol (kitty, WezTerm, foot, ghostty): sends
+     the BASE codepoint (lowercase) with the full modifier bits.
+     Ctrl+Shift+t → [116, 6].
+   - Xterm modifyOtherKeys / iTerm2 fixterm-style: sends the
+     SHIFTED codepoint (uppercase) with only the non-shift bits.
+     Ctrl+Shift+t → [84, 5].
+
+   Without either CSI u flavor, the shift bit doesn't reach us and
+   these collapse to plain ^T / ^S. *)
+let split_vertical = {
+  name = "split_v"; codes = [];
+  kitty_codes = [(116, 6); (84, 5)];
+  display = "^Sh+T"; context = Global; description = "Split vertically (tterm)" }
+
+let split_horizontal = {
+  name = "split_h"; codes = [];
+  kitty_codes = [(115, 6); (83, 5)];
+  display = "^Sh+S"; context = Global; description = "Split horizontally (tterm)" }
+
 (* --- Grouped for help/status generation --- *)
 
 let navigation_bindings = [step_forward; step_backward; go_to_cursor; step_to_start; step_to_end; cycle_pane]
