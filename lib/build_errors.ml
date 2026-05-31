@@ -11,11 +11,50 @@ type entry = {
   output_row_end : int;
 }
 
-(* Cached parsed entries and the input we last parsed (for cheap
-   reparse skipping). Use [==] to identify the same input list. *)
-let entries : entry list ref = ref []
+(* Per-file slot: the entries pinned to that file plus the .vo mtime we
+   observed when the slot was last written. The mtime stamp lets us
+   detect a successful rebuild of the file — when the .vo advances past
+   what we stamped, the slot is stale and gets dropped (the file is
+   clean now, even if the current build's output never said so).
+
+   A new build does NOT wipe slots up-front. A file's slot is only
+   replaced when fresh entries for it are parsed from the current
+   build's output, or dropped when its .vo advances. Files that the
+   build never touched keep their prior errors visible. *)
+type slot = {
+  entries : entry list;
+  vo_mtime_at_record : float option;
+}
+
+let slots : (string, slot) Hashtbl.t = Hashtbl.create 16
+(* Insertion order of files, preserved across builds. New files append;
+   surviving files keep their position. *)
+let file_order : string list ref = ref []
+(* Cached parse input for cheap reparse skipping. *)
 let last_input : string list ref = ref []
 let current_idx : int ref = ref (-1)
+
+let vo_of_v v_path =
+  if Filename.check_suffix v_path ".v" then
+    Filename.chop_suffix v_path ".v" ^ ".vo"
+  else v_path ^ "o"
+
+let stat_mtime path =
+  try Some (Unix.stat path).Unix.st_mtime with _ -> None
+
+let vo_mtime_for_v v_path = stat_mtime (vo_of_v v_path)
+
+(* Flattened entry list in [file_order], for callers that expect a
+   single sequence (Errors-tab listing, F9 cursor). *)
+let flatten () =
+  List.concat_map (fun f ->
+    match Hashtbl.find_opt slots f with
+    | Some s -> s.entries
+    | None -> []
+  ) !file_order
+
+let prune_missing_files () =
+  file_order := List.filter (Hashtbl.mem slots) !file_order
 
 let resolve_path ~project_dir p =
   let joined =
@@ -107,61 +146,109 @@ let parse ~project_dir lines =
   done;
   List.rev !out
 
+(* Preserve the F9 cursor across slot mutations by matching the prior
+   active entry's identity inside the new flattened list. *)
+let preserve_cursor old_active =
+  match old_active with
+  | None -> ()
+  | Some (old : entry) ->
+    let rec find i = function
+      | [] -> current_idx := -1
+      | (e : entry) :: _
+        when e.file = old.file && e.line = old.line
+          && e.col_start = old.col_start
+          && e.severity = old.severity -> current_idx := i
+      | _ :: rest -> find (i + 1) rest
+    in
+    find 0 (flatten ())
+
+let active_entry () =
+  if !current_idx < 0 then None
+  else List.nth_opt (flatten ()) !current_idx
+
 let refresh ~project_dir lines =
   if lines = !last_input then ()
   else begin
     last_input := lines;
-    let new_entries = parse ~project_dir lines in
-    (* Try to keep the F9 cursor pointing at the same entry across
-       re-parses — important while the build is still streaming output
-       and the user has already navigated. *)
-    let preserved =
-      if !current_idx < 0 then -1
-      else
-        match List.nth_opt !entries !current_idx with
-        | None -> -1
-        | Some old ->
-          let rec find i = function
-            | [] -> -1
-            | (e : entry) :: _
-              when e.file = old.file && e.line = old.line
-                && e.col_start = old.col_start
-                && e.severity = old.severity -> i
-            | _ :: rest -> find (i + 1) rest
-          in
-          find 0 new_entries
-    in
-    entries := new_entries;
-    current_idx := preserved
+    let old_active = active_entry () in
+    let parsed = parse ~project_dir lines in
+    (* Group parsed entries by file, preserving in-build order. *)
+    let by_file = Hashtbl.create 8 in
+    let order = ref [] in
+    List.iter (fun (e : entry) ->
+      if not (Hashtbl.mem by_file e.file) then begin
+        Hashtbl.add by_file e.file [e];
+        order := e.file :: !order
+      end else
+        Hashtbl.replace by_file e.file (e :: Hashtbl.find by_file e.file)
+    ) parsed;
+    (* Replace slot for every file mentioned in this parse. Files NOT
+       mentioned keep their prior slot — that's the whole point. *)
+    List.iter (fun f ->
+      let entries = List.rev (Hashtbl.find by_file f) in
+      Hashtbl.replace slots f
+        { entries; vo_mtime_at_record = vo_mtime_for_v f };
+      if not (List.mem f !file_order) then
+        file_order := !file_order @ [f]
+    ) (List.rev !order);
+    preserve_cursor old_active
   end
 
-let all () = !entries
+(* Walk every slot; drop those whose file's .vo has advanced past the
+   mtime we stamped — that's a successful rebuild and the errors are no
+   longer current. Returns true if anything changed. *)
+let recheck_vo () =
+  let old_active = active_entry () in
+  let dropped = ref false in
+  let to_drop = ref [] in
+  Hashtbl.iter (fun f s ->
+    match vo_mtime_for_v f, s.vo_mtime_at_record with
+    | Some now, Some then_ when now > then_ -> to_drop := f :: !to_drop
+    | Some _, None -> to_drop := f :: !to_drop
+    | _ -> ()
+  ) slots;
+  List.iter (fun f ->
+    Hashtbl.remove slots f;
+    dropped := true
+  ) !to_drop;
+  if !dropped then begin
+    prune_missing_files ();
+    preserve_cursor old_active
+  end;
+  !dropped
+
+let all () = flatten ()
 
 let for_file path =
   let path = Tab.canonical_path path in
-  List.filter (fun e -> e.file = path) !entries
+  match Hashtbl.find_opt slots path with
+  | Some s -> s.entries
+  | None -> []
 
 let severity_for_line ~file ~line =
   let file = Tab.canonical_path file in
-  let rank = function Error -> 2 | Warning -> 1 in
-  List.fold_left (fun acc e ->
-    if e.file = file && e.line = line then
-      match acc with
-      | None -> Some e.severity
-      | Some s -> if rank e.severity > rank s then Some e.severity else acc
-    else acc
-  ) None !entries
+  match Hashtbl.find_opt slots file with
+  | None -> None
+  | Some s ->
+    let rank = function Error -> 2 | Warning -> 1 in
+    List.fold_left (fun acc e ->
+      if e.line = line then
+        match acc with
+        | None -> Some e.severity
+        | Some s -> if rank e.severity > rank s then Some e.severity else acc
+      else acc
+    ) None s.entries
 
 let lookup_by_output_row row =
   List.find_opt (fun e ->
     row >= e.output_row_start && row <= e.output_row_end
-  ) !entries
+  ) (flatten ())
 
 let current_index () =
   if !current_idx < 0 then None else Some !current_idx
 
 let advance ~forward =
-  let es = !entries in
+  let es = flatten () in
   match es with
   | [] -> current_idx := -1; None
   | _ ->
@@ -176,7 +263,7 @@ let advance ~forward =
     Some (List.nth es next)
 
 let set_current target =
-  let es = !entries in
+  let es = flatten () in
   let rec find i = function
     | [] -> ()
     | e :: rest ->
@@ -189,8 +276,10 @@ let set_current target =
   in
   find 0 es
 
+(* Drop every slot. Project-switch / explicit reset only. *)
 let clear () =
-  entries := [];
+  Hashtbl.reset slots;
+  file_order := [];
   last_input := [];
   current_idx := -1
 
@@ -220,7 +309,7 @@ let error_files ~project_dir =
         out := rel :: !out
       end
     end
-  ) !entries;
+  ) (flatten ());
   List.rev !out
 
 let format_relpath ~project_dir path =
@@ -278,7 +367,7 @@ let render_errors_tab ~project_dir =
         if k > 0 && l <> "" then
           emit_line i (Styled.plain ("      " ^ l))
       ) msg_lines
-  ) !entries;
+  ) (flatten ());
   let body = List.rev !rows in
   let map_arr = Array.of_list (List.rev !map) in
   errors_tab_row_to_idx := map_arr;
@@ -289,6 +378,6 @@ let lookup_errors_tab_row row =
   if row < 0 || row >= Array.length m then None
   else
     let i = m.(row) in
-    let es = !entries in
+    let es = flatten () in
     if i < 0 || i >= List.length es then None
     else Some (List.nth es i)

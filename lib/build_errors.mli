@@ -13,11 +13,21 @@ type entry = {
   output_row_end : int;     (** Inclusive — last row consumed. *)
 }
 
-(** Re-parse [output] (Build.output ()) into the cached entry list,
-    resolving relative paths against [project_dir]. Cheap if the input
-    list is identical to what we last parsed. Resets the F9 cursor when
-    the output changes. *)
+(** Re-parse [output] (Build.output ()) and update the per-file slot
+    table, resolving relative paths against [project_dir]. Files
+    mentioned in the new parse have their slot replaced; files NOT
+    mentioned keep their prior slot — a new build does not blow away
+    errors from previous builds for files it hasn't reached yet. The
+    F9 cursor is preserved across re-parses by identity match. Cheap
+    if the input is identical to what we last parsed. *)
 val refresh : project_dir:string -> string list -> unit
+
+(** Walk every slot and drop those whose file's .vo has advanced past
+    the mtime stamped on the slot — a successful rebuild has happened
+    and the prior errors are no longer current. Returns true if any
+    slot was dropped. Call this on .vo inotify events and on build
+    finish. *)
+val recheck_vo : unit -> bool
 
 val all : unit -> entry list
 
@@ -40,7 +50,9 @@ val advance : forward:bool -> entry option
 (** Set the current index by entry identity (typically used after click). *)
 val set_current : entry -> unit
 
-(** Drop all entries and the current index. *)
+(** Drop every slot and the current index. Use on project switch or
+    explicit reset — there is no longer any automatic clear-on-build,
+    so this is the only "wipe everything" path. *)
 val clear : unit -> unit
 
 (** Project-relative .v paths of files with at least one [Error] entry

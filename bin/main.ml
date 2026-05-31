@@ -173,6 +173,7 @@ let () =
       ) mgr.tabs)
     ~tabs:(fun () -> mgr.tabs)
     ~set_project_dir:(fun dir ->
+      Build_errors.clear ();
       File_manager.set_project_dir fm dir;
       refresh_dep_runner_for_dir dir)
     ~add_file_watch:(fun p -> File_manager.add_watch fm p)
@@ -377,11 +378,13 @@ let () =
     if Build.poll () then Render_need.request ();
     if was_building && not (Build.is_running ()) then begin
       (* Build just finished — refresh parsed errors so the file-tree
-         marker reflects the new state, then recompute per-file
+         marker reflects the new state, sweep slots whose .vo advanced
+         (the file got rebuilt clean), then recompute per-file
          build_status. *)
       (match !current_project_dir with
        | Some pd -> Build_errors.refresh ~project_dir:pd (Build.output ())
        | None -> ());
+      ignore (Build_errors.recheck_vo ());
       refresh_build_status ()
     end;
     (* Keep redrawing while the build spinner / result indicator is live. *)
@@ -416,10 +419,14 @@ let () =
         (* A .vo (or external .v save) landed inside the project.
            Refresh per-file build status so the file-tree marker
            updates incrementally during long builds, and also catches
-           external [make]/[dune]/[rocqc] invocations. *)
+           external [make]/[dune]/[rocqc] invocations. Sweep .vo
+           mtimes so a file that finished cleanly drops its prior
+           errors even though the current build's output never
+           mentioned it. *)
         (match !current_project_dir with
          | Some pd -> Build_errors.refresh ~project_dir:pd (Build.output ())
          | None -> ());
+        ignore (Build_errors.recheck_vo ());
         refresh_build_status ();
         Render_need.request ()
       | _ ->
