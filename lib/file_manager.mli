@@ -22,6 +22,14 @@ val watch_fd : t -> Unix.file_descr
 val add_watch : t -> string -> unit
 val close : t -> unit
 
+(** Watch [path] and invoke [on_change] from [poll] whenever its
+    contents change. Adds the inotify watch automatically. Re-registering
+    the same path replaces the previous callback. Intended for one-off
+    config files outside the project tree (e.g. ~/.XCompose) — events
+    for these paths bypass tab dispatch. *)
+val register_file_callback :
+  t -> path:string -> on_change:(unit -> unit) -> unit
+
 (** Start watching a project directory tree recursively. Subsequent
     file/dir additions inside the tree are auto-watched. Calling again
     with a different [dir] tears down the old watches first. Skips

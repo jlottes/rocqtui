@@ -185,7 +185,18 @@ let () =
     ~dep_state:(fun () -> (Dep_runner.graph dr, Dep_runner.running dr))
     () in
   ctx.theme_name <- theme.Theme.name;
-  if !xcompose then Editor.init_compose ctx;
+  if !xcompose then begin
+    Editor.init_compose ctx;
+    (* Pick up edits to ~/.XCompose immediately — no restart needed. *)
+    let xc_path =
+      let home = try Sys.getenv "HOME" with Not_found -> "." in
+      Filename.concat home ".XCompose" in
+    File_manager.register_file_callback fm
+      ~path:xc_path
+      ~on_change:(fun () ->
+        ctx.compose <- Some (Compose.load ());
+        Render_need.request ())
+  end;
   (* Wire terminal clipboard hook to editor context *)
   Terminal.set_clipboard_hook (fun text ->
     ctx.clipboard <- text;

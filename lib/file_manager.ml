@@ -26,6 +26,10 @@ type t = {
      FileChanged events on this path are surfaced as ProjectChanged so
      File_tree refreshes when the project file is edited. *)
   mutable project_file_watched : string option;
+  (* Per-path callbacks for files that aren't tabs and aren't the
+     project file (e.g. ~/.XCompose). FileChanged events with a
+     matching path fire the callback and bypass tab dispatch. *)
+  mutable file_callbacks : (string * (unit -> unit)) list;
 }
 
 let create () =
@@ -33,7 +37,13 @@ let create () =
     deferred = [];
     project_dir = None;
     project_subdirs = [];
-    project_file_watched = None }
+    project_file_watched = None;
+    file_callbacks = [] }
+
+let register_file_callback t ~path ~on_change =
+  t.file_callbacks <-
+    (path, on_change) :: List.remove_assoc path t.file_callbacks;
+  File_watch.add_watch t.watcher path
 
 let watch_fd t = File_watch.watch_fd t.watcher
 
@@ -209,7 +219,9 @@ let poll t (tabs : Tab.t list) =
         project_touched := true;
         sources_touched := true
       end else
-        file_paths := p :: !file_paths
+        (match List.assoc_opt p t.file_callbacks with
+         | Some cb -> (try cb () with _ -> ())
+         | None -> file_paths := p :: !file_paths)
     | File_watch.DirEntryAdded { dir; name; is_dir } ->
       if affects_tree_shape name is_dir then begin
         project_touched := true;
