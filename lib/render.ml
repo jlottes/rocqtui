@@ -362,7 +362,7 @@ let set_status_line_styled t ~row_from_bottom segments =
     Grid.fill t.curr ~row ~col:0 ~width:t.term_w ' ' base_attr;
     let col = ref 1 in
     List.iter (fun (text, attr) ->
-      col := Grid.put_str t.curr ~row ~col:!col text attr
+      col := !col + Grid.put_str t.curr ~row ~col:!col text attr
     ) segments
   end
 
