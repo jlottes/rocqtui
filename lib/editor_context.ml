@@ -57,6 +57,11 @@ type t = {
   (* File-tree panel: lazily created on first F8. Survives across tabs.
      Whether the panel currently receives keys is [focus = FFileTree]. *)
   mutable file_tree : File_tree.t option;
+  (* The session's project. Resolved at init from CLI args / cwd /
+     open file. Read by file picker, file tree, save-as, build menu,
+     rename, project search. None means "no _RocqProject is in
+     effect" — project-dependent features are unavailable. *)
+  mutable project : Project.t option;
 }
 
 let create
@@ -92,7 +97,17 @@ let create
     project_mode = false;
     project_search = Project_search.create ();
     focus = FScript;
-    file_tree = None }
+    file_tree = None;
+    project = None }
+
+(* Set the session's project and fire the side-effect callback that
+   retargets build-error tracking, file watching, and the dep runner.
+   Pass None to clear (project-dependent features become unavailable). *)
+let set_project t p =
+  t.project <- p;
+  match p with
+  | Some pr -> t.set_project_dir pr.Project.project_dir
+  | None -> ()
 
 (* Lazy accessor: refresh [tab.search_matches] if either the global
    generation or the tab's buffer revision has changed. Returns None
@@ -195,13 +210,12 @@ let search_snapshot t (active_tab : Tab.t) : Search_results.t option =
   | Some q when Text_field.contents q.query = "" -> None
   | Some q ->
     let active_path = Buffer.filename active_tab.buf in
-    let project_dir =
-      match active_path with
-      | Some p ->
-        (match Project.find (Filename.dirname p) with
-         | Some pf -> pf.project_dir
-         | None -> Filename.dirname p)
-      | None -> ""
+    let project_dir = match t.project with
+      | Some p -> p.project_dir
+      | None ->
+        (match active_path with
+         | Some p -> Filename.dirname p
+         | None -> "")
     in
     if not t.project_mode then begin
       (* Single-file: just the active tab. *)

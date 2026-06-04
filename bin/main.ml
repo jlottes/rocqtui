@@ -1,37 +1,72 @@
 open Rocqtui_lib
 
-let build_initial_state ~filenames ~extra_args =
-  let project_dirs = ref [] in
-  let create_tab_for_file filename =
-    let project_args =
-      match Project.find_for ~filename () with
-      | Some p ->
-        if not (List.mem p.project_dir !project_dirs) then
-          project_dirs := p.project_dir :: !project_dirs;
-        p.args
-      | None -> []
+(* Positional CLI arg, classified as either an existing directory or
+   anything else (treated as a file path even if it doesn't exist). *)
+type positional = Dir of string | File of string
+
+let classify_positional arg =
+  try if Sys.is_directory arg then Dir arg else File arg
+  with Sys_error _ -> File arg
+
+let to_abs p =
+  if Filename.is_relative p then Filename.concat (Sys.getcwd ()) p else p
+
+(* Outcome of init-time project resolution. [Found] means a
+   _RocqProject was located. [Missing dir] means none was found and
+   the startup prompt should offer to create one at [dir]. *)
+type init_project = Found of Project.t | Missing of string
+
+let resolve_initial_project ~dir_arg ~file_args =
+  match dir_arg with
+  | Some d ->
+    let d_abs = to_abs d in
+    (match Project.find d_abs with
+     | Some p -> Found p
+     | None -> Missing d_abs)
+  | None ->
+    let from = match file_args with
+      | [] -> Project.find_for ()
+      | f :: _ -> Project.find_for ~filename:f ()
     in
-    let all_args = project_args @ extra_args in
-    Tab.create_from_file ~args:all_args filename
+    (match from with
+     | Some p -> Found p
+     | None ->
+       let dir = match file_args with
+         | [] -> Sys.getcwd ()
+         | f :: _ -> Filename.dirname (to_abs f)
+       in
+       Missing dir)
+
+let build_initial_state ~file_args ~project ~extra_args =
+  let project_args = match project with
+    | Some (p : Project.t) -> p.args
+    | None -> []
   in
-  let initial_tabs = match filenames with
-    | [] -> [Tab.create_blank ()]
-    | files -> List.map create_tab_for_file files
+  let all_args = project_args @ extra_args in
+  let initial_tabs = match file_args with
+    | [] -> [Tab.create_blank ~args:all_args ()]
+    | files -> List.map (Tab.create_from_file ~args:all_args) files
   in
   let mgr = Tab.create_manager (List.hd initial_tabs) in
   List.iter (fun tab ->
     if tab != List.hd initial_tabs then Tab.add_tab mgr tab
   ) initial_tabs;
-  (mgr, !project_dirs)
+  mgr
 
 (* Headless loop: no terminal, no rendering, no stdin input. Just runs
    the MCP server and drives Rocq sessions so that an external client
    (typically the rocqtui_mcp bridge) can exercise the API end-to-end. *)
-let run_headless ~filenames ~extra_args ~socket_path =
+let run_headless ~file_args ~extra_args ~socket_path =
   Printexc.record_backtrace true;
-  let (mgr, project_dirs) = build_initial_state ~filenames ~extra_args in
+  let project = match resolve_initial_project ~dir_arg:None ~file_args with
+    | Found p -> Some p
+    | Missing _ -> None
+  in
+  let mgr = build_initial_state ~file_args ~project ~extra_args in
   let mcp = Mcp_server.create ?socket_path () in
-  List.iter (Mcp_server.create_project_symlink mcp) project_dirs;
+  (match project with
+   | Some p -> Mcp_server.create_project_symlink mcp p.project_dir
+   | None -> ());
   let fm = File_manager.create () in
   List.iter (fun (t : Tab.t) ->
     match Buffer.filename t.buf with
@@ -106,10 +141,27 @@ let () =
     else
       filenames := arg :: !filenames
   ) Sys.argv;
-  let filenames = List.rev !filenames in
+  let positionals = List.rev !filenames in
   let extra_args = List.rev !extra_args in
+  (* Split positionals into at most one directory and the rest as
+     file paths. The dir arg is the new "open this project" entry
+     point (`rocqtui ~/path/to/project`). *)
+  let dir_arg = ref None in
+  let file_args = ref [] in
+  List.iter (fun arg ->
+    match classify_positional arg with
+    | Dir d ->
+      (match !dir_arg with
+       | None -> dir_arg := Some d
+       | Some _ ->
+         Printf.eprintf "rocqtui: only one directory argument allowed\n%!";
+         exit 2)
+    | File f -> file_args := f :: !file_args
+  ) positionals;
+  let dir_arg = !dir_arg in
+  let file_args = List.rev !file_args in
   if !headless then
-    run_headless ~filenames ~extra_args ~socket_path:!socket_path
+    run_headless ~file_args ~extra_args ~socket_path:!socket_path
   else
   let theme = match !theme_name with
     | Some n -> Theme.find n
@@ -134,21 +186,35 @@ let () =
      Rocq entry. tterm doesn't make this call — it lives entirely on
      Terminal sub-tabs. *)
   ignore (Msg_pane.ensure Msg_pane.Rocq);
-  let (mgr, project_dirs) = build_initial_state ~filenames ~extra_args in
+  let init_proj = resolve_initial_project ~dir_arg ~file_args in
+  let initial_project = match init_proj with
+    | Found p -> Some p
+    | Missing _ -> None
+  in
+  let mgr = build_initial_state
+    ~file_args ~project:initial_project ~extra_args in
   if Tab.count mgr > 1 then
     Render.set_tab_bar r true;
   (* Editor context *)
   let fm = File_manager.create () in
   let dr = Dep_runner.create () in
-  let current_project_dir : string option ref = ref None in
+  (* Forward ref: ctx is constructed below but the side-effect
+     callback we plumb into it needs to read [ctx.project]. *)
+  let ctx_ref : Editor_context.t option ref = ref None in
+  let project_dir () = match !ctx_ref with
+    | Some ctx ->
+      (match ctx.Editor_context.project with
+       | Some p -> Some p.Project.project_dir
+       | None -> None)
+    | None -> None
+  in
   let refresh_dep_runner_for_dir dir =
-    current_project_dir := Some dir;
     match Project.find dir with
     | Some p -> Dep_runner.refresh dr ~project_file:p.path
     | None -> ()
   in
   let refresh_build_status () =
-    match !current_project_dir, Dep_runner.graph dr with
+    match project_dir (), Dep_runner.graph dr with
     | Some pd, Some g ->
       let error_files = Build_errors.error_files ~project_dir:pd in
       Build_status.refresh ~project_dir:pd ~graph:g ~error_files
@@ -184,6 +250,8 @@ let () =
     ~add_file_watch:(fun p -> File_manager.add_watch fm p)
     ~dep_state:(fun () -> (Dep_runner.graph dr, Dep_runner.running dr))
     () in
+  ctx_ref := Some ctx;
+  Editor_context.set_project ctx initial_project;
   ctx.theme_name <- theme.Theme.name;
   if !xcompose then begin
     Editor.init_compose ctx;
@@ -203,20 +271,63 @@ let () =
     Clipboard.copy_to_system text);
   (* Start MCP server *)
   let mcp = Mcp_server.create () in
-  (* Create MCP socket symlinks in project directories *)
-  List.iter (Mcp_server.create_project_symlink mcp) project_dirs;
-  (* File manager: per-tab content watches plus a recursive watch on
-     the first project directory so File_tree auto-refreshes. *)
+  (* Create MCP socket symlink in the project directory (if any).
+     Editor_context.set_project already wired up File_manager and
+     the dep runner via ctx.set_project_dir. *)
+  (match initial_project with
+   | Some p -> Mcp_server.create_project_symlink mcp p.project_dir
+   | None -> ());
+  (* File manager: per-tab content watches. *)
   List.iter (fun (t : Tab.t) ->
     match Buffer.filename t.buf with
     | Some f -> File_manager.add_watch fm f
     | None -> ()
   ) mgr.tabs;
-  (match project_dirs with
-   | dir :: _ ->
-     File_manager.set_project_dir fm dir;
-     refresh_dep_runner_for_dir dir
-   | [] -> ());
+  let open_file_tree_for (p : Project.t) =
+    ctx.file_tree <- Some (File_tree.create
+      ~project_dir:p.project_dir ~project_file:p.path);
+    Render.set_file_tree_visible r true;
+    ctx.focus <- Editor_context.FFileTree
+  in
+  (* `rocqtui <dir>` with no file args: open the file tree so the
+     directory arg is a natural "open this project" entry point. *)
+  if dir_arg <> None && file_args = [] then
+    (match initial_project with
+     | Some p -> open_file_tree_for p
+     | None -> ());
+  (* Missing-_RocqProject startup prompt. Sits on top of whatever
+     initial layout the positional args produced. Confirm creates an
+     empty _RocqProject at [dir] and adopts it as the session
+     project; ESC dismisses without creating one (project-dependent
+     features remain unavailable for this session). *)
+  (match init_proj with
+   | Found _ -> ()
+   | Missing dir ->
+     let project_file = Filename.concat dir "_RocqProject" in
+     let msg = Printf.sprintf
+       "No _RocqProject found in %s. Create one? Enter to create, ESC to skip."
+       dir in
+     let needs_tree = dir_arg <> None && file_args = [] in
+     Modal.push ctx.modal (Modal.Prompt {
+       message = msg;
+       handler = (fun ev ->
+         match ev with
+         | Input.Special (Input.Enter, _) ->
+           (try
+              let oc = open_out project_file in
+              close_out oc;
+              let p = Project.read project_file in
+              Editor_context.set_project ctx (Some p);
+              Mcp_server.create_project_symlink mcp p.project_dir;
+              if needs_tree then open_file_tree_for p;
+              Render.set_status r
+                (Printf.sprintf "Created %s" project_file)
+            with Sys_error e ->
+              Render.set_status r
+                (Printf.sprintf "Create _RocqProject: %s" e));
+           Modal.Handled
+         | _ -> Modal.Dismissed)
+     }));
   (* Render helper *)
   let render ?(force=false) () =
     (* Set MCP status indicator. While a client is connected we always
@@ -257,9 +368,14 @@ let () =
     View.render_all ctx r tab;
     Render.present ~force r
   in
+  let project_args () = match ctx.project with
+    | Some p -> p.Project.args
+    | None -> []
+  in
   let do_open_file path =
     let jump = Editor.take_jump_target ctx in
-    let (_, created) = Tab.open_or_switch mgr ~extra_args path in
+    let (_, created) = Tab.open_or_switch mgr
+      ~project_args:(project_args ()) ~extra_args path in
     if created then begin
       File_manager.add_watch fm path;
       if Tab.count mgr > 1 then Render.set_tab_bar r true
@@ -397,7 +513,7 @@ let () =
          marker reflects the new state, sweep slots whose .vo advanced
          (the file got rebuilt clean), then recompute per-file
          build_status. *)
-      (match !current_project_dir with
+      (match project_dir () with
        | Some pd -> Build_errors.refresh ~project_dir:pd (Build.output ())
        | None -> ());
       ignore (Build_errors.recheck_vo ());
@@ -439,7 +555,7 @@ let () =
            mtimes so a file that finished cleanly drops its prior
            errors even though the current build's output never
            mentioned it. *)
-        (match !current_project_dir with
+        (match project_dir () with
          | Some pd -> Build_errors.refresh ~project_dir:pd (Build.output ())
          | None -> ());
         ignore (Build_errors.recheck_vo ());
@@ -508,8 +624,8 @@ let () =
           else if (match ev with
               | Input.Key (110, m) when m.ctrl -> true  (* ^N *)
               | Input.Key (14, _) -> true | _ -> false) then begin
-            let active = Tab.active_tab mgr in
-            Tab.add_tab mgr (Tab.create_blank ~args:active.session_args ());
+            let args = project_args () @ extra_args in
+            Tab.add_tab mgr (Tab.create_blank ~args ());
             Render.set_tab_bar r true;
             Render_need.request ()
           end
@@ -585,16 +701,12 @@ let () =
                      Render.set_status r "Error saving file."
                  end
                | None ->
-                 (* New / unfiled tab: open the Save As prompt. Anchor
-                    at the project (cwd-first); fall back to cwd if
-                    no project file is found anywhere in the tree. *)
-                 let project_dir = match Project.find_for () with
-                   | Some p -> p.project_dir
-                   | None -> Sys.getcwd ()
-                 in
+                 (* New / unfiled tab: open the Save As prompt.
+                    Anchored at the session project (read at commit
+                    time). When no project is set, the commit
+                    handler falls back to cwd. *)
                  Modal.push ctx.modal (Modal.SaveAsPrompt {
                    tab_id = tab.id;
-                   project_dir;
                    extension = ".v";
                    field = Text_field.create ();
                  }));

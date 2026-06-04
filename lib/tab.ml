@@ -52,7 +52,6 @@ type t = {
   buf : Buffer.t;
   rb : Region_buffer.t;
   mutable session : Session.t option;
-  session_args : string list;
   mutable goals_scroll : int;
   mutable show_all_hyps : bool;
   mutable mouse_selecting : bool;
@@ -79,10 +78,10 @@ let fresh_id () =
   incr next_id;
   id
 
-let make_tab ?(args=[]) buf session =
+let make_tab buf session =
   { id = fresh_id (); buf;
     rb = Region_buffer.create buf ~session;
-    session; session_args = args;
+    session;
     goals_scroll = 0;
     show_all_hyps = false;
     mouse_selecting = false;
@@ -100,7 +99,7 @@ let create_blank ?(args=[]) () =
     try Some (Session.create ~args buf)
     with _ -> None
   in
-  make_tab ~args buf session
+  make_tab buf session
 
 let create_from_file ?(args=[]) filename =
   let filename = canonical_path filename in
@@ -110,7 +109,7 @@ let create_from_file ?(args=[]) filename =
     try Some (Session.create ~args buf)
     with _ -> None
   in
-  let tab = make_tab ~args buf session in
+  let tab = make_tab buf session in
   (* Initial load: routed through the gateway. The session has no
      verified content yet, so the check passes trivially. *)
   ignore (Region_buffer.try_reload_from_disk tab.rb);
@@ -149,8 +148,11 @@ let switch_to_id mgr id =
   | None -> false
 
 (* Open a file in a new tab, or switch to it if already open.
-   Returns (tab, created) where created=true if a new tab was made. *)
-let open_or_switch mgr ?(extra_args=[]) path =
+   Returns (tab, created) where created=true if a new tab was made.
+   The caller passes the session project's args (typically
+   [ctx.project.args]) so the new tab's rocqtop sees the right
+   [-Q]/[-R] flags — there's no per-file project lookup. *)
+let open_or_switch mgr ?(project_args=[]) ?(extra_args=[]) path =
   let path = canonical_path path in
   let existing = List.find_opt (fun t ->
     Buffer.filename t.buf = Some path
@@ -160,10 +162,8 @@ let open_or_switch mgr ?(extra_args=[]) path =
     ignore (switch_to_id mgr t.id);
     (t, false)
   | None ->
-    let pargs = match Project.find_for ~filename:path () with
-      | Some p -> p.args
-      | None -> [] in
-    let new_tab = create_from_file ~args:(pargs @ extra_args) path in
+    let new_tab =
+      create_from_file ~args:(project_args @ extra_args) path in
     add_tab mgr new_tab;
     (new_tab, true)
 
@@ -250,22 +250,24 @@ let display_names mgr =
   done;
   List.map (fun (id, d, parts) -> (id, name_of_parts parts d)) !entries
 
-(* Project-relative path for a file, or basename if no project *)
-let project_relative_path filename =
+(* Project-relative path for a file, or basename if no project. The
+   caller supplies the session project_dir (typically
+   [ctx.project.project_dir]) — this module no longer does its own
+   project lookup. *)
+let project_relative_path ?project_dir filename =
   match filename with
   | None -> "[new]"
   | Some f ->
-    let dir = Filename.dirname f in
-    match Project.find dir with
-    | Some p ->
-      let prefix = p.project_dir ^ "/" in
-      let prefix_len = String.length prefix in
-      if String.length f > prefix_len
-         && String.sub f 0 prefix_len = prefix then
-        String.sub f prefix_len (String.length f - prefix_len)
-      else
-        Filename.basename f
-    | None -> Filename.basename f
+    (match project_dir with
+     | Some pd ->
+       let prefix = pd ^ "/" in
+       let prefix_len = String.length prefix in
+       if String.length f > prefix_len
+          && String.sub f 0 prefix_len = prefix then
+         String.sub f prefix_len (String.length f - prefix_len)
+       else
+         Filename.basename f
+     | None -> Filename.basename f)
 
 let tab_at_x mgr x =
   let dnames = display_names mgr in

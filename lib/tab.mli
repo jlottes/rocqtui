@@ -24,7 +24,6 @@ type t = {
   buf : Buffer.t;
   rb : Region_buffer.t;  (** Edit gateway. Owns the lock state. *)
   mutable session : Session.t option;
-  session_args : string list;
   mutable goals_scroll : int;
   mutable show_all_hyps : bool;
   mutable mouse_selecting : bool;
@@ -63,9 +62,16 @@ val add_tab : manager -> t -> unit
 (** Switch to a tab by ID. Returns true if found. *)
 val switch_to_id : manager -> int -> bool
 
-(** Open a file or switch to it if already open.
-    Returns (tab, created) where created=true if new tab was made. *)
-val open_or_switch : manager -> ?extra_args:string list -> string -> t * bool
+(** Open a file or switch to it if already open. Returns (tab,
+    created) where created=true if a new tab was made. The caller
+    must pass the session project's [-Q]/[-R] flags via
+    [?project_args] so the new tab's rocqtop is started under the
+    right load paths. *)
+val open_or_switch :
+  manager ->
+  ?project_args:string list ->
+  ?extra_args:string list ->
+  string -> t * bool
 
 val close_active : manager -> bool
 val next_tab : manager -> unit
@@ -75,7 +81,7 @@ val poll_all : manager -> bool
 val tab_at_x : manager -> int -> int option
 
 val display_names : manager -> (int * string) list
-val project_relative_path : string option -> string
+val project_relative_path : ?project_dir:string -> string option -> string
 
 val fresh_pane_sel : unit -> pane_selection
 val fresh_rocq_msg_state : unit -> rocq_msg_state

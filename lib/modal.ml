@@ -1,16 +1,18 @@
 (* Modal manager: replaces scattered boolean refs with a variant stack. *)
 
+(* Both rename and save-as anchor path resolution at the session
+   project ([Editor_context.t.project]). They do not carry the project
+   in their state — the handler re-reads it at commit time, so a
+   project that was newly created by the startup prompt becomes
+   available immediately. *)
 type rename_state = {
   old_path : string;          (* absolute path of file being renamed *)
-  project_dir : string;
-  project_file : string;      (* abs path to _RocqProject *)
   extension : string;         (* always ".v" for now; locked suffix *)
   field : Text_field.t;       (* editable portion; never includes [extension] *)
 }
 
 type save_as_state = {
   tab_id : int;               (* tab whose buffer will be saved *)
-  project_dir : string;       (* root for path resolution *)
   extension : string;         (* locked suffix (".v") *)
   field : Text_field.t;       (* editable portion; starts empty *)
 }

@@ -892,7 +892,10 @@ let update_status (ctx : Editor_context.t) r (tab : Tab.t) =
     let (cl, cc) = Buffer.cursor buf in
     let line = Buffer.get_line buf cl in
     let vcol = Utf8.byte_to_col line cc in
-    let fname = Tab.project_relative_path (Buffer.filename buf) in
+    let project_dir = match ctx.project with
+      | Some p -> Some p.project_dir | None -> None in
+    let fname = Tab.project_relative_path
+      ?project_dir (Buffer.filename buf) in
     let mod_flag =
       (if Buffer.modified buf then "*" else "") ^
       (if Buffer.disk_changed buf then "\xe2\x9f\xb3" else "") in

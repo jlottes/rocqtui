@@ -5,22 +5,22 @@ type prompt_result =
   | Dismissed  (** event didn't match, dismiss and re-process *)
   | Ignored    (** event didn't match, stay in prompt *)
 
-(** Mutable state of the file-tree rename prompt. *)
+(** Mutable state of the file-tree rename prompt. The session project
+    is read from [Editor_context.t.project] at commit time, not
+    snapshotted here. *)
 type rename_state = {
   old_path : string;        (** absolute path of file being renamed *)
-  project_dir : string;
-  project_file : string;    (** absolute path to _RocqProject *)
   extension : string;       (** locked suffix (always ".v" for now) *)
   field : Text_field.t;     (** editable portion (never includes [extension]) *)
 }
 
 (** Mutable state of the save-as prompt (^S on a tab with no filename
-    yet). Path is resolved relative to [project_dir]; locked extension
-    is appended on commit. [tab_id] is captured at modal-open time so
-    a stray mouse click on the tab bar doesn't redirect the save. *)
+    yet). Path is resolved relative to the session project's
+    [project_dir] ([Editor_context.t.project]); locked extension is
+    appended on commit. [tab_id] is captured at modal-open time so a
+    stray mouse click on the tab bar doesn't redirect the save. *)
 type save_as_state = {
   tab_id : int;
-  project_dir : string;
   extension : string;       (** locked suffix (always ".v" for now) *)
   field : Text_field.t;     (** editable portion; starts empty *)
 }

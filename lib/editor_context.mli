@@ -67,6 +67,11 @@ type t = {
   project_search : Project_search.t;
   mutable focus : focus;
   mutable file_tree : File_tree.t option;
+  (** The session's project. Resolved at init from CLI args / cwd /
+      open file. Read by file picker, file tree, save-as, build menu,
+      rename, project search. [None] means "no _RocqProject is in
+      effect" — project-dependent features are unavailable. *)
+  mutable project : Project.t option;
 }
 
 val create :
@@ -78,6 +83,11 @@ val create :
   ?add_file_watch:(string -> unit) ->
   ?dep_state:(unit -> Dep_graph.t option * bool) ->
   unit -> t
+
+(** Record the session's project and fire the side-effect callback
+    that retargets build-error tracking, file watching, and the dep
+    runner. Pass [None] to clear. *)
+val set_project : t -> Project.t option -> unit
 
 (** Tab's matches, lazily refreshed if either the global query gen or
     the tab's buffer revision has changed. Returns [None] when no

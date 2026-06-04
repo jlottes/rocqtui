@@ -97,19 +97,16 @@ let handle_theme (ctx : Editor_context.t) ev =
    | None -> ());
   Some Continue
 
-let project_dir_of_buf buf =
-  let dir = match Buffer.filename buf with
-    | Some f -> Filename.dirname f | None -> Sys.getcwd () in
-  match Project.find dir with
-  | Some p -> Some p.project_dir
-  | None -> None
-
 let handle_build (ctx : Editor_context.t) ev (tab : Tab.t) r =
   let buf = tab.buf in
   Modal.pop ctx.modal;
   let on_build_started () =
     ignore (Msg_pane.ensure Msg_pane.Build);
     Msg_pane.activate_unless_terminal Msg_pane.Build
+  in
+  let project_dir = match ctx.project with
+    | Some p -> Some p.Project.project_dir
+    | None -> None
   in
   match Keymatch.codepoint_of_event ev with
   | None -> Some Continue
@@ -118,37 +115,37 @@ let handle_build (ctx : Editor_context.t) ev (tab : Tab.t) r =
     if c = 'c' && Build.is_running () then
       (Build.cancel (); Some Continue)
     else if c = 'f' then begin
-      (match Buffer.filename buf, project_dir_of_buf buf with
+      (match Buffer.filename buf, project_dir with
        | Some f, Some pd ->
          if Build.build_file ~project_dir:pd f then on_build_started ()
          else Render.set_status r "Build already running."
-       | _, None -> Render.set_status r "No project found."
+       | _, None -> Render.set_status r "No project."
        | None, _ -> Render.set_status r "No filename.");
       Some Continue
     end
     else if c = 'd' then begin
-      (match Buffer.filename buf, project_dir_of_buf buf with
+      (match Buffer.filename buf, project_dir with
        | Some f, Some pd ->
          if Build.build_deps ~project_dir:pd f then on_build_started ()
          else Render.set_status r "Build already running."
-       | _, None -> Render.set_status r "No project found."
+       | _, None -> Render.set_status r "No project."
        | None, _ -> Render.set_status r "No filename.");
       Some Continue
     end
     else if c = 'a' then begin
-      (match project_dir_of_buf buf with
+      (match project_dir with
        | Some pd ->
          if Build.build_all ~project_dir:pd then on_build_started ()
          else Render.set_status r "Build already running."
-       | None -> Render.set_status r "No project found.");
+       | None -> Render.set_status r "No project.");
       Some Continue
     end
     else if c = 'x' then begin
-      (match project_dir_of_buf buf with
+      (match project_dir with
        | Some pd ->
          if Build.build_clean ~project_dir:pd then on_build_started ()
          else Render.set_status r "Build already running."
-       | None -> Render.set_status r "No project found.");
+       | None -> Render.set_status r "No project.");
       Some Continue
     end
     else Some Continue
@@ -271,26 +268,23 @@ let search_advance (ctx : Editor_context.t) (tab : Tab.t) dir =
 
 (* Restart (or cancel) the project-wide scanner. Reads the query
    from the global ctx.search_query. *)
-let project_search_kick (ctx : Editor_context.t) (tab : Tab.t) =
+let project_search_kick (ctx : Editor_context.t) (_tab : Tab.t) =
   if not ctx.project_mode then
     Project_search.cancel ctx.project_search
   else
-    match Buffer.filename tab.buf with
+    match ctx.project with
     | None -> Project_search.cancel ctx.project_search
-    | Some fname ->
-      (match Project.find (Filename.dirname fname) with
-       | None -> Project_search.cancel ctx.project_search
-       | Some p ->
-         let (query, flags) = match ctx.search_query with
-           | Some q -> Text_field.contents q.query, q.flags
-           | None -> "", Search.empty_flags
-         in
-         if query = "" then
-           Project_search.cancel ctx.project_search
-         else
-           Project_search.start ctx.project_search
-             ~project_dir:p.project_dir ~project_file:p.path
-             ~query ~flags)
+    | Some p ->
+      let (query, flags) = match ctx.search_query with
+        | Some q -> Text_field.contents q.query, q.flags
+        | None -> "", Search.empty_flags
+      in
+      if query = "" then
+        Project_search.cancel ctx.project_search
+      else
+        Project_search.start ctx.project_search
+          ~project_dir:p.project_dir ~project_file:p.path
+          ~query ~flags
 
 (* F3 / Shift+F3 dispatcher. In single-file mode walks the active
    tab's matches. In project mode walks the merged-stream
@@ -587,8 +581,15 @@ let rec mkdir_p path =
    [old_path], update [_RocqProject] if the file was listed, and add
    a fresh inotify watch on the new path (the old watch self-cleans
    via [IN_IGNORED]). Sets a status message describing the result. *)
-let execute_rename (ctx : Editor_context.t) r
-    ~old_path ~new_path ~project_file =
+let rel_under_project ~(project : Project.t) abs =
+  let prefix = project.project_dir ^ "/" in
+  let plen = String.length prefix in
+  if String.length abs > plen
+     && String.sub abs 0 plen = prefix
+  then String.sub abs plen (String.length abs - plen)
+  else abs
+
+let execute_rename (ctx : Editor_context.t) r ~old_path ~new_path =
   match Sys.rename old_path new_path with
   | exception Sys_error msg ->
     Render.set_status r (Printf.sprintf "Rename failed: %s" msg)
@@ -600,29 +601,20 @@ let execute_rename (ctx : Editor_context.t) r
         ctx.add_file_watch new_path
       | _ -> ()
     ) (ctx.tabs ());
-    let project = Project.read project_file in
-    let old_rel =
-      let prefix = project.project_dir ^ "/" in
-      let plen = String.length prefix in
-      if String.length old_path > plen
-         && String.sub old_path 0 plen = prefix
-      then String.sub old_path plen (String.length old_path - plen)
-      else old_path
-    in
-    let new_rel =
-      let prefix = project.project_dir ^ "/" in
-      let plen = String.length prefix in
-      if String.length new_path > plen
-         && String.sub new_path 0 plen = prefix
-      then String.sub new_path plen (String.length new_path - plen)
-      else new_path
-    in
-    let _ = Project.rename_member project ~old_rel ~new_rel in
-    let verb =
-      if Filename.dirname old_rel = Filename.dirname new_rel
-      then "Renamed" else "Moved" in
-    Render.set_status r
-      (Printf.sprintf "%s %s \xe2\x86\x92 %s" verb old_rel new_rel)
+    (match ctx.project with
+     | None ->
+       Render.set_status r
+         (Printf.sprintf "Renamed %s \xe2\x86\x92 %s" old_path new_path)
+     | Some p ->
+       let project = Project.read p.path in
+       let old_rel = rel_under_project ~project old_path in
+       let new_rel = rel_under_project ~project new_path in
+       let _ = Project.rename_member project ~old_rel ~new_rel in
+       let verb =
+         if Filename.dirname old_rel = Filename.dirname new_rel
+         then "Renamed" else "Moved" in
+       Render.set_status r
+         (Printf.sprintf "%s %s \xe2\x86\x92 %s" verb old_rel new_rel))
 
 (* Validate the input + dispatch. Either:
    - reject with a status message (prompt stays open),
@@ -630,8 +622,12 @@ let execute_rename (ctx : Editor_context.t) r
      doesn't exist,
    - or execute the rename inline. *)
 let commit_rename_prompt (ctx : Editor_context.t) (rp : Modal.rename_state) r =
+  let project_dir = match ctx.project with
+    | Some p -> p.Project.project_dir
+    | None -> Filename.dirname rp.old_path
+  in
   let final_rel = Text_field.contents rp.field ^ rp.extension in
-  match resolve_in_project ~project_dir:rp.project_dir final_rel with
+  match resolve_in_project ~project_dir final_rel with
   | Error msg ->
     Render.set_status r (Printf.sprintf "Rename: %s" msg)
   | Ok (new_path, new_rel) ->
@@ -646,22 +642,19 @@ let commit_rename_prompt (ctx : Editor_context.t) (rp : Modal.rename_state) r =
       let parent = Filename.dirname new_path in
       if Sys.file_exists parent then begin
         Modal.pop ctx.modal;
-        execute_rename ctx r
-          ~old_path:rp.old_path ~new_path
-          ~project_file:rp.project_file
+        execute_rename ctx r ~old_path:rp.old_path ~new_path
       end
       else begin
         (* Confirm before creating intermediate directories. *)
         Modal.pop ctx.modal;
         let parent_rel =
-          let prefix = rp.project_dir ^ "/" in
+          let prefix = project_dir ^ "/" in
           let plen = String.length prefix in
           if String.length parent > plen
              && String.sub parent 0 plen = prefix
           then String.sub parent plen (String.length parent - plen)
           else parent
         in
-        let project_file = rp.project_file in
         let old_path = rp.old_path in
         Modal.push ctx.modal (Modal.Prompt {
           message = Printf.sprintf
@@ -675,7 +668,7 @@ let commit_rename_prompt (ctx : Editor_context.t) (rp : Modal.rename_state) r =
                  Render.set_status r
                    (Printf.sprintf "mkdir: %s" (Unix.error_message e)));
               if Sys.file_exists parent then
-                execute_rename ctx r ~old_path ~new_path ~project_file;
+                execute_rename ctx r ~old_path ~new_path;
               Modal.Handled
             | _ -> Modal.Dismissed)
         })
@@ -716,8 +709,12 @@ let execute_save_as (ctx : Editor_context.t) r ~tab_id ~new_path =
 
 let commit_save_as_prompt (ctx : Editor_context.t)
     (sp : Modal.save_as_state) r =
+  let project_dir = match ctx.project with
+    | Some p -> p.Project.project_dir
+    | None -> Sys.getcwd ()
+  in
   let final_rel = Text_field.contents sp.field ^ sp.extension in
-  match resolve_in_project ~project_dir:sp.project_dir final_rel with
+  match resolve_in_project ~project_dir final_rel with
   | Error msg ->
     Render.set_status r (Printf.sprintf "Save as: %s" msg)
   | Ok (new_path, new_rel) ->
@@ -733,7 +730,7 @@ let commit_save_as_prompt (ctx : Editor_context.t)
       else begin
         Modal.pop ctx.modal;
         let parent_rel =
-          let prefix = sp.project_dir ^ "/" in
+          let prefix = project_dir ^ "/" in
           let plen = String.length prefix in
           if String.length parent > plen
              && String.sub parent 0 plen = prefix

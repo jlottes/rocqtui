@@ -188,19 +188,15 @@ let handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r =
         Some Continue
     end
     else if Keymatch.match_binding ev Keys.open_file then begin
-      let filename = Buffer.filename buf in
-      let dir = match filename with
-        | Some f -> Filename.dirname f
-        | None -> Sys.getcwd ()
-      in
-      (match Project.find dir with
+      (match ctx.project with
        | Some p ->
          let fp = File_picker.create
            ~project_dir:p.project_dir ~project_file:p.path
            ~open_files:(List.map fst (ctx.open_files ())) in
          Modal.push ctx.modal (Modal.FilePicker fp)
        | None ->
-         Render.set_status r "No _RocqProject found.");
+         Render.set_status r
+           "No project — create a _RocqProject to use the picker.");
       Some Continue
     end
     else if Keymatch.match_binding ev Keys.search then begin
@@ -338,41 +334,26 @@ let handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r =
     end
     else if View.is_build ctx then Modals.handle_build ctx ev tab r
     else if Keymatch.match_binding ev Keys.toggle_file_tree then begin
-      let filename = Buffer.filename buf in
-      let dir = match filename with
-        | Some f -> Filename.dirname f
-        | None -> Sys.getcwd ()
-      in
-      (match Project.find dir with
-       | None -> Render.set_status r "No _RocqProject found."
+      (match ctx.project with
+       | None ->
+         Render.set_status r
+           "No project — create a _RocqProject to use the file tree."
        | Some p ->
-         let need_new = match ctx.file_tree with
-           | None -> true
-           | Some ft -> File_tree.project_file ft <> p.path
-         in
-         if need_new then begin
+         let fresh = ctx.file_tree = None in
+         if fresh then
            ctx.file_tree <-
              Some (File_tree.create
                      ~project_dir:p.project_dir ~project_file:p.path);
-           (* Retarget the project watcher so auto-refresh tracks the
-              tree the user is now looking at. *)
-           ctx.set_project_dir p.project_dir
-         end;
          let was_visible = Render.file_tree_visible r in
          if not was_visible then begin
            (* Refresh from disk on each show so newly-created files
               appear; then reveal the active tab's file as the initial
-              selection ("where am I?"). Both are skipped on a brand-new
-              widget — create already enumerates and the selection
-              defaults to the root. *)
+              selection ("where am I?"). On a brand-new widget the
+              refresh is unnecessary (create just enumerated) but
+              cheap; reveal is still useful. *)
            (match ctx.file_tree with
-            | Some ft when not need_new ->
-              File_tree.refresh ft;
-              (match Buffer.filename buf with
-               | Some path -> File_tree.reveal ft ~path
-               | None -> ())
             | Some ft ->
-              (* First-time create on this project — reveal too. *)
+              if not fresh then File_tree.refresh ft;
               (match Buffer.filename buf with
                | Some path -> File_tree.reveal ft ~path
                | None -> ())
@@ -432,8 +413,6 @@ let handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r =
     else if Keymatch.match_binding ev Keys.jump_to_def then begin
       let (cl, cc) = Buffer.cursor buf in
       let line = Buffer.get_line buf cl in
-      let dir = match Buffer.filename buf with
-        | Some f -> Filename.dirname f | None -> Sys.getcwd () in
       let format_msgs pps =
         String.concat "\n" (List.map Session.string_of_pp pps) in
       let captured_tab = tab in
@@ -443,8 +422,7 @@ let handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r =
           | Some l -> Some (l, 0) | None -> None);
         ctx.pending_open <- Some path
       in
-      let try_project m =
-        match Project.find dir with
+      let try_project m = match ctx.project with
         | Some p -> Project.resolve_module p m
         | None -> None
       in
@@ -647,17 +625,24 @@ let handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r =
          (match File_tree.handle_key ft r ch with
           | File_tree.TreeOpen path -> Some (Open_file path)
           | File_tree.TreeToggleProject rel ->
-            let project_file = File_tree.project_file ft in
-            let project = Project.read project_file in
-            let (_, outcome) = Project.toggle_member project ~rel in
-            let verb = match outcome with
-              | `Added -> "added to" | `Removed -> "removed from" in
-            Render.set_status r
-              (Printf.sprintf "%s %s _RocqProject" rel verb);
+            (match ctx.project with
+             | None -> ()
+             | Some p ->
+               let project = Project.read p.path in
+               let (_, outcome) = Project.toggle_member project ~rel in
+               let verb = match outcome with
+                 | `Added -> "added to" | `Removed -> "removed from" in
+               Render.set_status r
+                 (Printf.sprintf "%s %s _RocqProject" rel verb));
             Some Continue
           | File_tree.TreeRename rel ->
-            let project_file = File_tree.project_file ft in
-            let p = Project.read project_file in
+            (* File-tree visibility implies ctx.project = Some _.
+               Read the project root from the session project so
+               the rename is consistent with everything else. *)
+            let project_dir = match ctx.project with
+              | Some p -> p.Project.project_dir
+              | None -> ""  (* unreachable: tree exists ⇒ project set *)
+            in
             (* Split off the locked extension; the prompt edits only
                the stem-plus-path portion. The cursor starts one past
                the editable text so backspace nibbles from the end of
@@ -672,9 +657,7 @@ let handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r =
               else rel
             in
             Modal.push ctx.modal (Modal.RenamePrompt {
-              old_path = Filename.concat p.project_dir rel;
-              project_dir = p.project_dir;
-              project_file = p.path;
+              old_path = Filename.concat project_dir rel;
               extension = ext;
               field = Text_field.create ~contents:stem ();
             });
