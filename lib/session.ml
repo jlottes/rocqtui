@@ -340,20 +340,6 @@ let format_goals ?(all_hyps=true) ?(width=default_width) (gs : Interface.goals) 
   end;
   Stdlib.Buffer.contents ob
 
-let rewind_to_state t safe_id =
-  Log.logf "rewind_to_state safe_id=%s (local drop, no edit_at)"
-    (sid_str safe_id);
-  let rec drop = function
-    | s :: rest when not (Stateid.equal s.state_id safe_id) -> drop rest
-    | remaining -> remaining
-  in
-  t.sentences <- drop t.sentences;
-  t.tip <- safe_id;
-  t.target_end <- verified_end t;
-  Buffer.move_to_byte_offset t.buf (verified_end t);
-  t.goals_dirty <- true;
-  t.state_changed <- true
-
 (* Compute byte offset and line/bol info for the Add call *)
 let line_info_at buf byte_off =
   let line = ref 0 in
@@ -828,14 +814,17 @@ let advance_op t = function
 (* Dispatch the next intent in priority order. Caller must have
    verified that [current_op = None] and the rocq queue is idle. *)
 let dispatch_idle_work t =
-  (* Handle deferred rewind from callback *)
-  (match t.needs_rewind with
-   | Some safe_id ->
-     Log.logf "dispatch: deferred needs_rewind -> rewind_to_state %s"
-       (sid_str safe_id);
-     t.needs_rewind <- None;
-     rewind_to_state t safe_id
-   | None -> ());
+  match t.needs_rewind with
+  | Some safe_id ->
+    (* Add Fail told us coqtop's safe state. Issue [edit_at] to
+       actually move VCS.cur_tip there; a purely local sentence
+       drop would leave cur_tip ahead of t.tip and the next
+       [Add] would hit "Stm.add called for a different state". *)
+    Log.logf "dispatch: deferred needs_rewind -> start_rewinding %s"
+      (sid_str safe_id);
+    t.needs_rewind <- None;
+    start_rewinding t safe_id
+  | None ->
   let has_error = List.exists (fun si ->
     match si.status with Error _ -> true | _ -> false
   ) t.sentences in
