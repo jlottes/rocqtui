@@ -28,3 +28,13 @@ val clear_screen : unit -> unit
 (** Check if a SIGWINCH (terminal resize) has occurred since last check.
     Returns true and clears the flag. *)
 val check_resize : unit -> bool
+
+(** Bind a font slot to a fontconfig pattern via OSC 1547. The terminal
+    resolves the pattern; cells whose [attr.font] equals [slot] render with
+    that font. Slot must be in 1..255; 0 is the no-override sentinel and
+    cannot be bound. [pattern] must not contain [;], ESC, or BEL. *)
+val bind_font_slot : int -> string -> unit
+
+(** Unbind a previously-bound slot. Cells using it fall through to the
+    terminal's default codepoint dispatch. *)
+val unbind_font_slot : int -> unit

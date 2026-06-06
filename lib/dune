@@ -2,6 +2,7 @@
 
 (library
  (name rocqtui_lib)
+ (public_name rocqtui.lib)
  (libraries unix yojson re rocq-runtime.parsing rocq-runtime.clib rocq-runtime.gramlib
             rocq-runtime.lib coqide-server.protocol coqide-server.core
             rocq_compat vterm_lib)

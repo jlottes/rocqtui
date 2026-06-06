@@ -17,5 +17,6 @@
 
 (library
  (name rocq_compat)
+ (public_name rocqtui.rocq_compat)
  (modules rocq_compat)
  (libraries rocq-runtime.gramlib))

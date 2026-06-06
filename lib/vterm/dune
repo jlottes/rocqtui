@@ -4,6 +4,7 @@
 
 (library
  (name vterm_lib)
+ (public_name rocqtui.vterm)
  (libraries unix)
  (foreign_stubs (language c)
   (names vterm term wrap sel acs sysbuf

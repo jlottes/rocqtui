@@ -415,8 +415,10 @@ let sgr_script_on = function
   | Script_sub -> Some "74"
 
 let sgr_font_on n =
-  if n <= 0 || n > 9 then None
-  else Some (string_of_int (10 + n))
+  if n <= 0 then None
+  else if n <= 9 then Some (string_of_int (10 + n))      (* SGR 11..19, xterm-compat *)
+  else if n <= 255 then Some (Printf.sprintf "10:%d" n)  (* SGR 10:n, slots 10..255 *)
+  else None
 
 (* Workaround for mosh dropping SGR 2 (dim): substitute a darker fg.
    Default and palette fgs collapse to a fixed mid-gray since we can't

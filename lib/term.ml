@@ -105,3 +105,11 @@ let check_resize () =
     sigwinch_pending := false;
     true
   end else false
+
+(* OSC 1547 ; <slot> ; <pattern> ST  — bind font slot to fontconfig pattern.
+   OSC 1547 ; <slot>              ST  — unbind. *)
+let bind_font_slot slot pattern =
+  write_stdout (Printf.sprintf "\x1b]1547;%d;%s\x1b\\" slot pattern)
+
+let unbind_font_slot slot =
+  write_stdout (Printf.sprintf "\x1b]1547;%d\x1b\\" slot)

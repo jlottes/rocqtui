@@ -41,7 +41,7 @@ type attr = {
   blink : blink_style;
   frame : frame_style;
   script : script_style;
-  font : int;                    (** 0 = primary, 1..9 = alt fonts *)
+  font : int;                    (** 0 = primary, 1..255 = bound font slot (OSC 1547) *)
   spacing : bool;                (** SGR 26 proportional *)
 }
 
