@@ -127,18 +127,20 @@ let handle_mouse (ctx : Editor_context.t) (mev : Input.mouse_event)
   in
 
   (* Tab hit-test helper for a leaf's strip: returns the index of
-     the tab under [x] (if any), in [(col, width)] segments matching
-     the strip layout. *)
+     the tab under [x] (if any). Uses the same layout that
+     [View_terminal.draw_leaf_strip] uses, so truncated/scrolled
+     tabs have hit areas matching what's actually painted. *)
   let tab_index_at_x (leaf : Layout.leaf) =
-    let col = ref (leaf.rect.col + 1) in
-    let found = ref None in
-    List.iteri (fun i tab ->
-      let width = String.length (Msg_pane.display_name tab) + 2 in
-      if x >= !col && x < !col + width && !found = None then
-        found := Some i;
-      col := !col + width + 1
-    ) leaf.mp.tabs;
-    !found
+    let names = List.map Msg_pane.display_name leaf.mp.tabs in
+    let focused = leaf.id = (!active_leaf).id in
+    let visibles = Render.tab_strip_layout
+      ~focused ~display_names:names ~active:leaf.mp.active
+      ~width:leaf.rect.width () in
+    List.find_map (fun (v : Render.visible_tab) ->
+      let lo = leaf.rect.col + v.col_offset in
+      let hi = lo + v.cell_width in
+      if x >= lo && x < hi then Some v.orig_index else None
+    ) visibles
   in
   (* Active border / drag-tab drag takes precedence. *)
   match !drag with

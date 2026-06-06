@@ -310,28 +310,112 @@ let place_cursor_status t ~row_from_bottom ~col =
 
 (* --- Tab bar --- *)
 
+(* Tab strip layout — shared by the top-level file-tab bar here and
+   by [View_terminal.draw_leaf_strip]. A [visible_tab] is a contiguous
+   run of cells; both renderer and click hit-test consume the same
+   list so geometry stays in sync. *)
+type visible_tab = {
+  orig_index : int;
+  col_offset : int;
+  cell_width : int;
+  label : string;
+}
+
+let tab_ellipsis = "\xe2\x80\xa6"   (* … U+2026, 1 cell *)
+let tab_separator = "\xe2\x94\x82"  (* │ U+2502, 1 cell *)
+let tab_separator_cells = 1
+
+let tab_strip_layout ?(focused=false) ~display_names ~active ~width () =
+  let names = Array.of_list display_names in
+  let n = Array.length names in
+  if n = 0 || width <= 1 then [] else begin
+    let active = max 0 (min active (n - 1)) in
+    let labels = Array.mapi (fun i s ->
+      if focused && i = active then "[ " ^ s ^ " ]"
+      else " " ^ s ^ " "
+    ) names in
+    let wids = Array.map Utf8.string_width labels in
+    let avail = width - 1 in
+    let cum_from first =
+      let sum = ref 0 in
+      for i = first to active do
+        sum := !sum + wids.(i);
+        if i > first then sum := !sum + tab_separator_cells
+      done;
+      !sum
+    in
+    let total_natural =
+      let sum = ref 0 in
+      for i = 0 to n - 1 do
+        sum := !sum + wids.(i);
+        if i > 0 then sum := !sum + tab_separator_cells
+      done;
+      !sum
+    in
+    let first_visible =
+      if total_natural <= avail then 0
+      else
+        let rec find first =
+          if first >= active then active
+          else if cum_from first <= avail then first
+          else find (first + 1)
+        in
+        find 0
+    in
+    let out = ref [] in
+    let pen = ref 1 in
+    let i = ref first_visible in
+    let stop = ref false in
+    while not !stop && !i < n do
+      let remaining = max 0 (1 + avail - !pen) in
+      if remaining < 3 then stop := true
+      else begin
+        let w = wids.(!i) in
+        let label, cell_w =
+          if w <= remaining then labels.(!i), w
+          else begin
+            let take_cells = remaining - 1 in
+            let take_bytes = Utf8.col_to_byte labels.(!i) take_cells in
+            String.sub labels.(!i) 0 take_bytes ^ tab_ellipsis, remaining
+          end
+        in
+        out := { orig_index = !i; col_offset = !pen;
+                 cell_width = cell_w; label } :: !out;
+        pen := !pen + cell_w;
+        if !i < n - 1 then begin
+          if 1 + avail - !pen >= tab_separator_cells + 1 then
+            pen := !pen + tab_separator_cells
+          else stop := true
+        end;
+        incr i
+      end
+    done;
+    List.rev !out
+  end
+
+let draw_tab_strip t ~row ~col ~width ?(focused=false)
+    ~display_names ~active ~active_attr ~inactive_attr () =
+  Grid.fill t.curr ~row ~col ~width ' ' inactive_attr;
+  let visibles = tab_strip_layout ~focused ~display_names ~active ~width () in
+  let arr = Array.of_list visibles in
+  Array.iteri (fun k v ->
+    let attr = if v.orig_index = active then active_attr else inactive_attr in
+    ignore (Grid.put_str t.curr ~row ~col:(col + v.col_offset) v.label attr);
+    if k + 1 < Array.length arr then begin
+      let sep_col = col + v.col_offset + v.cell_width in
+      ignore (Grid.put_str t.curr ~row ~col:sep_col
+        tab_separator inactive_attr)
+    end
+  ) arr
+
 let draw_tab_bar t tabs active =
   if not t.has_tab_bar then ()
   else begin
     let inactive_attr = (Theme.attrs ()).ga_tab_inactive in
     let active_attr = (Theme.attrs ()).ga_tab_active in
-    (* Fill background *)
-    Grid.fill t.curr ~row:0 ~col:0 ~width:t.term_w ' ' inactive_attr;
-    let col = ref 1 in
-    List.iteri (fun i (name, _modified) ->
-      let is_active = (i = active) in
-      let attr = if is_active then active_attr else inactive_attr in
-      let label = Printf.sprintf " %s " name in
-      if !col + String.length label < t.term_w then begin
-        ignore (Grid.put_str t.curr ~row:0 ~col:!col label attr);
-        col := !col + String.length label;
-        if i < List.length tabs - 1 then begin
-          ignore (Grid.put_str t.curr ~row:0 ~col:!col
-            "\xe2\x94\x82" inactive_attr);
-          col := !col + 1
-        end
-      end
-    ) tabs
+    let display_names = List.map fst tabs in
+    draw_tab_strip t ~row:0 ~col:0 ~width:t.term_w
+      ~display_names ~active ~active_attr ~inactive_attr ()
   end
 
 (* --- Status bar --- *)

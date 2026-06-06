@@ -74,6 +74,39 @@ val set_cursor_visible : t -> bool -> unit
 val place_cursor_status : t -> row_from_bottom:int -> col:int -> unit
 
 (** Tab bar *)
+
+(** One visible tab in a strip — see {!tab_strip_layout}. [col_offset]
+    is relative to the strip's left edge (0..width-1); [cell_width] is
+    in terminal cells. *)
+type visible_tab = {
+  orig_index : int;
+  col_offset : int;
+  cell_width : int;
+  label : string;
+}
+
+val tab_strip_layout :
+  ?focused:bool ->
+  display_names:string list -> active:int -> width:int -> unit ->
+  visible_tab list
+(** Lay out a tab strip given the tab display names and the available
+    [width] in cells. When everything fits naturally, returns all tabs
+    left-to-right starting at [col_offset=1]. When it overflows, scrolls
+    forward so the active tab is fully visible and truncates the last
+    tab with […] if it would otherwise spill past [width-1]. [focused]
+    (default [false]) renders the active tab as [\[ name \]] instead of
+    [ name ] — the bracket emphasis matching rocqtui's keyboard-focus
+    indicator; layout accounts for the extra 2 cells. *)
+
+val draw_tab_strip :
+  t -> row:int -> col:int -> width:int -> ?focused:bool ->
+  display_names:string list -> active:int ->
+  active_attr:Grid.attr -> inactive_attr:Grid.attr -> unit -> unit
+(** Paint a tab strip into one row at [row], spanning [col..col+width-1].
+    Builds the layout via {!tab_strip_layout} and fills inter-tab
+    separators. Shared by the top-level file-tab bar and per-leaf strips
+    in the [tterm] binary. *)
+
 val draw_tab_bar : t -> (string * bool) list -> int -> unit
 
 (** Status bar *)

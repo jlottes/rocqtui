@@ -7,29 +7,18 @@ let body_rect r =
     width = st.width }
 
 (* Paint a leaf's tab strip into one row at [row], spanning [col..col
-   + width - 1]. The same algorithm [Render.draw_tab_bar] uses, but
-   for an arbitrary rect rather than the full top row. *)
-let draw_leaf_strip g ~row ~col ~width (mp : Msg_pane.t) =
+   + width - 1]. When [focused] the active tab is rendered with
+   bracket-wrapped emphasis matching rocqtui's keyboard-focus indicator.
+   Layout (truncation + scrolling) lives in [Render.tab_strip_layout];
+   [bin/tterm.ml]'s hit-test reads the same layout so click targets and
+   rendered ranges stay in sync. *)
+let draw_leaf_strip r ~row ~col ~width ?(focused=false) (mp : Msg_pane.t) =
   let inactive_attr = (Theme.attrs ()).ga_tab_inactive in
   let active_attr = (Theme.attrs ()).ga_tab_active in
-  Grid.fill g ~row ~col ~width ' ' inactive_attr;
-  let pen = ref (col + 1) in
-  let right = col + width in
-  List.iteri (fun i (tab : Msg_pane.tab) ->
-    let name = Msg_pane.display_name tab in
-    let label = " " ^ name ^ " " in
-    let is_active = (i = mp.active) in
-    let attr = if is_active then active_attr else inactive_attr in
-    if !pen + String.length label < right then begin
-      ignore (Grid.put_str g ~row ~col:!pen label attr);
-      pen := !pen + String.length label;
-      if i < List.length mp.tabs - 1 && !pen + 1 < right then begin
-        ignore (Grid.put_str g ~row ~col:!pen
-          "\xe2\x94\x82" inactive_attr);  (* │ *)
-        pen := !pen + 1
-      end
-    end
-  ) mp.tabs
+  let display_names = List.map Msg_pane.display_name mp.tabs in
+  Render.draw_tab_strip r ~row ~col ~width ~focused
+    ~display_names ~active:mp.active
+    ~active_attr ~inactive_attr ()
 
 let draw_vborder g (s : Layout.split) =
   let attr = (Theme.attrs ()).ga_border in
@@ -48,11 +37,14 @@ let draw_hborder g (s : Layout.split) =
   done
 
 (* Render one leaf. Returns [Some (vt, cursor_row, cursor_col)] when
-   the leaf's active terminal has the cursor visible; None otherwise. *)
-let render_leaf g (leaf : Layout.leaf) =
+   the leaf's active terminal has the cursor visible; None otherwise.
+   [focused] flags this leaf as the active one — its active tab gets
+   bracket emphasis in the strip. *)
+let render_leaf r ~focused (leaf : Layout.leaf) =
+  let g = Render.curr r in
   let strip_row = leaf.rect.row in
-  draw_leaf_strip g ~row:strip_row ~col:leaf.rect.col
-    ~width:leaf.rect.width leaf.mp;
+  draw_leaf_strip r ~row:strip_row ~col:leaf.rect.col
+    ~width:leaf.rect.width ~focused leaf.mp;
   let body = Layout.leaf_body_rect leaf in
   if body.height <= 0 || body.width <= 0 then None
   else match leaf.mp.tabs with
@@ -76,19 +68,21 @@ let render_leaf g (leaf : Layout.leaf) =
         Grid.clear_rect g body ~attr:(Theme.attrs ()).ga_default;
         None
 
-let rec render_tree g ~active_leaf_id node =
+let rec render_tree r ~active_leaf_id node =
+  let g = Render.curr r in
   match (node : Layout.t) with
   | Leaf leaf ->
-    let cursor = render_leaf g leaf in
-    if leaf.id = active_leaf_id then cursor else None
+    let focused = leaf.id = active_leaf_id in
+    let cursor = render_leaf r ~focused leaf in
+    if focused then cursor else None
   | VSplit s ->
-    let c_a = render_tree g ~active_leaf_id s.a in
-    let c_b = render_tree g ~active_leaf_id s.b in
+    let c_a = render_tree r ~active_leaf_id s.a in
+    let c_b = render_tree r ~active_leaf_id s.b in
     draw_vborder g s;
     (match c_a with Some _ -> c_a | None -> c_b)
   | HSplit s ->
-    let c_a = render_tree g ~active_leaf_id s.a in
-    let c_b = render_tree g ~active_leaf_id s.b in
+    let c_a = render_tree r ~active_leaf_id s.a in
+    let c_b = render_tree r ~active_leaf_id s.b in
     draw_hborder g s;
     (match c_a with Some _ -> c_a | None -> c_b)
 
@@ -141,7 +135,7 @@ let render_all (ctx : Editor_context.t) r layout ~active_leaf_id
      from a closed leaf whose sibling has now expanded) don't bleed
      through. *)
   Grid.clear_rect g (body_rect r) ~attr:(Theme.attrs ()).ga_default;
-  let cursor = render_tree g ~active_leaf_id layout in
+  let cursor = render_tree r ~active_leaf_id layout in
   (* Status. Find the active leaf (or fall back to first). *)
   let active_leaf = match Layout.find_leaf_by_id layout active_leaf_id with
     | Some l -> l
