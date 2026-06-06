@@ -81,6 +81,12 @@ struct vterm_out {
 
 struct vterm_out vterm_sync(struct vterm *v);
 
+/* Drain the next dirty font slot (1..255). Returns 0 when none remain.
+   Caller then reads vterm_font_slot(v, n) to get the new pattern string
+   (NULL = unbound). Mirrors the OSC 1547 binding push model. */
+unsigned vterm_drain_font_slot(struct vterm *v);
+const uchar *vterm_font_slot(const struct vterm *v, unsigned i);
+
 void vterm_resize(struct vterm *v, unsigned short w, unsigned short h);
 int vterm_set_wrap_mode(struct vterm *v, unsigned wrap_mode);
 

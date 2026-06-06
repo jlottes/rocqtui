@@ -45,10 +45,10 @@
     bits 12..13  blink           (0 none, 1 slow, 2 rapid)
     bits 14..15  frame           (0 none, 1 framed, 2 encircled)
     bits 16..17  script          (0 none, 1 super, 2 sub)
-    bits 18..21  font            (0 primary, 1..9 alt)
-    ----- bits 0..21 above match the half-buffer wire format -----
-    bits 22..25  width           (0..8 per-cell metadata, in-memory only)
-    bits 26..31  unused
+    bits 18..25  font            (0 primary; 1..9 xterm alt; 10..255 ext via SGR 10:n)
+    ----- bits 0..25 above match the half-buffer wire format -----
+    bits 26..29  width           (0..8 per-cell metadata, in-memory only)
+    bits 30..31  unused
 
   See doc/sgr-plan.md for the full rationale. */
 
@@ -76,7 +76,7 @@
 #define A_FRAME         14
 #define A_SCRIPT        16
 #define A_FONT          18
-#define A_WIDTH         22
+#define A_WIDTH         26
 
 #define A_BOLD_MASK          (1u  << A_BOLD)
 #define A_ITALIC_MASK        (3u  << A_ITALIC)
@@ -90,12 +90,13 @@
 #define A_BLINK_MASK         (3u  << A_BLINK)
 #define A_FRAME_MASK         (3u  << A_FRAME)
 #define A_SCRIPT_MASK        (3u  << A_SCRIPT)
-#define A_FONT_MASK          (15u << A_FONT)
-#define A_WIDTH_MASK         (15u << A_WIDTH)
+#define A_FONT_MASK          (0xffu << A_FONT)
+#define A_WIDTH_MASK         (15u   << A_WIDTH)
 
-#define A_WIRE_MASK  0x003fffffu  /* bits  0..21  wire-format attribute bits */
+#define A_WIRE_MASK  0x03ffffffu  /* bits  0..25  wire-format attribute bits */
 #define A_SHORT_MASK 0x000000ffu  /* bits  0..7   ENC_ATTRB  payload         */
 #define A_MID_MASK   0x0000ffffu  /* bits  0..15  ENC_ATTRB2 payload         */
+#define A_FULL_MASK  0x003fffffu  /* bits  0..21  ENC_ATTRB3 payload         */
 
 #define a_get(a,N)   ( ((a) & A_##N##_MASK) >> A_##N )
 #define a_set(a,N,v) ( (a) = ((a) & ~A_##N##_MASK) | ((uint32)(v) << A_##N) )
@@ -123,9 +124,9 @@ struct cell { uint32 code; struct gr gr; };
 /*----------------------------------------------------------------------------
   Half-buffer encoding tokens
 
-  ENC_ATTRB / ENC_ATTRB2 / ENC_ATTRB3 each replace a different number of low
-  attribute-word bits, preserving the rest. Encoder picks the smallest that
-  covers all changed bits.
+  ENC_ATTRB / ENC_ATTRB2 / ENC_ATTRB3 / ENC_ATTRB4 each replace a different
+  number of low attribute-word bits, preserving the rest. Encoder picks the
+  smallest that covers all changed bits.
 
   fg, bg each have four possible new states (default / 16 / 256 / 24-bit),
   so each gets four tokens. ul has three states (no 16-color form for SGR 58).
@@ -153,6 +154,7 @@ struct cell { uint32 code; struct gr gr; };
 #define ENC_UL_24   14u  /* +3 bytes: ul RGB                              */
 #define ENC_NL      15u  /* no payload: end of line                       */
 #define ENC_TAB     16u  /* no payload: tab cell                          */
+#define ENC_ATTRB4  17u  /* +4 bytes: low 26 bits (WIRE — includes 8-bit font slot) */
 
 
 #define MODE_APP_KEYPAD   0x01u
@@ -242,6 +244,12 @@ struct term {
   uchar osc52_sel;    /* 0=primary, 1=clipboard */
   uchar *osc52_data;  /* decoded data (malloc'd), NULL if none */
   unsigned osc52_len;
+  /* OSC 1547 font slots — heap-owned NUL-terminated pattern strings
+     (or NULL for unbound). Slot 0 is reserved (always NULL): it represents
+     "no override / use codepoint dispatch via fontmap". font_slot_dirty
+     is a 256-bit bitmap; bit n set means client should re-resolve slot n. */
+  uchar *font_slot[256];
+  uint32 font_slot_dirty[8];
   /* alternate screen */
   struct term_screen primary;
   uchar alt_screen;
@@ -256,7 +264,7 @@ static unsigned half_buffer_line_off(
   return ld[i].off - hb->base;
 }
 
-#define is_gr_encoding(ch) ( (ch)<=ENC_UL_24 )
+#define is_gr_encoding(ch) ( (ch)<=ENC_UL_24 || (ch)==ENC_ATTRB4 )
 
 /* precondition: is_gr_encoding(*in);
    updates gr, returns length of encoding.
@@ -278,11 +286,18 @@ static unsigned gr_decode(
           | ((uint32)in[2] << 8);
     return 3;
   case ENC_ATTRB3:
-    gr->a = (gr->a & ~A_WIRE_MASK)
+    gr->a = (gr->a & ~A_FULL_MASK)
           |  (uint32)in[1]
           | ((uint32)in[2] << 8)
           | ((uint32)(in[3] & 0x3fu) << 16);
     return 4;
+  case ENC_ATTRB4:
+    gr->a = (gr->a & ~A_WIRE_MASK)
+          |  (uint32)in[1]
+          | ((uint32)in[2] <<  8)
+          | ((uint32)in[3] << 16)
+          | ((uint32)(in[4] & 0x03u) << 24);
+    return 5;
   case ENC_CLR_16:
     gr->fg = GR_MD_16 | ((in[1] & 0xf0u) >> 4);
     gr->bg = GR_MD_16 |  (in[1] & 0x0fu);
@@ -312,5 +327,10 @@ void term_proc(
   struct term *restrict const t,
   const uchar *restrict start,
   const uchar *restrict const end);
+
+/* Drain the next dirty font slot index. Returns the slot index (1..255) and
+   clears its dirty bit, or 0 when no dirty slots remain. Caller reads
+   t->font_slot[i] for the new pattern (NULL = unbound). */
+unsigned term_drain_font_slot(struct term *restrict t);
 
 #endif

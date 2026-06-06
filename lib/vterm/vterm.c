@@ -539,6 +539,16 @@ struct vterm_out vterm_sync(struct vterm *v)
   return out;
 }
 
+unsigned vterm_drain_font_slot(struct vterm *v)
+{
+  return term_drain_font_slot(&v->t);
+}
+
+const uchar *vterm_font_slot(const struct vterm *v, unsigned i)
+{
+  return i<256 ? v->t.font_slot[i] : 0;
+}
+
 void vterm_resize(struct vterm *v, unsigned short w, unsigned short h)
 {
   term_resize(&v->t, w, h);

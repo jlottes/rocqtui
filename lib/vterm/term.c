@@ -104,9 +104,11 @@ static unsigned gr_encode_bg_count(struct gr old, struct gr new)
 
   if(a_diff) {
     if(a_diff & ~A_SHORT_MASK) {
-      if(a_diff & ~A_MID_MASK) count += 4; /* ENC_ATTRB3 */
-      else                     count += 3; /* ENC_ATTRB2 */
-    } else                     count += 2; /* ENC_ATTRB  */
+      if(a_diff & ~A_MID_MASK) {
+        if(a_diff & ~A_FULL_MASK) count += 5; /* ENC_ATTRB4 */
+        else                      count += 4; /* ENC_ATTRB3 */
+      } else                      count += 3; /* ENC_ATTRB2 */
+    } else                        count += 2; /* ENC_ATTRB  */
   }
 
   if(nbg & (1u<<31)) {
@@ -136,10 +138,18 @@ static uchar *gr_encode_bg(uchar *restrict out, struct gr old, struct gr new)
   if(a_diff) {
     if(a_diff & ~A_SHORT_MASK) {
       if(a_diff & ~A_MID_MASK) {
-        *out++ = ENC_ATTRB3;
-        *out++ =  want_a        & 0xffu;
-        *out++ = (want_a >>  8) & 0xffu;
-        *out++ = (want_a >> 16) & 0x3fu;
+        if(a_diff & ~A_FULL_MASK) {
+          *out++ = ENC_ATTRB4;
+          *out++ =  want_a        & 0xffu;
+          *out++ = (want_a >>  8) & 0xffu;
+          *out++ = (want_a >> 16) & 0xffu;
+          *out++ = (want_a >> 24) & 0x03u;
+        } else {
+          *out++ = ENC_ATTRB3;
+          *out++ =  want_a        & 0xffu;
+          *out++ = (want_a >>  8) & 0xffu;
+          *out++ = (want_a >> 16) & 0x3fu;
+        }
       } else {
         *out++ = ENC_ATTRB2;
         *out++ =  want_a        & 0xffu;
@@ -194,9 +204,11 @@ static unsigned gr_encode_count(struct gr old, struct gr new)
 
   if(a_diff) {
     if(a_diff & ~A_SHORT_MASK) {
-      if(a_diff & ~A_MID_MASK) count += 4; /* ENC_ATTRB3 */
-      else                     count += 3; /* ENC_ATTRB2 */
-    } else                     count += 2; /* ENC_ATTRB  */
+      if(a_diff & ~A_MID_MASK) {
+        if(a_diff & ~A_FULL_MASK) count += 5; /* ENC_ATTRB4 */
+        else                      count += 4; /* ENC_ATTRB3 */
+      } else                      count += 3; /* ENC_ATTRB2 */
+    } else                        count += 2; /* ENC_ATTRB  */
   }
 
   /* Packed ENC_CLR_16 shortcut: both fg and bg change to 16-color mode */
@@ -267,10 +279,18 @@ static uchar *gr_encode(uchar *restrict out, struct gr old, struct gr new)
   if(a_diff) {
     if(a_diff & ~A_SHORT_MASK) {
       if(a_diff & ~A_MID_MASK) {
-        *out++ = ENC_ATTRB3;
-        *out++ =  new.a        & 0xffu;
-        *out++ = (new.a >>  8) & 0xffu;
-        *out++ = (new.a >> 16) & 0x3fu;
+        if(a_diff & ~A_FULL_MASK) {
+          *out++ = ENC_ATTRB4;
+          *out++ =  new.a        & 0xffu;
+          *out++ = (new.a >>  8) & 0xffu;
+          *out++ = (new.a >> 16) & 0xffu;
+          *out++ = (new.a >> 24) & 0x03u;
+        } else {
+          *out++ = ENC_ATTRB3;
+          *out++ =  new.a        & 0xffu;
+          *out++ = (new.a >>  8) & 0xffu;
+          *out++ = (new.a >> 16) & 0x3fu;
+        }
       } else {
         *out++ = ENC_ATTRB2;
         *out++ =  new.a        & 0xffu;
@@ -795,7 +815,7 @@ void term_init(struct term *restrict const t, unsigned blim, unsigned elim)
 
 void term_done(struct term *restrict const t)
 {
-  unsigned n = t->margin.n;
+  unsigned n = t->margin.n; unsigned i;
   struct line *restrict line = t->margin.ptr;
   do line_free(line++); while(--n);
   array_free(&t->margin);
@@ -803,6 +823,22 @@ void term_done(struct term *restrict const t)
   term_buffer_free(&t->primary.buf);
   buffer_free(&t->escape_buf);
   free(t->osc52_data), t->osc52_data=0;
+  for(i=1;i<256;++i) free(t->font_slot[i]);
+}
+
+unsigned term_drain_font_slot(struct term *restrict t)
+{
+  unsigned w;
+  for(w=0;w<8;++w) {
+    uint32 d = t->font_slot_dirty[w];
+    if(d) {
+      unsigned bit = 0;
+      while(!(d & 1u)) d >>= 1, ++bit;
+      t->font_slot_dirty[w] &= ~(1u << bit);
+      return (w<<5) | bit;
+    }
+  }
+  return 0;
 }
 
 /* conceptual layout of rows:
@@ -1274,6 +1310,22 @@ static void cf_SGR(struct term *restrict const t,
     case 7:  a_set(t->cursor.gr.a, INVERSE, 1);               break;
     case 8:  a_set(t->cursor.gr.a, CONCEAL, 1);               break;
     case 9:  a_set(t->cursor.gr.a, STRIKETHROUGH, 1);         break;
+    case 10:
+      /* SGR 10 alone: primary font (slot 0).
+         SGR 10:n subparam: select slot n (0..255). */
+      if(i+1 < n && sub[i+1]) {
+        int s = param[i+1];
+        if(s < 0)        s = 0;        /* empty subparam → primary */
+        else if(s > 255) s = 0;        /* out-of-range → primary */
+        a_set(t->cursor.gr.a, FONT, s);
+        consumed = 2;
+        while(i+consumed < n && sub[i+consumed]) ++consumed;
+      } else
+        a_set(t->cursor.gr.a, FONT, 0);
+      break;
+    case 11: case 12: case 13: case 14:
+    case 15: case 16: case 17: case 18: case 19:
+      a_set(t->cursor.gr.a, FONT, param[i] - 10);             break;
     case 20: a_set(t->cursor.gr.a, ITALIC, 2);                break; /* Fraktur */
     case 21: a_set(t->cursor.gr.a, UNDERLINE, 2);             break; /* double */
     case 22: a_set(t->cursor.gr.a, BOLD,  0);
@@ -1402,11 +1454,17 @@ static void cf_ED(struct term *restrict const t, int *param, int n)
 /* Reset to Initial State (RIS) : ESC c */
 static void cf_RIS(struct term *restrict const t)
 {
+  unsigned i;
   soft_reset(t);
   t->state = STATE_NORMAL;
   t->escape_buf.n = 0;
   set_cursor_pos(t,0,0,1);
   { int p=2; cf_ED(t,&p,1); }
+  /* Drop all font-slot bindings; mark every slot 1..255 dirty so the client
+     drains and resets its resolved-handle table. Slot 0 is never dirty. */
+  for(i=1;i<256;++i) free(t->font_slot[i]), t->font_slot[i]=0;
+  for(i=0;i<8;++i) t->font_slot_dirty[i] = 0xffffffffu;
+  t->font_slot_dirty[0] &= ~1u;
 }
 
 /* Insert Characters (ICH) : ESC [ Pn @    (Pn=1) */
@@ -2018,6 +2076,27 @@ static const uchar *proc_xterm(
         t->osc52_data = data;
         t->osc52_len = dlen;
         t->osc52_sel = sel;
+      } break;
+      case 1547: {
+        /* OSC 1547 ; <slot> ; <pattern>  ST  — bind slot ← pattern
+           OSC 1547 ; <slot>               ST  — unbind slot
+           <slot> is decimal 1..255; <pattern> is a fontconfig pattern.
+           No FC/FT call here — client drains via term_drain_font_slot(). */
+        unsigned slot = 0;
+        while(*str >= '0' && *str <= '9') slot = slot*10 + (*str++ - '0');
+        if(slot < 1 || slot > 255) break;
+        free(t->font_slot[slot]); t->font_slot[slot] = 0;
+        if(*str == ';') {
+          unsigned plen;
+          ++str;
+          plen = el - (unsigned)(str - esc_buf(t));
+          if(plen) {
+            uchar *pat = tmalloc(uchar, plen+1);
+            memcpy(pat, str, plen); pat[plen] = 0;
+            t->font_slot[slot] = pat;
+          }
+        }
+        t->font_slot_dirty[slot>>5] |= 1u << (slot & 31);
       } break;
 #if PRINT_UNHANDLED
       default: printf("xterm sequence %d \"%s\" ignored\n", p, str); break;
