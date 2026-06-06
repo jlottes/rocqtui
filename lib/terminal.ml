@@ -205,11 +205,16 @@ let render t (grid : Grid.t) ~row ~col ~width ~height =
       Array.iter (fun (cell : Vterm_lib.Vterm_api.row_cell) ->
         let gc = col + !x in
         if cell.width = 0 then begin
-          (* Combining character: append to previous cell *)
+          (* Combining mark: preserve its own SGR via Grid.combs. *)
           let prev = gc - 1 in
-          if prev >= col && prev < grid.cols then
-            grid.cells.(grid_row).(prev).text <-
-              grid.cells.(grid_row).(prev).text ^ cell.text
+          if prev >= col && prev < grid.cols then begin
+            let base = (Obj.magic cell.attr : Grid.attr) in
+            let attr =
+              if cell.selected then { base with reverse = not base.reverse }
+              else base
+            in
+            Grid.append_combining grid ~row:grid_row ~col:prev ~attr cell.text
+          end
         end else if gc < col + width && gc < grid.cols then begin
           let base = (Obj.magic cell.attr : Grid.attr) in
           let attr =

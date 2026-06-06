@@ -60,9 +60,13 @@ type cell = {
   mutable text : string;
   mutable width : int;    (* 0 = continuation of wide char, 1 = normal, 2 = wide *)
   mutable attr : attr;
+  mutable combs : (string * attr) list;
+  (* Combining-mark segments with per-mark attrs, stored newest-first.
+     Empty in the common case where every combining mark inherits [attr]. *)
 }
 
-let empty_cell () = { text = " "; width = 1; attr = default_attr }
+let empty_cell () =
+  { text = " "; width = 1; attr = default_attr; combs = [] }
 
 type t = {
   mutable cells : cell array array;
@@ -100,7 +104,8 @@ let clear ?(attr=default_attr) g =
       let cell = g.cells.(r).(c) in
       cell.text <- " ";
       cell.width <- 1;
-      cell.attr <- attr
+      cell.attr <- attr;
+      cell.combs <- []
     done
   done
 
@@ -110,7 +115,8 @@ let clear_region g ~row ~col ~height ~width ~attr =
       let cell = g.cells.(r).(c) in
       cell.text <- " ";
       cell.width <- 1;
-      cell.attr <- attr
+      cell.attr <- attr;
+      cell.combs <- []
     done
   done
 
@@ -164,6 +170,7 @@ let set_cell g ~row ~col text attr =
     let cell = g.cells.(row).(col) in
     cell.text <- text;
     cell.attr <- attr;
+    cell.combs <- [];
     (* Determine display width *)
     let (cp, _) = decode_utf8 text 0 in
     let w = wcwidth cp in
@@ -184,11 +191,17 @@ let set_cell g ~row ~col text attr =
   end
 
 (* Append a combining character to the cell at (row, col).
-   The combining character is added to the cell's text. *)
-let append_combining g ~row ~col text =
+   Without [?attr] (or when it matches the base attr), the mark is
+   appended to [cell.text] — same behavior as before.
+   With a divergent [?attr], the mark goes onto [cell.combs] so it
+   gets its own SGR transition at emit time. *)
+let append_combining g ~row ~col ?attr text =
   if row >= 0 && row < g.rows && col >= 0 && col < g.cols then begin
     let cell = g.cells.(row).(col) in
-    cell.text <- cell.text ^ text
+    match attr with
+    | None -> cell.text <- cell.text ^ text
+    | Some a when a = cell.attr -> cell.text <- cell.text ^ text
+    | Some a -> cell.combs <- (text, a) :: cell.combs
   end
 
 (* Write a UTF-8 string starting at (row, col).
@@ -234,15 +247,20 @@ let fill g ~row ~col ~width ch attr =
       let cell = g.cells.(row).(c) in
       cell.text <- s;
       cell.width <- 1;
-      cell.attr <- attr
+      cell.attr <- attr;
+      cell.combs <- []
     end
   done
 
-(* Change attributes of a row region without touching text. *)
+(* Change attributes of a row region without touching text. Resets combs:
+   chgat is meant to recolor the column, and we don't want lingering combs
+   with stale attrs to override that. *)
 let chgat g ~row ~col ~width attr =
   if row >= 0 && row < g.rows then
     for c = max 0 col to min (col + width - 1) (g.cols - 1) do
-      g.cells.(row).(c).attr <- attr
+      let cell = g.cells.(row).(c) in
+      cell.attr <- attr;
+      cell.combs <- []
     done
 
 (* Overlay just the underline style and underline color on a row region,
@@ -341,6 +359,7 @@ let clear_rect g rect ~attr =
    same rendition share the same attr block). *)
 let cell_eq a b =
   a.text = b.text && a.width = b.width && a.attr = b.attr
+  && a.combs = b.combs
 
 (* Copy contents of src into dst *)
 let copy ~src ~dst =
@@ -352,7 +371,8 @@ let copy ~src ~dst =
       let d = dst.cells.(r).(c) in
       d.text <- s.text;
       d.width <- s.width;
-      d.attr <- s.attr
+      d.attr <- s.attr;
+      d.combs <- s.combs
     done
   done
 
@@ -514,6 +534,20 @@ let emit_attr buf prev_attr attr =
     end
   end
 
+(* Emit a cell's payload: base text under its attr, then each combining
+   segment with its own SGR transition. [cur_attr] is updated to reflect
+   the trailing attr so callers can keep diffing from there. *)
+let emit_cell_payload buf cur_attr cell =
+  emit_attr buf !cur_attr cell.attr;
+  cur_attr := cell.attr;
+  Stdlib.Buffer.add_string buf cell.text;
+  if cell.combs <> [] then
+    List.iter (fun (text, attr) ->
+      emit_attr buf !cur_attr attr;
+      cur_attr := attr;
+      Stdlib.Buffer.add_string buf text
+    ) (List.rev cell.combs)
+
 (* Generate ANSI output for all cells (full redraw). *)
 let emit_all curr buf =
   let cur_attr = ref default_attr in
@@ -524,11 +558,7 @@ let emit_all curr buf =
     for c = 0 to curr.cols - 1 do
       let cell = curr.cells.(r).(c) in
       if cell.width = 0 then ()  (* skip continuation *)
-      else begin
-        emit_attr buf !cur_attr cell.attr;
-        cur_attr := cell.attr;
-        Stdlib.Buffer.add_string buf cell.text
-      end
+      else emit_cell_payload buf cur_attr cell
     done
   done;
   if !cur_attr <> default_attr then
@@ -556,11 +586,7 @@ let diff ~prev ~curr buf =
             cur_row := r;
             cur_col := c
           end;
-          (* Set attributes *)
-          emit_attr buf !cur_attr cell.attr;
-          cur_attr := cell.attr;
-          (* Write text *)
-          Stdlib.Buffer.add_string buf cell.text;
+          emit_cell_payload buf cur_attr cell;
           cur_col := !cur_col + (max 1 cell.width)
         end
       end
