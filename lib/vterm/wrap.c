@@ -35,6 +35,11 @@ static struct wrap_state calc_enc(
   const unsigned minw, const unsigned maxw,
   const uchar *restrict pos)
 {
+  /* Re-derive cluster_cont per codepoint as we stream the encoded line
+     so wrap width matches what draw will lay out. The wire format
+     doesn't carry the cluster_cont bit. */
+  uint32 prev_code = 0;
+  int ri_unpaired = 0;
   #define NOT_AT_END() *pos!=ENC_NL
   #define READ_CH() { \
      struct read_utf8_fast r; \
@@ -42,16 +47,20 @@ static struct wrap_state calc_enc(
        unsigned n = gr_decode(&st.cur.b.gr, pos); \
        pos+=n, st.cur.b.off+=n; \
        continue; \
-     } else \
+     } else { \
+       int cont; \
        r=read_utf8_fast(pos,0), st.cur.ch=r.c, st.cur.b.off+=r.i, pos+=r.i; \
+       cont = is_cluster_cont(r.c, prev_code, &ri_unpaired); \
+       w = cont ? 0 : char_width(r.c, st.cur.b.col); \
+       prev_code = r.c; \
+     } \
   }
   #define WRAP_BODY(mode) do { \
     const unsigned hw = (maxw+1)/2; \
     struct wrap_pos prev = st.cur; \
     while(NOT_AT_END()) { \
-      unsigned w; \
+      unsigned w = 0; \
       READ_CH(); \
-      w = char_width(st.cur.ch, st.cur.b.col); \
       if(w==0) { prev=st.cur; continue; } \
       st.cur.b.col+=w, st.cur.scol+=w; \
       if(mode) { \
@@ -91,6 +100,7 @@ static struct wrap_state calc_enc(
   WRAP_CASE();
   #undef READ_CH
   #undef NOT_AT_END
+  return st; /* unreachable; WRAP_BODY returns or default aborts */
 }
 
 static struct wrap_state calc_cells(
@@ -100,7 +110,13 @@ static struct wrap_state calc_cells(
   const struct cell *restrict pos, unsigned cn, const int step)
 {
   #define NOT_AT_END() cn
-  #define READ_CH() st.cur.ch=pos->code, pos+=step, --cn, ++st.cur.b.off
+  /* Cells carry cluster_cont in gr.a (proc_graphic / cells_decode set
+     it); cell_w returns 0 for them so wrap counts the cluster as the
+     leading cell's width only. */
+  #define READ_CH() do { \
+    w = cell_w(*pos); st.cur.ch=pos->code; \
+    pos+=step, --cn, ++st.cur.b.off; \
+  } while(0)
   WRAP_CASE();
   #undef WRAP_CASE
   #undef WRAP_BODY

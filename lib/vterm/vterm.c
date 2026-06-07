@@ -18,6 +18,24 @@
 
 struct layout_state { struct gr gr; unsigned col, subline_col; };
 
+/* vterm_cell analog of term.h's cluster_widen_leader. Walks back in
+   cell_buffer to the cluster's leading cell and widens it from 1 to 2;
+   the layout cursor (col, subline_col) tracks the extra cell. */
+static void vterm_widen_leader(struct vterm *v, unsigned line_start,
+                               struct layout_state *st)
+{
+  struct vterm_cell *cells = array_data(struct vterm_cell, &v->cell_buffer);
+  unsigned k = v->cell_buffer.n;
+  while(k > line_start) {
+    --k;
+    if(cells[k].w > 0) {
+      if(cells[k].w == 1)
+        cells[k].w = 2, ++st->col, ++st->subline_col;
+      return;
+    }
+  }
+}
+
 struct layout_row {
   int r, margin; unsigned sub, col0, col1;
   struct layout_state st, st_end;
@@ -401,7 +419,10 @@ static struct layout_state append_cells(
   const unsigned xmax = v->vw;
   if(!n) return st;
   while(n--) {
-    int w = char_width(cell->code,st.col);
+    /* Use the cell's stored width; proc_graphic / cells_decode already
+       forced cluster_cont cells to 0 so we don't double-count them at
+       the vterm layout layer. */
+    int w = cell_w(*cell);
     st.gr=cell->gr;
     if(w && st.subline_col>=xmax) break;
     st=append_code(v,cell->code,st,w,y);
@@ -433,14 +454,30 @@ static void append_enc_cells(struct vterm *restrict const v, unsigned y)
   unsigned w;
   struct read_utf8_fast r = { 0, 0 };
   uchar c;
+  /* Re-derive cluster_cont per codepoint as we stream the encoded line.
+     The wire format doesn't carry the cluster_cont bit (it lives above
+     A_WIRE_MASK), and this path bypasses cells_decode entirely. */
+  uint32 prev_code = 0;
+  int ri_unpaired = 0;
+  unsigned line_start = v->cell_buffer.n;
   if(max && *start!=ENC_NL) {
     for(;r.i<max && (c=start[r.i])!=ENC_NL;) {
       if(is_gr_encoding(c))
         r.i += gr_decode(&st.gr,start+r.i);
       else {
-        r=read_utf8_fast(start,r.i), w=char_width(r.c,st.col);
+        int cont;
+        r=read_utf8_fast(start,r.i);
+        cont = is_cluster_cont(r.c, prev_code, &ri_unpaired);
+        w = cont ? 0 : char_width(r.c,st.col);
         if(w && st.subline_col>=xmax) break;
+        /* Mirror proc_graphic / cells_decode by setting CLUSTER_CONT on
+           the gr we hand to append_code. The wire format doesn't carry
+           the bit; without this step draw_fg_pass sees no cluster_cont
+           on cells that came out of scrollback. */
+        a_set(st.gr.a, CLUSTER_CONT, cont ? 1 : 0);
+        if(cont) vterm_widen_leader(v, line_start, &st);
         st=append_code(v,r.c,st,w,y);
+        prev_code = r.c;
       }
     }
   }

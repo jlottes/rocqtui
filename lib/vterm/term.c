@@ -427,21 +427,34 @@ static void cells_decode(
   const uchar *restrict const in, unsigned i, unsigned max)
 {
   struct gr gr = default_gr;
-  struct cell *restrict out 
+  struct cell *restrict out
     = array_reserve(struct cell,&line->beg,max-i);
   struct cell *const start = out;
   struct read_utf8_fast r;
   unsigned col = 0;
+  /* The cluster_cont bit lives in the per-cell metadata above
+     A_WIRE_MASK so it isn't carried by the wire format. Recompute it
+     from codepoint context here, mirroring proc_graphic's pass. */
+  uint32 prev_code = 0;
+  int ri_unpaired = 0;
   r.i=i;
   for(;;) {
     uchar c = in[r.i], w;
     if(c==ENC_NL) break;
     else if(is_gr_encoding(c)) r.i += gr_decode(&gr, in+r.i);
     else {
+      int cont;
       out->gr = gr;
-      r=read_utf8_fast(in,r.i),out->code=r.c,w=char_width(r.c,col);
+      r=read_utf8_fast(in,r.i),out->code=r.c;
+      cont = is_cluster_cont(r.c, prev_code, &ri_unpaired);
+      w = cont ? 0 : char_width(r.c,col);
       set_cell_w(*out,w);
+      if(cont) {
+        a_set(out->gr.a, CLUSTER_CONT, 1);
+        cluster_widen_leader(start, out, &col);
+      }
       col+=w;
+      prev_code = r.c;
       ++out;
     }
   }
@@ -1716,11 +1729,28 @@ static const uchar *proc_graphic(
     array_reserve(struct cell,&line->beg,line->beg.n+(end-start))
       + line->beg.n;
   int w = 0;
+  /* Seed the cluster detector from the last cell already in this line
+     so sequences split across proc_graphic calls still pair up. */
+  uint32 prev_code = 0;
+  int ri_unpaired = 0;
+  if(line->beg.n > 0) {
+    struct cell *last = array_data(struct cell,&line->beg)+line->beg.n-1;
+    prev_code = last->code;
+    if(last->code >= 0x1F1E6u && last->code <= 0x1F1FFu
+       && !a_get(last->gr.a, CLUSTER_CONT))
+      ri_unpaired = 1;
+  }
   if(!t->linedraw) {
     for(;;) {
-      int cw = char_width(r.c,0);
+      int cont = is_cluster_cont(r.c, prev_code, &ri_unpaired);
+      int cw = cont ? 0 : char_width(r.c,0);
       cell->code = r.c, cell->gr = *gr, set_cell_w(*cell, cw);
+      if(cont) {
+        a_set(cell->gr.a, CLUSTER_CONT, 1);
+        cluster_widen_leader((struct cell*)line->beg.ptr, cell, &w);
+      }
       w += cw, ++cell;
+      prev_code = r.c;
       if(r.pos==end || *r.pos<0x20u) break;
       r = read_utf8(r,end);
       if(r.s.n!=0 || r.c<0x20u) break;
@@ -1728,14 +1758,22 @@ static const uchar *proc_graphic(
   } else {
     for(;;) {
       int cw;
+      uint32 code;
       if(r.c>=ACS_MAP_HIGH_START && r.c<ACS_MAP_HIGH_START+ACS_MAP_HIGH_N)
-        cell->code = acs_map_high[r.c-ACS_MAP_HIGH_START], cw=1;
+        code = acs_map_high[r.c-ACS_MAP_HIGH_START], cw=1;
       else if(r.c>=ACS_MAP_LOW_START && r.c<ACS_MAP_LOW_START+ACS_MAP_LOW_N)
-        cell->code = acs_map_low[r.c-ACS_MAP_LOW_START], cw=1;
+        code = acs_map_low[r.c-ACS_MAP_LOW_START], cw=1;
       else
-        cell->code = r.c, cw = char_width(r.c,0);
-      cell->gr = *gr, set_cell_w(*cell, cw);
+        code = r.c, cw = char_width(r.c,0);
+      { int cont = is_cluster_cont(code, prev_code, &ri_unpaired);
+        if(cont) cw = 0;
+        cell->code = code, cell->gr = *gr, set_cell_w(*cell, cw);
+        if(cont) {
+          a_set(cell->gr.a, CLUSTER_CONT, 1);
+          cluster_widen_leader((struct cell*)line->beg.ptr, cell, &w);
+        } }
       w += cw, ++cell;
+      prev_code = code;
       if(r.pos==end || *r.pos<0x20u) break;
       r = read_utf8(r,end);
       if(r.s.n!=0 || r.c<0x20u) break;
