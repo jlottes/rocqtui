@@ -202,18 +202,22 @@ let render t (grid : Grid.t) ~row ~col ~width ~height =
     if grid_row < grid.rows then begin
       (* Render cells *)
       let x = ref 0 in
+      (* Track the most recently written wide/normal cell so width=0
+         cells (combining marks, ZWJ emoji clusters, RI flag pairs)
+         can append to the actual leader rather than the right-half
+         continuation slot of a wide char — those get skipped on emit. *)
+      let leader_gc = ref (-1) in
       Array.iter (fun (cell : Vterm_lib.Vterm_api.row_cell) ->
         let gc = col + !x in
         if cell.width = 0 then begin
-          (* Combining mark: preserve its own SGR via Grid.combs. *)
-          let prev = gc - 1 in
-          if prev >= col && prev < grid.cols then begin
+          let target = if !leader_gc >= 0 then !leader_gc else gc - 1 in
+          if target >= col && target < grid.cols then begin
             let base = (Obj.magic cell.attr : Grid.attr) in
             let attr =
               if cell.selected then { base with reverse = not base.reverse }
               else base
             in
-            Grid.append_combining grid ~row:grid_row ~col:prev ~attr cell.text
+            Grid.append_combining grid ~row:grid_row ~col:target ~attr cell.text
           end
         end else if gc < col + width && gc < grid.cols then begin
           let base = (Obj.magic cell.attr : Grid.attr) in
@@ -238,19 +242,24 @@ let render t (grid : Grid.t) ~row ~col ~width ~height =
                 cc.width <- 1;
                 cc.attr <- attr
               end
-            done
+            done;
+            (* Last expanded space is the leader for any trailing combs. *)
+            leader_gc := min (gc + cell.width - 1) (grid.cols - 1)
           end else begin
             let grid_cell = grid.cells.(grid_row).(gc) in
             grid_cell.text <- cell.text;
             grid_cell.width <- cell.width;
             grid_cell.attr <- attr;
+            grid_cell.combs <- [];
             (* Wide char: mark continuation cell *)
             if cell.width = 2 && gc + 1 < col + width && gc + 1 < grid.cols then begin
               let next = grid.cells.(grid_row).(gc + 1) in
               next.text <- "";
               next.width <- 0;
-              next.attr <- attr
-            end
+              next.attr <- attr;
+              next.combs <- []
+            end;
+            leader_gc := gc
           end;
           x := !x + cell.width
         end
