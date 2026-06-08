@@ -200,7 +200,11 @@ let append_combining g ~row ~col ?attr text =
     let cell = g.cells.(row).(col) in
     match attr with
     | None -> cell.text <- cell.text ^ text
-    | Some a when a = cell.attr -> cell.text <- cell.text ^ text
+    (* The "same attr as base → append to cell.text" optimization is only
+       safe when no combs have landed yet — otherwise we'd insert this
+       text BEFORE the earlier combs in emit order. *)
+    | Some a when a = cell.attr && cell.combs = [] ->
+      cell.text <- cell.text ^ text
     | Some a -> cell.combs <- (text, a) :: cell.combs
   end
 
@@ -211,6 +215,10 @@ let put_str g ~row ~col s attr =
   else begin
     let len = String.length s in
     let c = ref col in
+    (* Track the col of the most recently emitted base cell so combining
+       marks attach to the actual base, not to the continuation slot of
+       a preceding wide character. *)
+    let last_base_col = ref (-1) in
     let i = ref 0 in
     while !i < len && !c < g.cols do
       let (cp, nbytes) = decode_utf8 s !i in
@@ -221,17 +229,21 @@ let put_str g ~row ~col s attr =
         i := !i + nbytes
       end
       else if w = 0 then begin
-        (* Combining character — append to previous cell *)
-        if !c > col then
-          append_combining g ~row ~col:(!c - 1) char_str
-        else if col > 0 then
-          append_combining g ~row ~col:(col - 1) char_str;
+        (* Combining character — append to the most recent base cell. *)
+        let target =
+          if !last_base_col >= 0 then !last_base_col
+          else if col > 0 then col - 1
+          else -1
+        in
+        if target >= 0 then
+          append_combining g ~row ~col:target char_str;
         i := !i + nbytes
       end
       else begin
         (* Normal or wide character *)
         if !c >= 0 && !c + w - 1 < g.cols then
           set_cell g ~row ~col:!c char_str attr;
+        last_base_col := !c;
         c := !c + w;
         i := !i + nbytes
       end
