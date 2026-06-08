@@ -32,6 +32,7 @@
 #include "keyseq.h"
 #include "kitty_keyseq.h"
 #include "mouseseq.h"
+#include "cluster.h"
 
 /* ============================================================
    Vterm custom block
@@ -282,9 +283,19 @@ CAMLprim value caml_vterm_get_row(value v, value v_y)
   for (unsigned i = 0; i < count; i++) {
     const struct vterm_cell *c = &cells[i];
 
-    /* Encode codepoint as UTF-8 */
-    uchar utf8buf[8];
-    uchar *end = put_utf8(utf8buf, c->code);
+    /* Encode the cell's codepoint(s) as UTF-8. A cluster cell carries a
+       full grapheme (RI flag pair, ZWJ family, keycap, VS-16 emoji,
+       tag-flag subdivision, skin-tone modifier) — expand it into the
+       text field so the host terminal receives one shaped sequence. */
+    uchar utf8buf[CLUSTER_MAX_LEN * 4 + 4];
+    uchar *end = utf8buf;
+    if (c->code & CLUSTER_BIT) {
+      unsigned n_codes;
+      const uint32 *codes = cluster_get(cluster_index(c->code), &n_codes);
+      for (unsigned k = 0; k < n_codes; k++) end = put_utf8(end, codes[k]);
+    } else {
+      end = put_utf8(end, c->code);
+    }
     v_text = caml_alloc_string(end - utf8buf);
     memcpy(Bytes_val(v_text), utf8buf, end - utf8buf);
 
