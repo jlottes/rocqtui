@@ -12,6 +12,7 @@
 #include "term.h"
 #include "char_width.h"
 #include "acs.h"
+#include "cluster.h"
 
 #ifndef TERM_DIAGNOSTICS
 #  define TERM_DIAGNOSTICS 0
@@ -322,6 +323,21 @@ struct cells_encode_state {
   struct gr gr;
 };
 
+static unsigned cell_code_enc_count(uint32 code)
+{
+  if(code & CLUSTER_BIT) return 1 + varint_count(cluster_index(code));
+  return utf8_bytes(code);
+}
+
+static uchar *cell_code_encode(uchar *restrict out, uint32 code)
+{
+  if(code & CLUSTER_BIT) {
+    *out++ = ENC_CLUSTER_REF;
+    return varint_encode(out, cluster_index(code));
+  }
+  return put_utf8(out, code);
+}
+
 static struct cells_encode_state cells_encode(
   struct cells_encode_state st,
   const struct cell *restrict c, unsigned n, const int step)
@@ -332,8 +348,8 @@ static struct cells_encode_state cells_encode(
       if(gr_count > st.stop-st.pos) break;
       st.pos = gr_encode(st.pos, st.gr, c->gr), st.gr = c->gr;
     }
-    if(st.pos+utf8_bytes(c->code)>st.stop) break;
-    st.pos = put_utf8(st.pos, c->code);
+    if(st.pos+cell_code_enc_count(c->code)>st.stop) break;
+    st.pos = cell_code_encode(st.pos, c->code);
     c+=step;
   }
   return st;
@@ -346,7 +362,7 @@ static unsigned cells_encode_count(
   struct gr gr = *gr_st;
   while(count<max && n--) {
     count += gr_encode_count(gr,c->gr), gr=c->gr;
-    count += utf8_bytes(c->code);
+    count += cell_code_enc_count(c->code);
     c+=step;
   }
   gr.a &= ~A_WIDTH_MASK; /* width is per-cell, not rendition state */
@@ -427,34 +443,34 @@ static void cells_decode(
   const uchar *restrict const in, unsigned i, unsigned max)
 {
   struct gr gr = default_gr;
-  struct cell *restrict out
+  struct cell *restrict out 
     = array_reserve(struct cell,&line->beg,max-i);
   struct cell *const start = out;
   struct read_utf8_fast r;
   unsigned col = 0;
-  /* The cluster_cont bit lives in the per-cell metadata above
-     A_WIRE_MASK so it isn't carried by the wire format. Recompute it
-     from codepoint context here, mirroring proc_graphic's pass. */
-  uint32 prev_code = 0;
-  int ri_unpaired = 0;
   r.i=i;
   for(;;) {
     uchar c = in[r.i], w;
     if(c==ENC_NL) break;
     else if(is_gr_encoding(c)) r.i += gr_decode(&gr, in+r.i);
-    else {
-      int cont;
+    else if(c==ENC_CLUSTER_REF) {
+      unsigned consumed; unsigned idx;
+      idx = varint_decode(in+r.i+1, &consumed);
+      r.i += 1 + consumed;
       out->gr = gr;
-      r=read_utf8_fast(in,r.i),out->code=r.c;
-      cont = is_cluster_cont(r.c, prev_code, &ri_unpaired);
-      w = cont ? 0 : char_width(r.c,col);
-      set_cell_w(*out,w);
-      if(cont) {
-        a_set(out->gr.a, CLUSTER_CONT, 1);
-        cluster_widen_leader(start, out, &col);
-      }
+      out->code = CLUSTER_BIT
+                | (cluster_get_width(idx)==1 ? CLUSTER_NARROW_BIT : 0)
+                | idx;
+      w = char_width(out->code, col);
+      set_cell_w(*out, w);
       col+=w;
-      prev_code = r.c;
+      ++out;
+    }
+    else {
+      out->gr = gr;
+      r=read_utf8_fast(in,r.i),out->code=r.c,w=char_width(r.c,col);
+      set_cell_w(*out,w);
+      col+=w;
       ++out;
     }
   }
@@ -1711,6 +1727,130 @@ static unsigned count_graphic(
   return p-start;
 }
 
+/* Process one codepoint through the cluster parser. Either mutates the
+   top cell (promote/extend cluster — possibly widening it) or emits a
+   fresh cell at *out. Returns 1 if a cell was emitted (caller should
+   advance the cell pointer), 0 if only `top` was mutated. *col_delta is
+   the column advance to add to the caller's accumulator: width of the
+   new cell plus any retroactive widening of `top`. */
+static int cluster_step(
+  struct term *restrict t,
+  struct cell *restrict top,
+  struct cell *restrict out,
+  uint32 code,
+  const struct gr *restrict gr,
+  int *restrict col_delta)
+{
+  int trig = cluster_is_trigger_extend(code);
+  int ri   = cluster_is_ri(code);
+  int pict = cluster_is_pictographic(code);
+
+  if(top) switch(t->cluster_state) {
+    case CPS_LEADER:
+      if(trig) {
+        uint32 seq[2];
+        unsigned old_w = cell_w(*top);
+        unsigned w_new = (code == 0xFE0Eu) ? 1u : 2u;
+        unsigned idx;
+        seq[0] = top->code, seq[1] = code;
+        idx = cluster_intern(seq, 2, w_new);
+        top->code = CLUSTER_BIT
+                  | (w_new==1u ? CLUSTER_NARROW_BIT : 0u)
+                  | idx;
+        if(w_new != old_w) set_cell_w(*top, w_new),
+          *col_delta = (int)w_new - (int)old_w;
+        else *col_delta = 0;
+        t->cluster_state = (code == 0x200Du)
+          ? CPS_AWAIT_PICTOGRAPHIC : CPS_IN_CLUSTER;
+        return 0;
+      }
+      break;
+    case CPS_AWAIT_SECOND_RI:
+      if(ri) {
+        uint32 seq[2];
+        unsigned old_w = cell_w(*top);
+        unsigned w_new = 2u;  /* flag glyph is always width 2 */
+        unsigned idx;
+        seq[0] = top->code, seq[1] = code;
+        idx = cluster_intern(seq, 2, w_new);
+        top->code = CLUSTER_BIT | idx;  /* narrow bit clear → width 2 */
+        if(w_new != old_w) set_cell_w(*top, w_new),
+          *col_delta = (int)w_new - (int)old_w;
+        else *col_delta = 0;
+        t->cluster_state = CPS_DEAD;
+        return 0;
+      }
+      break;
+    case CPS_AWAIT_PICTOGRAPHIC:
+      if(pict) {
+        unsigned old_n;
+        const uint32 *old = cluster_get(cluster_index(top->code), &old_n);
+        if(old_n + 1u <= (unsigned)CLUSTER_MAX_LEN) {
+          uint32 seq[CLUSTER_MAX_LEN];
+          /* ZWJ-extension preserves width; just rewrite the leader's
+             code to point at the new (longer) cluster table entry. */
+          unsigned was_narrow = (top->code & CLUSTER_NARROW_BIT) ? 1u : 0u;
+          unsigned w_keep = was_narrow ? 1u : 2u;
+          unsigned idx;
+          memcpy(seq, old, old_n * sizeof(uint32));
+          seq[old_n] = code;
+          idx = cluster_intern(seq, old_n + 1u, w_keep);
+          top->code = CLUSTER_BIT
+                    | (was_narrow ? CLUSTER_NARROW_BIT : 0u)
+                    | idx;
+          t->cluster_state = CPS_IN_CLUSTER;
+          *col_delta = 0;
+          return 0;
+        }
+      }
+      break;
+    case CPS_IN_CLUSTER:
+      if(trig) {
+        unsigned old_n;
+        const uint32 *old = cluster_get(cluster_index(top->code), &old_n);
+        if(old_n + 1u <= (unsigned)CLUSTER_MAX_LEN) {
+          uint32 seq[CLUSTER_MAX_LEN];
+          unsigned was_narrow = (top->code & CLUSTER_NARROW_BIT) ? 1u : 0u;
+          unsigned old_w = was_narrow ? 1u : 2u;
+          unsigned w_new = (code == 0xFE0Eu) ? 1u
+                         : (code == 0xFE0Fu) ? 2u
+                         : old_w;
+          unsigned idx;
+          memcpy(seq, old, old_n * sizeof(uint32));
+          seq[old_n] = code;
+          idx = cluster_intern(seq, old_n + 1u, w_new);
+          top->code = CLUSTER_BIT
+                    | (w_new==1u ? CLUSTER_NARROW_BIT : 0u)
+                    | idx;
+          if(w_new != old_w) {
+            set_cell_w(*top, w_new);
+            *col_delta = (int)w_new - (int)old_w;
+          } else *col_delta = 0;
+          t->cluster_state = (code == 0x200Du)
+            ? CPS_AWAIT_PICTOGRAPHIC : CPS_IN_CLUSTER;
+          return 0;
+        }
+      }
+      break;
+    case CPS_DEAD:
+    default:
+      break;
+  }
+
+  /* Couldn't absorb into cluster — emit a new cell. */
+  {
+    unsigned cw = char_width(code, 0);
+    out->code = code;
+    out->gr = *gr;
+    set_cell_w(*out, cw);
+    *col_delta = (int)cw;
+    if(ri)             t->cluster_state = CPS_AWAIT_SECOND_RI;
+    else if(cw > 0u)   t->cluster_state = CPS_LEADER;
+    else               t->cluster_state = CPS_DEAD;
+  }
+  return 1;
+}
+
 /* start!=end && *start>=' ' */
 static const uchar *proc_graphic(
   struct term *restrict const t,
@@ -1728,56 +1868,25 @@ static const uchar *proc_graphic(
   struct cell *restrict cell =
     array_reserve(struct cell,&line->beg,line->beg.n+(end-start))
       + line->beg.n;
+  struct cell *const base = (struct cell*)line->beg.ptr;
   int w = 0;
-  /* Seed the cluster detector from the last cell already in this line
-     so sequences split across proc_graphic calls still pair up. */
-  uint32 prev_code = 0;
-  int ri_unpaired = 0;
-  if(line->beg.n > 0) {
-    struct cell *last = array_data(struct cell,&line->beg)+line->beg.n-1;
-    prev_code = last->code;
-    if(last->code >= 0x1F1E6u && last->code <= 0x1F1FFu
-       && !a_get(last->gr.a, CLUSTER_CONT))
-      ri_unpaired = 1;
-  }
-  if(!t->linedraw) {
-    for(;;) {
-      int cont = is_cluster_cont(r.c, prev_code, &ri_unpaired);
-      int cw = cont ? 0 : char_width(r.c,0);
-      cell->code = r.c, cell->gr = *gr, set_cell_w(*cell, cw);
-      if(cont) {
-        a_set(cell->gr.a, CLUSTER_CONT, 1);
-        cluster_widen_leader((struct cell*)line->beg.ptr, cell, &w);
-      }
-      w += cw, ++cell;
-      prev_code = r.c;
-      if(r.pos==end || *r.pos<0x20u) break;
-      r = read_utf8(r,end);
-      if(r.s.n!=0 || r.c<0x20u) break;
+  for(;;) {
+    uint32 code = r.c;
+    int cd, emitted;
+    struct cell *top;
+    if(t->linedraw) {
+      if(code>=ACS_MAP_HIGH_START && code<ACS_MAP_HIGH_START+ACS_MAP_HIGH_N)
+        code = acs_map_high[code-ACS_MAP_HIGH_START];
+      else if(code>=ACS_MAP_LOW_START && code<ACS_MAP_LOW_START+ACS_MAP_LOW_N)
+        code = acs_map_low[code-ACS_MAP_LOW_START];
     }
-  } else {
-    for(;;) {
-      int cw;
-      uint32 code;
-      if(r.c>=ACS_MAP_HIGH_START && r.c<ACS_MAP_HIGH_START+ACS_MAP_HIGH_N)
-        code = acs_map_high[r.c-ACS_MAP_HIGH_START], cw=1;
-      else if(r.c>=ACS_MAP_LOW_START && r.c<ACS_MAP_LOW_START+ACS_MAP_LOW_N)
-        code = acs_map_low[r.c-ACS_MAP_LOW_START], cw=1;
-      else
-        code = r.c, cw = char_width(r.c,0);
-      { int cont = is_cluster_cont(code, prev_code, &ri_unpaired);
-        if(cont) cw = 0;
-        cell->code = code, cell->gr = *gr, set_cell_w(*cell, cw);
-        if(cont) {
-          a_set(cell->gr.a, CLUSTER_CONT, 1);
-          cluster_widen_leader((struct cell*)line->beg.ptr, cell, &w);
-        } }
-      w += cw, ++cell;
-      prev_code = code;
-      if(r.pos==end || *r.pos<0x20u) break;
-      r = read_utf8(r,end);
-      if(r.s.n!=0 || r.c<0x20u) break;
-    }
+    top = cell > base ? cell - 1 : 0;
+    emitted = cluster_step(t, top, cell, code, gr, &cd);
+    if(emitted) ++cell;
+    w += cd;
+    if(r.pos==end || *r.pos<0x20u) break;
+    r = read_utf8(r,end);
+    if(r.s.n!=0 || r.c<0x20u) break;
   }
 #if PRINT_ESC
   fputs("graphic: ",stdout);
@@ -1798,6 +1907,10 @@ static const uchar *proc_normal(
 {
   const uchar c = *start;
   if(t->utf8_state.n || c>=0x20u) return proc_graphic(t,start,end);
+  /* Any non-graphic byte (control char or ESC entry) breaks any
+     in-progress cluster — the cluster parser only walks contiguous
+     graphic codepoints. CSI/OSC processing inherits this DEAD state. */
+  t->cluster_state = CPS_DEAD;
 #if PRINT_ESC
   if(c!=033) printf("control char %o\n",(unsigned)c);
 #endif

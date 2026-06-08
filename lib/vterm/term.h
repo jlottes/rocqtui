@@ -48,14 +48,7 @@
     bits 18..25  font            (0 primary; 1..9 xterm alt; 10..255 ext via SGR 10:n)
     ----- bits 0..25 above match the half-buffer wire format -----
     bits 26..29  width           (0..8 per-cell metadata, in-memory only)
-    bit  30      cluster_cont    (cell is part of a multi-codepoint emoji
-                                  cluster — second of an RI pair, after a
-                                  ZWJ, a skin tone modifier, or a keycap
-                                  enclosing mark. Continuation cells take
-                                  no screen space and are skipped at draw
-                                  time; the codepoint is preserved for
-                                  selection / copy / future GSUB shaping)
-    bit  31      unused
+    bits 30..31  unused
 
   See doc/sgr-plan.md for the full rationale. */
 
@@ -84,7 +77,6 @@
 #define A_SCRIPT        16
 #define A_FONT          18
 #define A_WIDTH         26
-#define A_CLUSTER_CONT  30
 
 #define A_BOLD_MASK          (1u  << A_BOLD)
 #define A_ITALIC_MASK        (3u  << A_ITALIC)
@@ -100,7 +92,6 @@
 #define A_SCRIPT_MASK        (3u  << A_SCRIPT)
 #define A_FONT_MASK          (0xffu << A_FONT)
 #define A_WIDTH_MASK         (15u   << A_WIDTH)
-#define A_CLUSTER_CONT_MASK  (1u    << A_CLUSTER_CONT)
 
 #define A_WIRE_MASK  0x03ffffffu  /* bits  0..25  wire-format attribute bits */
 #define A_SHORT_MASK 0x000000ffu  /* bits  0..7   ENC_ATTRB  payload         */
@@ -130,45 +121,28 @@ struct cell { uint32 code; struct gr gr; };
 #define cell_w(c)       a_get((c).gr.a, WIDTH)
 #define set_cell_w(c,w) a_set((c).gr.a, WIDTH, (w))
 
-/* Walk back from `cur` (one-past-the-just-written cell) to the cluster's
-   leading cell (first prior cell with non-zero stored width). If that
-   leader's width is 1, widen it to 2 — composite emoji always occupy
-   2 cells, but RI codepoints and keycap base digits have wcwidth=1.
-   Bumps *w_acc by 1 to keep line/cursor column counts in sync. */
-static inline void cluster_widen_leader(struct cell *base, struct cell *cur,
-                                        unsigned *w_acc)
-{
-  while(cur > base) {
-    --cur;
-    if(cell_w(*cur) > 0) {
-      if(cell_w(*cur) == 1) set_cell_w(*cur, 2), ++*w_acc;
-      return;
-    }
-  }
-}
+/*----------------------------------------------------------------------------
+  Cluster cells
 
-/* Detect whether `code` is a continuation of a multi-codepoint emoji
-   cluster given the preceding cell's codepoint. *ri_unpaired tracks
-   whether the previous cell was an unpaired regional indicator; it is
-   updated in place. Inline because layered (term, vterm, wrap) — each
-   recomputes width on its own input stream and needs the same rule. */
-static inline int is_cluster_cont(uint32 code, uint32 prev_code,
-                                  int *ri_unpaired)
-{
-  if(prev_code == 0x200Du) { *ri_unpaired = 0; return 1; }
-  if(code >= 0x1F3FBu && code <= 0x1F3FFu) { *ri_unpaired = 0; return 1; }
-  if(code == 0x20E3u) { *ri_unpaired = 0; return 1; }
-  /* Tag characters U+E0020..U+E007F — subdivision-flag sequences like
-     🏴󠁧󠁢󠁥󠁮󠁧󠁿 = U+1F3F4 + tag-g + tag-b + ... + U+E007F (cancel). */
-  if(code >= 0xE0020u && code <= 0xE007Fu) { *ri_unpaired = 0; return 1; }
-  if(code >= 0x1F1E6u && code <= 0x1F1FFu) {
-    if(*ri_unpaired) { *ri_unpaired = 0; return 1; }
-    *ri_unpaired = 1;
-    return 0;
-  }
-  *ri_unpaired = 0;
-  return 0;
-}
+  A cell whose `code` field has CLUSTER_BIT set carries a cluster table
+  index in its low bits (masked by CLUSTER_INDEX_MASK) instead of a
+  literal codepoint. The cluster table (cluster.c) holds the codepoint
+  sequence for the cluster.
+
+  CLUSTER_NARROW_BIT encodes width: clear = width 2 (the common case —
+  flags, ZWJ emoji, keycaps, skin-tone, VS-16 emoji), set = width 1
+  (rare VS-15 forced text presentation).
+
+  Cluster cells form atomically at the parser layer (see term.c). Wrap
+  and selection treat them as ordinary single cells; the renderer
+  dispatches on CLUSTER_BIT to look up the sequence and hand it to
+  shaping. See doc/cluster-cell-plan.md. */
+
+#define CLUSTER_BIT         0x80000000u
+#define CLUSTER_NARROW_BIT  0x40000000u
+#define CLUSTER_INDEX_MASK  0x3fffffffu
+#define is_cluster(code)    ((code) & CLUSTER_BIT)
+#define cluster_index(code) ((code) & CLUSTER_INDEX_MASK)
 
 /*----------------------------------------------------------------------------
   Half-buffer encoding tokens
@@ -204,7 +178,7 @@ static inline int is_cluster_cont(uint32 code, uint32 prev_code,
 #define ENC_NL      15u  /* no payload: end of line                       */
 #define ENC_TAB     16u  /* no payload: tab cell                          */
 #define ENC_ATTRB4  17u  /* +4 bytes: low 26 bits (WIRE — includes 8-bit font slot) */
-
+#define ENC_CLUSTER_REF 18u  /* +varint: cluster table index                  */
 
 #define MODE_APP_KEYPAD   0x01u
 #define MODE_APP_CURSOR   0x02u
@@ -229,6 +203,34 @@ static inline int is_cluster_cont(uint32 code, uint32 prev_code,
 typedef unsigned char uchar;
 struct utf8_state { uchar c[4]; int n; };
 #endif
+
+/* Varint (LEB128) for cluster indices in the encoded stream. Low 7 bits per
+   byte; continuation bit in MSB. Index 0..127 fits in 1 byte, etc. */
+static inline unsigned varint_count(unsigned x)
+{
+  unsigned n = 1;
+  while(x >>= 7) ++n;
+  return n;
+}
+static inline uchar *varint_encode(uchar *restrict out, unsigned x)
+{
+  while(x >= 0x80u) *out++ = (uchar)((x & 0x7fu) | 0x80u), x >>= 7;
+  *out++ = (uchar)(x & 0x7fu);
+  return out;
+}
+static inline unsigned varint_decode(
+  const uchar *restrict in, unsigned *restrict consumed)
+{
+  unsigned x = 0, shift = 0, n = 0;
+  for(;;) {
+    uchar b = in[n++];
+    x |= (unsigned)(b & 0x7fu) << shift;
+    if(!(b & 0x80u)) break;
+    shift += 7;
+  }
+  *consumed = n;
+  return x;
+}
 
 struct line {
   struct array /* of cell */ beg; /* normal order, known tab widths */
@@ -279,6 +281,8 @@ struct term {
   uchar state; buffer escape_buf;
   unsigned escape_escape;
   struct utf8_state utf8_state;
+  uchar cluster_state;   /* CPS_* — cluster parser state (see cluster.h)
+                            survives across term_proc calls like utf8_state */
   /* kitty keyboard protocol */
   #define KITTY_KB_STACK_MAX 8
   uchar kitty_kb_flags;

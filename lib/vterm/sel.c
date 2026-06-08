@@ -8,6 +8,7 @@
 #include "utf-8.h"
 #include "sysbuf.h"
 #include "term.h"
+#include "cluster.h"
 #include "wrap.h"
 #include "sel.h"
 
@@ -47,6 +48,14 @@ static uchar *copy_enc(uchar *restrict out, const uchar *restrict pos, int len)
         int n = gr_decode(&gr, pos); \
         pos += n, len-= n; \
       } else if(*pos==ENC_TAB) ++pos, --len, out=WRITE_CH(9); \
+      else if(*pos==ENC_CLUSTER_REF) { \
+        unsigned consumed, idx, n_codes, k; \
+        const uint32 *codes; \
+        idx = varint_decode(pos+1, &consumed); \
+        codes = cluster_get(idx, &n_codes); \
+        for(k=0; k<n_codes; ++k) out=WRITE_CH(codes[k]); \
+        pos += 1 + consumed, len -= 1 + consumed; \
+      } \
       else r=read_utf8_fast(pos,0), out=WRITE_CH(r.c), len-=r.i, pos+=r.i; \
     } \
     return out; \
@@ -68,7 +77,14 @@ static uchar *copy_cells(uchar *restrict out,
   const struct cell *restrict pos, unsigned cn, const int step)
 {
   while(cn) {
-    if(pos->code==ENC_TAB) *out++=9; else out=put_utf8(out,pos->code);
+    uint32 code = pos->code;
+    if(code==ENC_TAB) *out++=9;
+    else if(code & CLUSTER_BIT) {
+      unsigned n_codes, k;
+      const uint32 *codes = cluster_get(cluster_index(code), &n_codes);
+      for(k=0; k<n_codes; ++k) out=put_utf8(out, codes[k]);
+    }
+    else out=put_utf8(out, code);
     pos+=step, --cn;
   }
   return out;
@@ -78,7 +94,16 @@ static unsigned copy_cells_count(
   const struct cell *restrict pos, unsigned cn, const int step)
 {
   unsigned out=0;
-  while(cn) out+=utf8_bytes(pos->code), pos+=step, --cn;
+  while(cn) {
+    uint32 code = pos->code;
+    if(code & CLUSTER_BIT) {
+      unsigned n_codes, k;
+      const uint32 *codes = cluster_get(cluster_index(code), &n_codes);
+      for(k=0; k<n_codes; ++k) out += utf8_bytes(codes[k]);
+    }
+    else out += utf8_bytes(code);
+    pos+=step, --cn;
+  }
   return out;
 }
 

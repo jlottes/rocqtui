@@ -21,10 +21,16 @@
 #  else
      typedef unsigned long  uint32;
 #  endif
+#  if ULLONG_BITS>=64
+     typedef unsigned long long uint64;
+#  else
+     typedef unsigned long      uint64;
+#  endif
 #  undef NO_C99
 #else
 #  include <stdint.h>
    typedef uint_least32_t uint32;
+   typedef uint_least64_t uint64;
 #endif
 
 #endif
