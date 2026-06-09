@@ -71,6 +71,24 @@ static struct layout_state layout_enc_cells(
     if(c==ENC_NL||r.i>=max) break;
     else if(is_gr_encoding(c))
       r.i += gr_decode(&st.gr,start+r.i);
+    else if(c==ENC_CLUSTER_REF) {
+      unsigned consumed; unsigned idx; uint32 code;
+      idx = varint_decode(start+r.i+1, &consumed);
+      r.i += 1 + consumed;
+      code = CLUSTER_BIT
+           | (cluster_get_width(idx)==1 ? CLUSTER_NARROW_BIT : 0)
+           | idx;
+      w = char_width(code, st.col);
+      if(w && x>=xmax) break;
+      if(cursor&&v->t.cursor.col>=st.col&&v->t.cursor.col< st.col+w) {
+        struct cursor_pos *restrict const cp = &v->layout.cursor_pos;
+        cursor=0, cp->on_screen=1, cp->attrb=st.gr.a,
+        cp->x=x, cp->y=y, cp->w=w,
+        cp->mode=1,
+        cp->pos.c = start+old_i, cp->max = max-old_i;
+      }
+      st.col+=w, x+=w;
+    }
     else {
       r=read_utf8_fast(start,r.i), w=char_width(r.c,st.col);
       if(w && x>=xmax) break;

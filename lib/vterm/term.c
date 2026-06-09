@@ -443,7 +443,7 @@ static void cells_decode(
   const uchar *restrict const in, unsigned i, unsigned max)
 {
   struct gr gr = default_gr;
-  struct cell *restrict out 
+  struct cell *restrict out
     = array_reserve(struct cell,&line->beg,max-i);
   struct cell *const start = out;
   struct read_utf8_fast r;
