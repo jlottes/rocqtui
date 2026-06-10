@@ -38,9 +38,10 @@ val handle_build :
 val handle_query :
   Editor_context.t -> Input.event -> Tab.t -> Action.action option
 
-(** While Help is open: scroll keys, mouse wheel, or close. *)
+(** While Help is open: scroll keys, mouse wheel, or close.
+    Returns [None] only for Resize, which must reach the global handler. *)
 val handle_help :
-  Editor_context.t -> Input.event -> Render.t -> Action.action option
+  Editor_context.t -> Input.event -> Action.action option
 
 (** While a RenamePrompt is open: edit the input, Enter to commit,
     Esc to cancel. The locked extension can't be moved into. Returns

@@ -393,7 +393,6 @@ let handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r =
       Render.resize r;
       Some Continue
     end
-    else if View.is_help ctx then Modals.handle_help ctx ev r
     else if (match ev with Input.Mouse _ -> true | _ -> false) then begin
       let mev = match ev with Input.Mouse m -> m | _ -> assert false in
       (match Mouse.handle ctx mev tab r with
@@ -506,11 +505,8 @@ let handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r =
         Some (Open_file e.file)
     end
     else if Keymatch.match_binding ev Keys.help then begin
-      if View.is_help ctx then begin
-        Modal.pop ctx.modal;
-        View.set_help_scroll ctx 0
-      end else
-        Modal.push ctx.modal (Modal.Help { scroll = 0 });
+      (* Closing is handled by handle_help's catch-all before we get here. *)
+      Modal.push ctx.modal (Modal.Help { scroll = 0 });
       Some Continue
     end
     else if Keymatch.match_binding ev Keys.minimap then begin
@@ -666,6 +662,11 @@ let handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r =
           | File_tree.TreeUnhandled -> None))
   in
   let action =
+    (* Help overlay is modal: it claims everything except Resize, which
+       falls through so the renderer still resizes underneath. *)
+    match (if View.is_help ctx then Modals.handle_help ctx ev else None) with
+    | Some a -> a
+    | None ->
     match try_file_tree () with
     | Some a -> a
     | None ->

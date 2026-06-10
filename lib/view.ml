@@ -446,26 +446,81 @@ let visible_portion line hscroll cols =
   else (String.sub line start_byte (end_byte - start_byte), start_byte)
 
 let help_lines = String.split_on_char '\n' (Keys.generate_help ())
+let help_lines_a = Array.of_list help_lines
 
-let render_help_screen (ctx : Editor_context.t) r =
-  let (rows, _cols) = Render.pane_dims r Render.PScript in
-  Render.clear_pane r Render.PScript;
-  let n = List.length help_lines in
-  let scroll = get_help_scroll ctx in
-  for row = 0 to rows - 1 do
-    let idx = scroll + row in
+let help_max_width =
+  List.fold_left (fun acc l -> max acc (Utf8.string_width l)) 0 help_lines
+
+let help_box_geometry () =
+  let (term_h, term_w) = Term.size () in
+  let n = Array.length help_lines_a in
+  let box_h = min (term_h - 2) (n + 2) in
+  let box_w = min (term_w - 4) (help_max_width + 4) in
+  let box_top = (term_h - box_h) / 2 in
+  let box_left = (term_w - box_w) / 2 in
+  let visible_rows = box_h - 2 in
+  (box_top, box_left, box_w, box_h, visible_rows)
+
+let render_help_overlay grid (rect : Render.rect) scroll =
+  let box_h = rect.height in
+  let box_w = rect.width in
+  let box_top = rect.row in
+  let box_left = rect.col in
+  let border_attr = { (Theme.attrs ()).ga_border with bold = true } in
+  let normal_attr = (Theme.attrs ()).ga_default in
+  Grid.clear_region grid ~row:box_top ~col:box_left ~height:box_h ~width:box_w ~attr:normal_attr;
+  (* Top border *)
+  Grid.set_cell grid ~row:box_top ~col:box_left
+    "\xe2\x94\x8c" border_attr;  (* ┌ *)
+  Grid.set_cell grid ~row:box_top ~col:(box_left + 1)
+    "\xe2\x94\x80" border_attr;  (* ─ *)
+  let title = " Help " in
+  ignore (Grid.put_str grid ~row:box_top ~col:(box_left + 2) title border_attr);
+  for c = 2 + String.length title to box_w - 2 do
+    Grid.set_cell grid ~row:box_top ~col:(box_left + c)
+      "\xe2\x94\x80" border_attr  (* ─ *)
+  done;
+  Grid.set_cell grid ~row:box_top ~col:(box_left + box_w - 1)
+    "\xe2\x94\x90" border_attr;  (* ┐ *)
+  (* Bottom border *)
+  Grid.set_cell grid ~row:(box_top + box_h - 1) ~col:box_left
+    "\xe2\x94\x94" border_attr;  (* └ *)
+  for c = 1 to box_w - 2 do
+    Grid.set_cell grid ~row:(box_top + box_h - 1) ~col:(box_left + c)
+      "\xe2\x94\x80" border_attr  (* ─ *)
+  done;
+  Grid.set_cell grid ~row:(box_top + box_h - 1) ~col:(box_left + box_w - 1)
+    "\xe2\x94\x98" border_attr;  (* ┘ *)
+  (* Side borders *)
+  for r = 1 to box_h - 2 do
+    Grid.set_cell grid ~row:(box_top + r) ~col:box_left
+      "\xe2\x94\x82" border_attr;  (* │ *)
+    Grid.set_cell grid ~row:(box_top + r) ~col:(box_left + box_w - 1)
+      "\xe2\x94\x82" border_attr  (* │ *)
+  done;
+  (* Help text (lines carry their own leading indent) *)
+  let content_w = box_w - 2 in
+  let n = Array.length help_lines_a in
+  for i = 0 to box_h - 3 do
+    let idx = scroll + i in
     if idx < n then begin
-      let line = List.nth help_lines idx in
-      ignore (Render.put_str r Render.PScript ~row ~col:0 line (Theme.attrs ()).ga_default)
+      let line = help_lines_a.(idx) in
+      let end_byte = min (String.length line) (Utf8.col_to_byte line content_w) in
+      ignore (Grid.put_str grid ~row:(box_top + 1 + i) ~col:(box_left + 1)
+        (String.sub line 0 end_byte) normal_attr)
     end
   done
+
+let render_help (ctx : Editor_context.t) r =
+  let (box_top, box_left, box_w, box_h, _) = help_box_geometry () in
+  let rect = { Render.row = box_top; col = box_left;
+               height = box_h; width = box_w } in
+  let scroll = get_help_scroll ctx in
+  Render.set_overlay r rect (fun grid rect -> render_help_overlay grid rect scroll)
 
 let render_script (ctx : Editor_context.t) r (tab : Tab.t) =
   let buf = tab.buf in
   let session = tab.session in
-  if is_help ctx then
-    render_help_screen ctx r
-  else begin
   let (rows, cols) = Render.pane_dims r Render.PScript in
   let gw = gutter_width buf in
   let content_cols = max 1 (cols - gw) in
@@ -688,7 +743,6 @@ let render_script (ctx : Editor_context.t) r (tab : Tab.t) =
       ~col:(script_rect.col + gw + cursor_col)
   end else
     Render.place_cursor r ~row:script_rect.row ~col:script_rect.col
-  end (* if not in_help_mode *)
 
 let render_query_bar r =
   let text = Printf.sprintf "[%s]About [%s]Check [%s]Print [%s]Coercions [%s]Locate [%s]Show Proof [%s]Existentials  %s:close"
@@ -1077,8 +1131,10 @@ let render_all (ctx : Editor_context.t) r (tab : Tab.t) =
       cl >= scroll && cl < scroll + visible_rows
   in
   let picker = get_picker ctx in
-  let cursor_visible = cursor_visible && picker = None in
+  let cursor_visible = cursor_visible && picker = None && not (is_help ctx) in
   Render.set_cursor_visible r cursor_visible;
   (match picker with
    | Some fp -> File_picker.render fp r
-   | None -> Render.clear_overlay r)
+   | None ->
+     if is_help ctx then render_help ctx r
+     else Render.clear_overlay r)

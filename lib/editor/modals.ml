@@ -519,14 +519,15 @@ let handle_search_prompt (ctx : Editor_context.t) ev (tab : Tab.t) =
       project_search_kick ctx tab;
     Some Continue
 
-let handle_help (ctx : Editor_context.t) ev r =
-  let (rows, _) = Render.pane_dims r Render.PScript in
+let handle_help (ctx : Editor_context.t) ev =
+  let (_, _, _, _, rows) = View.help_box_geometry () in
   let n = List.length View.help_lines in
   let max_scroll = max 0 (n - rows) in
   let scroll_by delta =
     View.set_help_scroll ctx
       (max 0 (min max_scroll (View.get_help_scroll ctx + delta))) in
   match ev with
+  | Input.Resize -> None  (* fall through to the global Resize handler *)
   | Input.Special (Input.Up, _) -> scroll_by (-1); Some Continue
   | Input.Special (Input.Down, _) -> scroll_by 1; Some Continue
   | Input.Special (Input.PageUp, _) -> scroll_by (-rows); Some Continue

@@ -24,6 +24,10 @@ val format_compose_status : Render.t -> Compose.t -> string
 (** Help screen lines (precomputed). *)
 val help_lines : string list
 
+(** Centered help overlay box for the current terminal size:
+    (box_top, box_left, box_w, box_h, visible_rows). *)
+val help_box_geometry : unit -> int * int * int * int * int
+
 (** Width of the script-pane line-number gutter for a given buffer.
     Returns 0 when [Config.show_line_numbers] is false. *)
 val gutter_width : Buffer.t -> int
