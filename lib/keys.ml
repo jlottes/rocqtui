@@ -409,6 +409,16 @@ let generate_help () =
     { build_menu with description = "Build menu (make file/all/deps)" };
     { toggle_file_tree with description = "Toggle file-tree panel" };
   ];
+  section "File tree" [
+    { name="ft_snap"; codes=[]; kitty_codes=[]; display=".";
+      context=Global; description="Snap selection to current tab's file" };
+    { name="ft_view"; codes=[]; kitty_codes=[]; display="v";
+      context=Global; description="Cycle view: filesystem tree / dependency order" };
+    { name="ft_project"; codes=[]; kitty_codes=[]; display="p";
+      context=Global; description="Toggle file's _RocqProject membership" };
+    { name="ft_rename"; codes=[]; kitty_codes=[]; display="r";
+      context=Global; description="Rename / move selected file" };
+  ];
   section "Terminal" [
     { open_terminal with description = "Open terminal (in project dir)" };
     { open_claude with description = "Open Claude Code (in project dir)" };
