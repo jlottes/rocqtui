@@ -49,10 +49,12 @@ let () =
 
   (* Test combining characters *)
   Grid.clear g;
-  (* e + combining acute = é *)
+  (* e + combining acute = é; the mark lands as a follower (with the
+     leader's attr), never folded into the leader text *)
   let n = Grid.put_str g ~row:0 ~col:0 "e\xcc\x81" Grid.default_attr in
   assert (n = 1);  (* 1 column consumed *)
-  assert (g.cells.(0).(0).text = "e\xcc\x81");
+  assert (g.cells.(0).(0).text = "e");
+  assert (g.cells.(0).(0).followers = [("\xcc\x81", Grid.default_attr)]);
   assert (g.cells.(0).(0).width = 1);
   Printf.printf "OK: combining character\n";
 

@@ -75,13 +75,13 @@ let probe label text =
       gc_cell.text <- cell.text;
       gc_cell.width <- cell.width;
       gc_cell.attr <- Grid.default_attr;
-      gc_cell.combs <- [];
+      gc_cell.followers <- [];
       if cell.width = 2 && gc + 1 < g.cols then begin
         let next = g.cells.(0).(gc + 1) in
         next.text <- "";
         next.width <- 0;
         next.attr <- Grid.default_attr;
-        next.combs <- []
+        next.followers <- []
       end;
       leader_gc := gc;
       x := !x + cell.width
@@ -90,10 +90,10 @@ let probe label text =
   Printf.printf "  grid row 0 (after render):\n";
   for c = 0 to min 6 (g.cols - 1) do
     let cell = g.cells.(0).(c) in
-    if cell.width > 0 || String.length cell.text > 0 || cell.combs <> [] then begin
+    if cell.width > 0 || String.length cell.text > 0 || cell.followers <> [] then begin
       let combs_str = String.concat "," (List.map (fun (t, _) -> hexcode t)
-        (List.rev cell.combs)) in
-      Printf.printf "    col %d: text=%s w=%d combs=[%s]\n"
+        (List.rev cell.followers)) in
+      Printf.printf "    col %d: text=%s w=%d followers=[%s]\n"
         c (hexcode cell.text) cell.width combs_str
     end
   done;

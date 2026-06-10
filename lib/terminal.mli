@@ -26,6 +26,12 @@ val resize : t -> w:int -> h:int -> unit
 val render : t -> Grid.t -> row:int -> col:int -> width:int -> height:int -> unit
 (** Render terminal display into a grid region. *)
 
+val render_vterm :
+  Vterm_lib.Vterm_api.t -> Grid.t
+  -> row:int -> col:int -> width:int -> height:int -> unit
+(** [render] on a bare vterm (no PTY) — the transparency test drives
+    this directly. *)
+
 val title : t -> string
 (** Display title (from OSC 2, with exit status if closed). *)
 

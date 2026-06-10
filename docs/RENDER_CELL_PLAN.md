@@ -121,6 +121,13 @@ upstream drift to fix separately.
     interleaves an attr-invisible event (no-op SGR, same-spot cursor
     move) inside an emoji sequence — adversarial-test territory, not
     real traffic.
+  - **Cross-cell hazards** (same genus, between *leader* cells): a
+    lone-RI cell followed by an RI-leading cell would pair into a
+    flag in the receiver, and a ZWJ-tailed cluster followed by a
+    pictographic leader would join. Emit tracks a one-cell hazard
+    lookbehind (reset on every cursor reposition, which already
+    resets the receiver's parser) and forces a break when the
+    boundary would fuse.
 - `diff` / `emit_all` are unchanged beyond `cell_eq`.
 
 `terminal.ml` barely changes: it already passes `~attr` for every
@@ -252,8 +259,13 @@ Each phase is a build-clean, test-clean stopping point.
    `9eb45ae` in `c9ad02e`). Classification stub; `grid.ml` and
    `utf8.ml` widths routed through it; `test_width.ml` asserts the
    prescription.
-2. **Cell model + emit.** `followers` always distinct; forced-break
-   emit rule; transparency test added (this is where Gap 1 closes).
+2. **Cell model + emit.** DONE. `followers` always distinct;
+   forced-break rules (follower triggers + cross-cell hazards);
+   `test/test_transparency.ml` round-trips 23 byte streams through
+   vterm → grid → emit → vterm and compares grids (Gap 1 closed).
+   Bonus: the test immediately caught a stale `ENC_TAB` constant in
+   `terminal.ml` (0x07 vs term.h's 16) — embedded-terminal tabs had
+   been rendering as a raw DLE cell.
 3. **Cluster walker.** Extend the bitmask with the gating predicates
    (`emoji_vs16_base`, `emoji_modifier_base`, `emoji_presentation`);
    `walk` + rewire `put_str` / `put_str_in_rect` / `utf8.ml` column

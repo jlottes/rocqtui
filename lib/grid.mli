@@ -51,10 +51,12 @@ type cell = {
   mutable text : string;
   mutable width : int;
   mutable attr : attr;
-  mutable combs : (string * attr) list;
-  (** Combining-mark segments with their own attrs, stored newest-first.
-      Empty when no combining mark needs an attr different from [attr];
-      [append_combining] without [?attr] appends to [text] instead. *)
+  mutable followers : (string * attr) list;
+  (** Zero-width codepoints following the leader, each with its own
+      attr, stored newest-first. Always structurally distinct from
+      [text] — the leader/follower boundary lets emit reproduce the
+      source terminal's cluster segmentation. [text] holds only the
+      leader's codepoints (a cluster when more than one). *)
 }
 
 type t = {
@@ -87,11 +89,10 @@ val clear_region : t -> row:int -> col:int -> height:int -> width:int -> attr:at
     and clears any wide char this cell was part of. *)
 val set_cell : t -> row:int -> col:int -> string -> attr -> unit
 
-(** Append a combining character to the cell at (row, col). If [?attr] is
-    supplied and differs from the cell's base [attr], the combining mark is
-    stored in [combs] with its own attr (and emitted with its own SGR
-    transition). Without [?attr], or when [?attr] matches the base attr,
-    the mark is appended to the base text — same behavior as before. *)
+(** Append a zero-width codepoint as a follower of the cell at
+    (row, col), with its own attr ([?attr] defaults to the cell's).
+    Always a distinct [followers] entry, emitted with its own SGR
+    transition when the attr diverges. *)
 val append_combining :
   t -> row:int -> col:int -> ?attr:attr -> string -> unit
 

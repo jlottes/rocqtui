@@ -60,13 +60,17 @@ type cell = {
   mutable text : string;
   mutable width : int;    (* 0 = continuation of wide char, 1 = normal, 2 = wide *)
   mutable attr : attr;
-  mutable combs : (string * attr) list;
-  (* Combining-mark segments with per-mark attrs, stored newest-first.
-     Empty in the common case where every combining mark inherits [attr]. *)
+  (* Zero-width codepoints following the leader, each with its own
+     attr, newest first (reversed at emit). Kept structurally distinct
+     from [text] even when the attr matches the leader's: the
+     boundary is what lets emit reproduce the terminal's cluster
+     segmentation (see emit_cell_payload). [text] holds only the
+     leader's codepoints (a cluster when more than one). *)
+  mutable followers : (string * attr) list;
 }
 
 let empty_cell () =
-  { text = " "; width = 1; attr = default_attr; combs = [] }
+  { text = " "; width = 1; attr = default_attr; followers = [] }
 
 type t = {
   mutable cells : cell array array;
@@ -105,7 +109,7 @@ let clear ?(attr=default_attr) g =
       cell.text <- " ";
       cell.width <- 1;
       cell.attr <- attr;
-      cell.combs <- []
+      cell.followers <- []
     done
   done
 
@@ -116,7 +120,7 @@ let clear_region g ~row ~col ~height ~width ~attr =
       cell.text <- " ";
       cell.width <- 1;
       cell.attr <- attr;
-      cell.combs <- []
+      cell.followers <- []
     done
   done
 
@@ -172,7 +176,7 @@ let set_cell g ~row ~col text attr =
     let cell = g.cells.(row).(col) in
     cell.text <- text;
     cell.attr <- attr;
-    cell.combs <- [];
+    cell.followers <- [];
     (* Determine display width *)
     let (cp, _) = decode_utf8 text 0 in
     let w = Utf8.class_width (Utf8.cp_class cp) in
@@ -191,22 +195,16 @@ let set_cell g ~row ~col text attr =
     end
   end
 
-(* Append a combining character to the cell at (row, col).
-   Without [?attr] (or when it matches the base attr), the mark is
-   appended to [cell.text] — same behavior as before.
-   With a divergent [?attr], the mark goes onto [cell.combs] so it
-   gets its own SGR transition at emit time. *)
+(* Append a zero-width codepoint as a follower of the cell at
+   (row, col), with its own attr ([?attr] defaults to the cell's).
+   Always a distinct follower entry, never folded into [cell.text]:
+   the leader/follower boundary is load-bearing — emit uses it to
+   reproduce the source terminal's cluster segmentation. *)
 let append_combining g ~row ~col ?attr text =
   if row >= 0 && row < g.rows && col >= 0 && col < g.cols then begin
     let cell = g.cells.(row).(col) in
-    match attr with
-    | None -> cell.text <- cell.text ^ text
-    (* The "same attr as base → append to cell.text" optimization is only
-       safe when no combs have landed yet — otherwise we'd insert this
-       text BEFORE the earlier combs in emit order. *)
-    | Some a when a = cell.attr && cell.combs = [] ->
-      cell.text <- cell.text ^ text
-    | Some a -> cell.combs <- (text, a) :: cell.combs
+    let a = match attr with Some a -> a | None -> cell.attr in
+    cell.followers <- (text, a) :: cell.followers
   end
 
 (* Write a UTF-8 string starting at (row, col).
@@ -262,19 +260,19 @@ let fill g ~row ~col ~width ch attr =
       cell.text <- s;
       cell.width <- 1;
       cell.attr <- attr;
-      cell.combs <- []
+      cell.followers <- []
     end
   done
 
-(* Change attributes of a row region without touching text. Resets combs:
-   chgat is meant to recolor the column, and we don't want lingering combs
+(* Change attributes of a row region without touching text. Resets followers:
+   chgat is meant to recolor the column, and we don't want lingering followers
    with stale attrs to override that. *)
 let chgat g ~row ~col ~width attr =
   if row >= 0 && row < g.rows then
     for c = max 0 col to min (col + width - 1) (g.cols - 1) do
       let cell = g.cells.(row).(c) in
       cell.attr <- attr;
-      cell.combs <- []
+      cell.followers <- []
     done
 
 (* Overlay just the underline style and underline color on a row region,
@@ -374,7 +372,7 @@ let clear_rect g rect ~attr =
    same rendition share the same attr block). *)
 let cell_eq a b =
   a.text = b.text && a.width = b.width && a.attr = b.attr
-  && a.combs = b.combs
+  && a.followers = b.followers
 
 (* Copy contents of src into dst *)
 let copy ~src ~dst =
@@ -387,7 +385,7 @@ let copy ~src ~dst =
       d.text <- s.text;
       d.width <- s.width;
       d.attr <- s.attr;
-      d.combs <- s.combs
+      d.followers <- s.followers
     done
   done
 
@@ -549,31 +547,101 @@ let emit_attr buf prev_attr attr =
     end
   end
 
-(* Emit a cell's payload: base text under its attr, then each combining
-   segment with its own SGR transition. [cur_attr] is updated to reflect
-   the trailing attr so callers can keep diffing from there. *)
-let emit_cell_payload buf cur_attr cell =
+(* Forced cluster break: an SGR command that changes no attribute
+   (re-asserts the current effective fg). Any control byte resets the
+   receiving terminal's cluster parser (term.c proc: cluster_state :=
+   CPS_DEAD on non-graphic bytes), so this reproduces a segmentation
+   boundary the source terminal had — without disturbing attrs. *)
+let emit_forced_break buf cur_attr =
+  Stdlib.Buffer.add_string buf "\x1b[";
+  Stdlib.Buffer.add_string buf
+    (sgr_of_color true (effective_attr !cur_attr).fg);
+  Stdlib.Buffer.add_char buf 'm'
+
+(* Cross-cell cluster hazards. Cells the source terminal kept separate
+   (an attr-invisible SGR or cursor event between them) must not fuse
+   in the receiving terminal when emitted contiguously. After each
+   cell, record whether its trailing codepoint leaves the receiver's
+   cluster parser able to absorb the next cell's leader. *)
+type emit_hazard =
+  | Hazard_none
+  | Hazard_lone_ri  (* cell was a single regional indicator: a
+                       following RI leader would pair into a flag *)
+  | Hazard_zwj      (* last codepoint emitted was ZWJ: a following
+                       pictographic leader would join the cluster *)
+
+let last_cp s =
+  if s = "" then 0
+  else fst (decode_utf8 s (Utf8.prev s (String.length s)))
+
+let hazard_of_cell cell =
+  match cell.followers with
+  | (text, _) :: _ ->
+    if last_cp text = 0x200D then Hazard_zwj else Hazard_none
+  | [] ->
+    if last_cp cell.text = 0x200D then Hazard_zwj
+    else
+      let (cp, n) = decode_utf8 cell.text 0 in
+      if n = String.length cell.text
+         && Utf8.class_ri (Utf8.cp_class cp) then Hazard_lone_ri
+      else Hazard_none
+
+(* Emit a cell's payload: leader text under its attr, then each
+   follower with its own SGR transition. [cur_attr] is updated to the
+   trailing attr so callers keep diffing from there; [hazard] carries
+   cluster-boundary state between contiguously emitted cells (callers
+   reset it to Hazard_none whenever they reposition the cursor — a
+   cursor move already resets the receiver's cluster parser).
+
+   Forced breaks fire in two cold places (real traffic never needs
+   them — they reproduce splits that only an attr-invisible event in
+   the source stream can create):
+   - before a follower whose first codepoint is a cluster trigger or
+     RI and whose attr equals the running attr (the source terminal
+     split there; an equal attr emits no SGR, so force one);
+   - between cells when the previous cell's hazard pairs with this
+     leader (lone RI then RI; trailing ZWJ then pictographic). *)
+let emit_cell_payload buf cur_attr hazard cell =
+  let joins =
+    match !hazard with
+    | Hazard_none -> false
+    | Hazard_lone_ri ->
+      Utf8.class_ri (Utf8.cp_class (fst (decode_utf8 cell.text 0)))
+    | Hazard_zwj ->
+      Utf8.class_pictographic
+        (Utf8.cp_class (fst (decode_utf8 cell.text 0)))
+  in
+  if joins && effective_attr cell.attr = effective_attr !cur_attr then
+    emit_forced_break buf cur_attr;
   emit_attr buf !cur_attr cell.attr;
   cur_attr := cell.attr;
   Stdlib.Buffer.add_string buf cell.text;
-  if cell.combs <> [] then
-    List.iter (fun (text, attr) ->
+  List.iter (fun (text, attr) ->
+    if effective_attr attr <> effective_attr !cur_attr then begin
       emit_attr buf !cur_attr attr;
-      cur_attr := attr;
-      Stdlib.Buffer.add_string buf text
-    ) (List.rev cell.combs)
+      cur_attr := attr
+    end else begin
+      let cl = Utf8.cp_class (fst (decode_utf8 text 0)) in
+      if Utf8.class_trigger_extend cl || Utf8.class_ri cl then
+        emit_forced_break buf cur_attr
+    end;
+    Stdlib.Buffer.add_string buf text
+  ) (List.rev cell.followers);
+  hazard := hazard_of_cell cell
 
 (* Generate ANSI output for all cells (full redraw). *)
 let emit_all curr buf =
   let cur_attr = ref default_attr in
+  let hazard = ref Hazard_none in
   Stdlib.Buffer.add_string buf "\x1b[H";  (* home cursor *)
   for r = 0 to curr.rows - 1 do
     if r > 0 then
       Stdlib.Buffer.add_string buf (Printf.sprintf "\x1b[%d;1H" (r + 1));
+    hazard := Hazard_none;  (* cursor move resets the cluster parser *)
     for c = 0 to curr.cols - 1 do
       let cell = curr.cells.(r).(c) in
       if cell.width = 0 then ()  (* skip continuation *)
-      else emit_cell_payload buf cur_attr cell
+      else emit_cell_payload buf cur_attr hazard cell
     done
   done;
   if !cur_attr <> default_attr then
@@ -584,6 +652,7 @@ let diff ~prev ~curr buf =
   let cur_row = ref (-1) in
   let cur_col = ref (-1) in
   let cur_attr = ref default_attr in
+  let hazard = ref Hazard_none in
   for r = 0 to curr.rows - 1 do
     for c = 0 to curr.cols - 1 do
       let cell = curr.cells.(r).(c) in
@@ -599,9 +668,10 @@ let diff ~prev ~curr buf =
             Stdlib.Buffer.add_string buf
               (Printf.sprintf "\x1b[%d;%dH" (r + 1) (c + 1));
             cur_row := r;
-            cur_col := c
+            cur_col := c;
+            hazard := Hazard_none  (* cursor move resets the parser *)
           end;
-          emit_cell_payload buf cur_attr cell;
+          emit_cell_payload buf cur_attr hazard cell;
           cur_col := !cur_col + (max 1 cell.width)
         end
       end
