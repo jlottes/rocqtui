@@ -1,9 +1,10 @@
 (* Codepoint classification — the single display-width authority,
    shared with the embedded terminal and glterm via the vendored
-   char_width.h + cluster.h (see caml_render_cp_class in
-   vterm_stubs.c). Bitmask: bits 0-3 width; 0x10 nonprintable;
+   char_width.h + cluster.h + emoji_props.h (see caml_render_cp_class
+   in vterm_stubs.c). Bitmask: bits 0-3 width; 0x10 nonprintable;
    0x20 cluster trigger-extend; 0x40 regional indicator;
-   0x80 pictographic. *)
+   0x80 Extended_Pictographic; 0x100 emoji_vs16_base;
+   0x200 emoji_modifier_base; 0x400 emoji_presentation. *)
 external cp_class : int -> int = "caml_render_cp_class"
 
 let class_width cl = cl land 0x0f
@@ -11,6 +12,9 @@ let class_nonprintable cl = cl land 0x10 <> 0
 let class_trigger_extend cl = cl land 0x20 <> 0
 let class_ri cl = cl land 0x40 <> 0
 let class_pictographic cl = cl land 0x80 <> 0
+let class_vs16_base cl = cl land 0x100 <> 0
+let class_modifier_base cl = cl land 0x200 <> 0
+let class_emoji_presentation cl = cl land 0x400 <> 0
 
 let codepoint_len s i =
   if i >= String.length s then 0
@@ -69,34 +73,152 @@ let prev s i =
     done;
     !j
 
-let byte_to_col s byte_off =
+(* --- Display-cell walker --------------------------------------------
+
+   Segments a string into display cells the way the terminal stack
+   does: an OCaml port of glterm's cluster_step + cluster_gate
+   (term.c), driven by the same vendored Unicode predicates via
+   [cp_class]. A display cell is a leader (one codepoint, or a
+   cluster's worth) plus zero or more zero-width followers.
+
+   Triggers always absorb into the leader (codepoints must
+   round-trip); only the WIDTH is gated:
+   - VS-16 widens to 2 only on emoji_vs16_base bases;
+   - VS-15 narrows to 1 on vs16_base or EP=Yes bases;
+   - skin tones widen to 2 only on emoji_modifier_base bases;
+   - ZWJ, bare keycap (U+20E3), and tag characters never change it;
+   - an RI pair is one width-2 cell; a lone RI is width 2 by itself.
+   Presentation (mono vs color) is the rendering terminal's concern —
+   we only need columns.
+
+   Unlike vterm, nonprintables are skipped entirely (put_str
+   semantics); a skipped codepoint kills clustering, like a control
+   byte does in the terminal. *)
+
+type display_cell = {
+  cell_off : int;                     (* leader start byte *)
+  leader_len : int;                   (* leader byte length *)
+  cell_width : int;                   (* 1 or 2 *)
+  cell_followers : (int * int) list;  (* (off, len) per zero-width
+                                         follower, oldest first *)
+}
+
+(* Mirrors CLUSTER_MAX_LEN in cluster.h: clusters longer than this
+   stop absorbing and the trigger falls through. *)
+let cluster_max_len = 16
+
+type cluster_state = Dead | Leader | Await_second_ri | Await_pict | In_cluster
+
+(* cluster_gate (term.c), width half only. [base_cl] classifies the
+   cluster's first codepoint. *)
+let gated_width base_cl cp old_w =
+  if cp = 0xFE0F then (if class_vs16_base base_cl then 2 else old_w)
+  else if cp = 0xFE0E then
+    (if class_vs16_base base_cl || class_emoji_presentation base_cl
+     then 1 else old_w)
+  else if cp >= 0x1F3FB && cp <= 0x1F3FF then
+    (if class_modifier_base base_cl then 2 else old_w)
+  else old_w
+
+(* Returns (orphans, cells): zero-width codepoints arriving before any
+   cell exists (callers attach them to the cell left of the write
+   position), and the display cells in order. *)
+let display_cells s =
   let len = String.length s in
-  let byte_off = min byte_off len in
-  let col = ref 0 in
+  let orphans = ref [] and cells = ref [] in
+  (* cell under construction; fields of the mutable accumulator *)
+  let b_off = ref 0 and b_leader_end = ref 0 and b_width = ref 0 in
+  let b_followers = ref [] and b_ncps = ref 0 and b_cl = ref 0 in
+  let have = ref false in
+  let flush () =
+    if !have then begin
+      cells := { cell_off = !b_off;
+                 leader_len = !b_leader_end - !b_off;
+                 cell_width = !b_width;
+                 cell_followers = List.rev !b_followers } :: !cells;
+      have := false
+    end
+  in
+  let state = ref Dead in
   let i = ref 0 in
-  while !i < byte_off do
+  while !i < len do
     let (cp, n) = decode s !i in
-    col := !col + codepoint_width cp;
+    let cl = cp_class cp in
+    let trig = class_trigger_extend cl in
+    let ri = class_ri cl in
+    let pict = class_pictographic cl in
+    let absorb width' state' =
+      b_leader_end := !i + n;
+      b_width := width';
+      incr b_ncps;
+      state := state'
+    in
+    let absorbed =
+      !have && !b_ncps < cluster_max_len
+      && (match !state with
+          | Leader | In_cluster when trig ->
+            absorb (gated_width !b_cl cp !b_width)
+              (if cp = 0x200D then Await_pict else In_cluster);
+            true
+          | Await_second_ri when ri ->
+            absorb 2 Dead;  (* flag pair: one width-2 cell *)
+            true
+          | Await_pict when pict ->
+            absorb !b_width In_cluster;  (* ZWJ continuation *)
+            true
+          | _ -> false)
+    in
+    if not absorbed then begin
+      if class_nonprintable cl then state := Dead
+      else begin
+        let w = class_width cl in
+        if w = 0 then begin
+          (* zero-width, couldn't extend a cluster: follower of the
+             current cell, or orphan if there is none *)
+          if !have then b_followers := (!i, n) :: !b_followers
+          else orphans := (!i, n) :: !orphans;
+          state := Dead
+        end else begin
+          flush ();
+          b_off := !i; b_leader_end := !i + n; b_width := w;
+          b_followers := []; b_ncps := 1; b_cl := cl; have := true;
+          state := if ri then Await_second_ri else Leader
+        end
+      end
+    end;
     i := !i + n
   done;
-  !col
+  flush ();
+  (List.rev !orphans, List.rev !cells)
 
+(* Column math is display-cell based so editor cursor positions agree
+   with rendered widths. A byte offset inside a cell (between cluster
+   codepoints, or before a follower) counts as past the cell. *)
+let byte_to_col s byte_off =
+  let byte_off = min byte_off (String.length s) in
+  let (_, cells) = display_cells s in
+  let rec go col = function
+    | [] -> col
+    | dc :: rest ->
+      if dc.cell_off >= byte_off then col
+      else go (col + dc.cell_width) rest
+  in
+  go 0 cells
+
+(* Byte offset of the display cell at [target_col]; cell boundaries
+   only, so the result never lands between a cluster's codepoints or
+   splits a cell from its followers. A column inside a wide cell maps
+   to that cell's start. *)
 let col_to_byte s target_col =
-  let len = String.length s in
-  let col = ref 0 in
-  let i = ref 0 in
-  let stop = ref false in
-  while !i < len && !col < target_col && not !stop do
-    let (cp, n) = decode s !i in
-    let w = codepoint_width cp in
-    if w > 0 && !col + w > target_col then
-      stop := true  (* target is in the middle of a wide char *)
-    else begin
-      col := !col + w;
-      i := !i + n
-    end
-  done;
-  !i
+  let (_, cells) = display_cells s in
+  let rec go col = function
+    | [] -> String.length s
+    | dc :: rest ->
+      if col >= target_col || col + dc.cell_width > target_col then
+        dc.cell_off
+      else go (col + dc.cell_width) rest
+  in
+  go 0 cells
 
 let string_width s =
   byte_to_col s (String.length s)

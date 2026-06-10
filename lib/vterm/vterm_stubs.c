@@ -802,9 +802,12 @@ CAMLprim value caml_vterm_set_wrap_mode(value v, value v_mode)
      bit  5    cluster trigger-extend (ZWJ, VS-15/16, keycap,
                skin tone, tag characters)
      bit  6    regional indicator
-     bit  7    pictographic (cluster-extension approximation;
+     bit  7    Extended_Pictographic (ZWJ-continuation test;
                deliberately broader than the Emoji_Presentation
                widening set)
+     bit  8    emoji_vs16_base (registered emoji variation sequence)
+     bit  9    emoji_modifier_base (takes skin-tone modifiers)
+     bit 10    emoji_presentation (EP=Yes)
 
    Codepoints below 32 are reported nonprintable width 1 without
    consulting char_width: ENC_TAB (16) is a vterm cell encoding, not
@@ -821,6 +824,9 @@ CAMLprim value caml_render_cp_class(value v_cp)
     if (cluster_is_trigger_extend((uint32)cp)) cls |= 0x20u;
     if (cluster_is_ri((uint32)cp))             cls |= 0x40u;
     if (extended_pictographic((uint32)cp))     cls |= 0x80u;
+    if (emoji_vs16_base((uint32)cp))           cls |= 0x100u;
+    if (emoji_modifier_base((uint32)cp))       cls |= 0x200u;
+    if (emoji_presentation((uint32)cp))        cls |= 0x400u;
   }
   return Val_long(cls);
 }

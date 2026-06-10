@@ -162,10 +162,11 @@ let decode_utf8 s i =
         lor ((b2 land 0x3F) lsl 6) lor (b3 land 0x3F), 4
     end
 
-(* Set a single cell. Handles wide characters by marking the next cell
-   as a continuation (width=0). Clears any previous wide char that
-   this cell was part of. *)
-let set_cell g ~row ~col text attr =
+(* Place a cell with a caller-supplied width (a cluster leader's width
+   is a property of the whole sequence, not its first codepoint).
+   Marks the continuation cell for width 2 and clears any wide char
+   this cell overlaps. *)
+let set_cell_w g ~row ~col text attr ~w =
   if row < 0 || row >= g.rows || col < 0 || col >= g.cols then ()
   else begin
     (* If this cell is a continuation of a wide char, clear the base cell *)
@@ -177,9 +178,6 @@ let set_cell g ~row ~col text attr =
     cell.text <- text;
     cell.attr <- attr;
     cell.followers <- [];
-    (* Determine display width *)
-    let (cp, _) = decode_utf8 text 0 in
-    let w = Utf8.class_width (Utf8.cp_class cp) in
     cell.width <- (if w = 2 then 2 else 1);
     (* If wide char, mark continuation cell *)
     if w = 2 && col + 1 < g.cols then begin
@@ -195,6 +193,12 @@ let set_cell g ~row ~col text attr =
     end
   end
 
+(* Set a single cell; width derived from the first codepoint. *)
+let set_cell g ~row ~col text attr =
+  let (cp, _) = decode_utf8 text 0 in
+  let w = Utf8.class_width (Utf8.cp_class cp) in
+  set_cell_w g ~row ~col text attr ~w
+
 (* Append a zero-width codepoint as a follower of the cell at
    (row, col), with its own attr ([?attr] defaults to the cell's).
    Always a distinct follower entry, never folded into [cell.text]:
@@ -207,47 +211,33 @@ let append_combining g ~row ~col ?attr text =
     cell.followers <- (text, a) :: cell.followers
   end
 
-(* Write a UTF-8 string starting at (row, col).
-   Returns the number of columns consumed. *)
+(* Write a UTF-8 string starting at (row, col), one display cell at a
+   time (Utf8.display_cells — the cluster-aware segmentation shared
+   with the terminal stack). Returns the number of columns consumed. *)
 let put_str g ~row ~col s attr =
   if row < 0 || row >= g.rows then 0
   else begin
-    let len = String.length s in
+    let (orphans, dcells) = Utf8.display_cells s in
+    (* Zero-width codepoints before any cell attach to the cell left
+       of the write position. *)
+    if col > 0 then
+      List.iter (fun (off, len) ->
+        append_combining g ~row ~col:(col - 1) (String.sub s off len)
+      ) orphans;
     let c = ref col in
-    (* Track the col of the most recently emitted base cell so combining
-       marks attach to the actual base, not to the continuation slot of
-       a preceding wide character. *)
-    let last_base_col = ref (-1) in
-    let i = ref 0 in
-    while !i < len && !c < g.cols do
-      let (cp, nbytes) = decode_utf8 s !i in
-      let char_str = String.sub s !i nbytes in
-      let cl = Utf8.cp_class cp in
-      let w = Utf8.class_width cl in
-      if Utf8.class_nonprintable cl then begin
-        (* Non-printable — skip *)
-        i := !i + nbytes
+    List.iter (fun (dc : Utf8.display_cell) ->
+      if !c < g.cols then begin
+        let w = dc.cell_width in
+        if !c >= 0 && !c + w - 1 < g.cols then begin
+          set_cell_w g ~row ~col:!c
+            (String.sub s dc.cell_off dc.leader_len) attr ~w;
+          List.iter (fun (off, len) ->
+            append_combining g ~row ~col:!c (String.sub s off len)
+          ) dc.cell_followers
+        end;
+        c := !c + w
       end
-      else if w = 0 then begin
-        (* Combining character — append to the most recent base cell. *)
-        let target =
-          if !last_base_col >= 0 then !last_base_col
-          else if col > 0 then col - 1
-          else -1
-        in
-        if target >= 0 then
-          append_combining g ~row ~col:target char_str;
-        i := !i + nbytes
-      end
-      else begin
-        (* Normal or wide character *)
-        if !c >= 0 && !c + w - 1 < g.cols then
-          set_cell g ~row ~col:!c char_str attr;
-        last_base_col := !c;
-        c := !c + w;
-        i := !i + nbytes
-      end
-    done;
+    ) dcells;
     !c - col
   end
 
@@ -301,30 +291,27 @@ let put_str_in_rect g rect ~row ~col s attr =
       let start = rect.col + col in
       let stop_col = min (rect.col + rect.width) g.cols in
       let left_bound = max 0 rect.col in
-      let len = String.length s in
+      let (orphans, dcells) = Utf8.display_cells s in
+      if start > left_bound then
+        List.iter (fun (off, len) ->
+          append_combining g ~row:abs_row ~col:(start - 1)
+            (String.sub s off len)
+        ) orphans;
       let c = ref start in
-      let i = ref 0 in
-      while !i < len && !c < stop_col do
-        let (cp, nbytes) = decode_utf8 s !i in
-        let char_str = String.sub s !i nbytes in
-        let cl = Utf8.cp_class cp in
-        let w = Utf8.class_width cl in
-        if Utf8.class_nonprintable cl then
-          i := !i + nbytes
-        else if w = 0 then begin
-          if !c > start && !c - 1 >= left_bound then
-            append_combining g ~row:abs_row ~col:(!c - 1) char_str
-          else if start > left_bound then
-            append_combining g ~row:abs_row ~col:(start - 1) char_str;
-          i := !i + nbytes
+      List.iter (fun (dc : Utf8.display_cell) ->
+        if !c < stop_col then begin
+          let w = dc.cell_width in
+          if !c >= left_bound && !c + w - 1 < stop_col then begin
+            set_cell_w g ~row:abs_row ~col:!c
+              (String.sub s dc.cell_off dc.leader_len) attr ~w;
+            List.iter (fun (off, len) ->
+              append_combining g ~row:abs_row ~col:!c
+                (String.sub s off len)
+            ) dc.cell_followers
+          end;
+          c := !c + w
         end
-        else begin
-          if !c >= left_bound && !c + w - 1 < stop_col then
-            set_cell g ~row:abs_row ~col:!c char_str attr;
-          c := !c + w;
-          i := !i + nbytes
-        end
-      done;
+      ) dcells;
       !c - start
     end
 

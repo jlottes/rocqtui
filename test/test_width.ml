@@ -76,5 +76,48 @@ let () =
   (* controls; U+0010 must not pick up ENC_TAB's tab width *)
   expect 0x0009 0;
   expect 0x0010 0;
+
+  (* string_width over display cells: the cluster-aware walker must
+     match the gated upstream prescription (cluster_gate) *)
+  let expect_sw s w =
+    let got = Rocqtui_lib.Utf8.string_width s in
+    if got <> w then begin
+      Printf.printf "FAIL: string_width %S = %d, expected %d\n" s got w;
+      incr fails
+    end
+  in
+  expect_sw "abc" 3;
+  expect_sw "e\xcc\x81" 1;                          (* e + acute *)
+  expect_sw "\xe2\x9c\x94\xef\xb8\x8f" 2;           (* ✔ + VS16: widens *)
+  expect_sw "\xe2\x9c\x93\xef\xb8\x8f" 1;           (* ✓ + VS16: not a VS base *)
+  expect_sw "\xe2\x9a\xa1\xef\xb8\x8e" 1;           (* ⚡ + VS15: narrows *)
+  expect_sw "\xf0\x9f\x87\xba\xf0\x9f\x87\xb8" 2;   (* RI pair: one flag *)
+  expect_sw "\xf0\x9f\x87\xba" 2;                   (* lone RI *)
+  expect_sw "\xf0\x9f\x87\xba\xf0\x9f\x87\xb8\xf0\x9f\x87\xba\xf0\x9f\x87\xb8" 4;
+                                                    (* two flags *)
+  expect_sw "\xf0\x9f\x91\xa8\xe2\x80\x8d\xf0\x9f\x91\xa9\xe2\x80\x8d\xf0\x9f\x91\xa7" 2;
+                                                    (* ZWJ family: one cell *)
+  expect_sw "\xe2\x9d\xa4\xe2\x80\x8d\xf0\x9f\x94\xa5" 1;
+                                  (* minimally-qualified ❤+ZWJ+🔥: base width *)
+  expect_sw "1\xe2\x83\xa3" 1;                      (* bare keycap *)
+  expect_sw "1\xef\xb8\x8f\xe2\x83\xa3" 2;          (* full keycap 1+VS16+20E3 *)
+  expect_sw "\xf0\x9f\x91\x8d\xf0\x9f\x8f\xbd" 2;   (* thumbs + skin tone *)
+  expect_sw "\xe2\x98\x9d\xf0\x9f\x8f\xbd" 2;       (* ☝ (EMB, w1 bare) + tone *)
+  expect_sw "A\xf0\x9f\x8f\xbd" 1;                  (* tone on non-EMB: absorbed *)
+
+  (* column math lands on display-cell boundaries *)
+  let expect_c2b s col b =
+    let got = Rocqtui_lib.Utf8.col_to_byte s col in
+    if got <> b then begin
+      Printf.printf "FAIL: col_to_byte %S %d = %d, expected %d\n" s col got b;
+      incr fails
+    end
+  in
+  let flag_x = "\xf0\x9f\x87\xba\xf0\x9f\x87\xb8x" in
+  expect_c2b flag_x 0 0;
+  expect_c2b flag_x 1 0;   (* mid-flag: cell start *)
+  expect_c2b flag_x 2 8;   (* after the flag, never between RIs *)
+  let e_acute_x = "e\xcc\x81x" in
+  expect_c2b e_acute_x 1 3;  (* after the follower, not between e and mark *)
   if !fails > 0 then exit 1;
   print_endline "OK: codepoint_width assertions passed"

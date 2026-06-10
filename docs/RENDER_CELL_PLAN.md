@@ -266,10 +266,15 @@ Each phase is a build-clean, test-clean stopping point.
    Bonus: the test immediately caught a stale `ENC_TAB` constant in
    `terminal.ml` (0x07 vs term.h's 16) — embedded-terminal tabs had
    been rendering as a raw DLE cell.
-3. **Cluster walker.** Extend the bitmask with the gating predicates
-   (`emoji_vs16_base`, `emoji_modifier_base`, `emoji_presentation`);
-   `walk` + rewire `put_str` / `put_str_in_rect` / `utf8.ml` column
-   math (Gap 2 closes).
+3. **Cluster walker.** DONE. `Utf8.display_cells` ports
+   cluster_step + cluster_gate (width half), driven by the extended
+   bitmask; `put_str` / `put_str_in_rect` place display cells with
+   explicit widths (`set_cell_w`); `byte_to_col` / `col_to_byte` /
+   `string_width` are display-cell based — `col_to_byte` now returns
+   cell boundaries only, so a mouse click can no longer land between
+   a cluster's codepoints or between a leader and its combining mark
+   (Gap 2 closed). `codepoint_width` remains per-codepoint for
+   `styled.ml` truncation — phase 4 audit candidate.
 4. **Verify & prune.** Probe tools updated; manual check in glterm
    (✔/⚠ markers, emoji in a `.v` comment, `cat` of zwj-test files in
    the embedded terminal, copy round-trip).
