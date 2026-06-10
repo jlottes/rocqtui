@@ -10,6 +10,7 @@
 #include "utf-8.h"
 #include "sysbuf.h"
 #include "term.h"
+#include "emoji_presentation.h"
 #include "char_width.h"
 #include "acs.h"
 #include "cluster.h"
