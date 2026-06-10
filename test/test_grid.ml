@@ -197,4 +197,28 @@ let () =
                { d with underline = Grid.UL_double } = "\x1b[21m");
   Printf.printf "OK: extended SGR emission (italic/strike/curly/ul/blink)\n";
 
+  (* VS-15 injection: a bare EP=No modifier base (☝ U+261D) gets an
+     explicit VS-15 appended at emit so kitty doesn't widen it; an
+     already-disambiguated cluster (☝ + skin tone, width 2) must not. *)
+  let contains hay needle =
+    let lh = String.length hay and ln = String.length needle in
+    let rec loop i =
+      i + ln <= lh && (String.sub hay i ln = needle || loop (i + 1))
+    in
+    loop 0
+  in
+  let g2 = Grid.create 1 10 in
+  ignore (Grid.put_str g2 ~row:0 ~col:0 "\xe2\x98\x9dz" Grid.default_attr);
+  let buf3 = Stdlib.Buffer.create 64 in
+  Grid.emit_all g2 buf3;
+  assert (contains (Stdlib.Buffer.contents buf3)
+            "\xe2\x98\x9d\xef\xb8\x8ez");
+  Grid.clear g2;
+  ignore (Grid.put_str g2 ~row:0 ~col:0
+            "\xe2\x98\x9d\xf0\x9f\x8f\xbd" Grid.default_attr);
+  let buf4 = Stdlib.Buffer.create 64 in
+  Grid.emit_all g2 buf4;
+  assert (not (contains (Stdlib.Buffer.contents buf4) "\xef\xb8\x8e"));
+  Printf.printf "OK: VS-15 injection on bare modifier bases\n";
+
   Printf.printf "All grid tests passed.\n"

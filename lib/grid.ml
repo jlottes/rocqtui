@@ -603,6 +603,23 @@ let emit_cell_payload buf cur_attr hazard cell =
   emit_attr buf !cur_attr cell.attr;
   cur_attr := cell.attr;
   Stdlib.Buffer.add_string buf cell.text;
+  (* Presentation disambiguation: kitty widens bare EP=No modifier
+     bases (☝ ✌ ⛹ ✍ 🏋 🏌 🕴 🕵 🖐) that the prescription — and
+     glterm, glibc, iTerm2 — keep narrow. An explicit VS-15 pins
+     narrow text presentation everywhere kitty included, and is a
+     rendering no-op in terminals that already agree. Only a single
+     bare codepoint qualifies: clusters already carry their own VS.
+     (The 3-byte guard skips ASCII/Latin cells without classifying:
+     all nine codepoints are 3-4 bytes in UTF-8.) *)
+  if cell.width = 1 && String.length cell.text >= 3 then begin
+    let (cp, n) = decode_utf8 cell.text 0 in
+    if n = String.length cell.text then begin
+      let cl = Utf8.cp_class cp in
+      if Utf8.class_modifier_base cl
+         && not (Utf8.class_emoji_presentation cl) then
+        Stdlib.Buffer.add_string buf "\xef\xb8\x8e"  (* U+FE0E VS-15 *)
+    end
+  end;
   List.iter (fun (text, attr) ->
     if effective_attr attr <> effective_attr !cur_attr then begin
       emit_attr buf !cur_attr attr;

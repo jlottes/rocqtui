@@ -275,12 +275,18 @@ Each phase is a build-clean, test-clean stopping point.
    a cluster's codepoints or between a leader and its combining mark
    (Gap 2 closed). `codepoint_width` remains per-codepoint for
    `styled.ml` truncation — phase 4 audit candidate.
-4. **Verify & prune.** Probe tools updated; manual check in glterm
+4. **Verify & prune.** Code half DONE: probe tools updated for the
+   renamed field; `styled.ml` wrap now breaks at display-cell
+   boundaries (a wrap can no longer split a flag pair or strand a
+   combining mark). REMAINING: manual visual pass in glterm
    (✔/⚠ markers, emoji in a `.v` comment, `cat` of zwj-test files in
    the embedded terminal, copy round-trip).
-5. **VS injection.** Ambiguous bit (`EMB && !EP`), emit-time VS-15
-   append, transparency test compares modulo injected VS. Needs
-   Phase 2's no-fold invariant; upstream gate already satisfied.
+5. **VS injection.** DONE. Emit appends VS-15 after a bare EP=No
+   modifier-base leader (single codepoint, width 1 — clusters carry
+   their own VS); predicate computed from the emoji_props.h bits, no
+   list to maintain. Transparency test compares text modulo VS-15/16
+   (width/attr/followers stay strict); test_grid asserts the injected
+   bytes appear for bare ☝ and not for ☝+tone.
 
 ## Open questions
 

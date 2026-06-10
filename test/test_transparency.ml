@@ -51,6 +51,22 @@ let cell_str (c : Grid.cell) =
 
 let fails = ref 0
 
+(* Texts are compared modulo VS-15/VS-16: the emit path injects VS-15
+   after bare presentation-ambiguous codepoints (see grid.ml), so
+   vterm B legitimately holds e.g. "☝\u{FE0E}" where vterm A held
+   bare "☝". Widths and attrs stay strict, so a genuinely dropped or
+   misapplied selector still fails on width. *)
+let norm_text s =
+  let b = Stdlib.Buffer.create (String.length s) in
+  let i = ref 0 in
+  while !i < String.length s do
+    let (cp, n) = Utf8.decode s !i in
+    if cp <> 0xFE0E && cp <> 0xFE0F then
+      Stdlib.Buffer.add_string b (String.sub s !i n);
+    i := !i + n
+  done;
+  Stdlib.Buffer.contents b
+
 let check name bytes =
   let va = make_vterm () in
   Vterm_lib.Vterm_api.proc va (Bytes.of_string bytes)
@@ -69,7 +85,7 @@ let check name bytes =
   for r = 0 to h - 1 do
     for c = 0 to w - 1 do
       let ca = ga.cells.(r).(c) and cb = gb.cells.(r).(c) in
-      if not (ca.text = cb.text && ca.width = cb.width
+      if not (norm_text ca.text = norm_text cb.text && ca.width = cb.width
               && ca.attr = cb.attr && ca.followers = cb.followers) then begin
         if !ok then begin
           Printf.printf "FAIL: %s\n  emitted: %s\n" name
@@ -127,6 +143,16 @@ let () =
   check "followers on wide leader"
     "\xe6\xbc\xa2\x1b[31m\xcc\x81\x1b[0mx";               (* CJK + red acute *)
   check "multi line" "line1\r\nli\xe2\x9c\x94ne2\r\n\x1b[33mthree";
+  (* presentation-ambiguous bare codepoints: emit injects VS-15, which
+     must not perturb the round-trip (norm_text masks the injected
+     selector; width stays strict) *)
+  check "bare EMB hand" "\xe2\x98\x9dx";                  (* ☝ narrow *)
+  check "EMB hand + skin tone" "\xe2\x9c\x8c\xf0\x9f\x8f\xbd";
+                                                          (* ✌🏽 cluster, w2 *)
+  check "EMB hand + divergent mark"
+    "\xe2\x98\x9d\x1b[31m\xcc\x81\x1b[0mx";               (* ☝ + red acute *)
+  check "noop-sgr split vs16 on EMB hand"
+    "\xe2\x98\x9d\x1b[39m\xef\xb8\x8f";                   (* ☝ <break> VS16 *)
   if !fails > 0 then begin
     Printf.printf "%d transparency case(s) failed\n" !fails;
     exit 1
