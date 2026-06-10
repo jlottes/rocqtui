@@ -8,7 +8,31 @@ val codepoint_len : string -> int -> int
     Returns (codepoint, byte_length). *)
 val decode : string -> int -> int * int
 
-(** Display width of a single Unicode codepoint using wcwidth. *)
+(** Codepoint classification — the single display-width authority,
+    backed by the vendored char_width.h + cluster.h so layout agrees
+    with the embedded terminal and with what glterm renders.
+    Decode the result with the [class_*] accessors below. *)
+val cp_class : int -> int
+
+(** Display width from a [cp_class] result: wcwidth plus the
+    Emoji_Presentation widening. Nonprintables report 1 (char_width
+    semantics); use [class_nonprintable] to decide skip-vs-place. *)
+val class_width : int -> int
+
+(** True if libc wcwidth rejected the codepoint (controls,
+    default-ignorables). *)
+val class_nonprintable : int -> bool
+
+(** Cluster classification (vendored cluster.h), used by the
+    cluster-aware layout walker: trigger-extend codepoints (ZWJ,
+    VS-15/16, keycap, skin tone, tags), regional indicators, and the
+    pictographic approximation that bounds ZWJ extension. *)
+val class_trigger_extend : int -> bool
+val class_ri : int -> bool
+val class_pictographic : int -> bool
+
+(** Display width of a single Unicode codepoint: [class_width],
+    except nonprintables count 0. *)
 val codepoint_width : int -> int
 
 (** Display width of a UTF-8 string (sum of codepoint widths). *)

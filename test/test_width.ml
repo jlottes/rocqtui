@@ -30,4 +30,40 @@ let () =
   test "(∙y)";
   test "(x ∙ y⁻¹)";
   test "abc";
-  test "(arewrite_tag_l (injective_iff_simp (∙y) (x ∙ y⁻¹) e)))"
+  test "(arewrite_tag_l (injective_iff_simp (∙y) (x ∙ y⁻¹) e)))";
+
+  (* codepoint_width assertions: the cp_class authority (vendored
+     char_width.h + emoji_presentation.h) must keep text-presentation
+     symbols narrow, widen Emoji_Presentation=Yes codepoints, and not
+     misread control codepoints as vterm cell encodings. *)
+  let fails = ref 0 in
+  let expect cp w =
+    let got = Rocqtui_lib.Utf8.codepoint_width cp in
+    if got <> w then begin
+      Printf.printf "FAIL: U+%04X width %d, expected %d\n" cp got w;
+      incr fails
+    end
+  in
+  (* text-presentation status glyphs stay narrow *)
+  expect 0x2713 1;  (* ✓ check mark *)
+  expect 0x2714 1;  (* ✔ heavy check mark *)
+  expect 0x2717 1;  (* ✗ ballot x *)
+  expect 0x2718 1;  (* ✘ heavy ballot x *)
+  expect 0x26A0 1;  (* ⚠ warning sign *)
+  (* Emoji_Presentation=Yes codepoints widen *)
+  expect 0x26A1 2;  (* ⚡ high voltage *)
+  expect 0x2705 2;  (* ✅ check mark button *)
+  expect 0x274C 2;  (* ❌ cross mark *)
+  expect 0x2B50 2;  (* ⭐ star *)
+  (* emoji block *)
+  expect 0x1F600 2; (* 😀 *)
+  expect 0x1F3FB 2; (* skin tone modifier, standalone *)
+  (* zero-width *)
+  expect 0x0301 0;  (* combining acute *)
+  expect 0x200D 0;  (* ZWJ *)
+  expect 0xFE0F 0;  (* VS-16 *)
+  (* controls; U+0010 must not pick up ENC_TAB's tab width *)
+  expect 0x0009 0;
+  expect 0x0010 0;
+  if !fails > 0 then exit 1;
+  print_endline "OK: codepoint_width assertions passed"

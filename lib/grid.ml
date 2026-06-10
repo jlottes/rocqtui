@@ -120,7 +120,9 @@ let clear_region g ~row ~col ~height ~width ~attr =
     done
   done
 
-(* Get the display width of a Unicode codepoint using wcwidth *)
+(* Raw libc wcwidth. Layout in this module goes through Utf8.cp_class
+   (the vendored char_width + cluster classification) instead; this
+   binding remains for external consumers (glterm's fontvis). *)
 external wcwidth : int -> int = "caml_wcwidth"
 
 (* Decode one UTF-8 codepoint from a string at byte offset.
@@ -173,8 +175,7 @@ let set_cell g ~row ~col text attr =
     cell.combs <- [];
     (* Determine display width *)
     let (cp, _) = decode_utf8 text 0 in
-    let w = wcwidth cp in
-    let w = if w < 0 then 1 else w in
+    let w = Utf8.class_width (Utf8.cp_class cp) in
     cell.width <- (if w = 2 then 2 else 1);
     (* If wide char, mark continuation cell *)
     if w = 2 && col + 1 < g.cols then begin
@@ -223,8 +224,9 @@ let put_str g ~row ~col s attr =
     while !i < len && !c < g.cols do
       let (cp, nbytes) = decode_utf8 s !i in
       let char_str = String.sub s !i nbytes in
-      let w = wcwidth cp in
-      if w < 0 then begin
+      let cl = Utf8.cp_class cp in
+      let w = Utf8.class_width cl in
+      if Utf8.class_nonprintable cl then begin
         (* Non-printable — skip *)
         i := !i + nbytes
       end
@@ -307,8 +309,9 @@ let put_str_in_rect g rect ~row ~col s attr =
       while !i < len && !c < stop_col do
         let (cp, nbytes) = decode_utf8 s !i in
         let char_str = String.sub s !i nbytes in
-        let w = wcwidth cp in
-        if w < 0 then
+        let cl = Utf8.cp_class cp in
+        let w = Utf8.class_width cl in
+        if Utf8.class_nonprintable cl then
           i := !i + nbytes
         else if w = 0 then begin
           if !c > start && !c - 1 >= left_bound then

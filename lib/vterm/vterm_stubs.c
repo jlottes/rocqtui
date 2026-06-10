@@ -787,3 +787,40 @@ CAMLprim value caml_vterm_set_wrap_mode(value v, value v_mode)
   if (!vt) caml_failwith("vterm_set_wrap_mode: vterm destroyed");
   return Val_bool(vterm_set_wrap_mode(vt, Int_val(v_mode)));
 }
+
+/* ============================================================
+   Codepoint classification for the host render layer
+   ============================================================ */
+
+/* Single display-width authority for rocqtui's own layout (Grid /
+   Utf8), kept aligned with the embedded terminal and glterm by using
+   the vendored char_width.h + cluster.h directly.
+
+   Returns a bitmask:
+     bits 0-3  display width (char_width: wcwidth + emoji widening)
+     bit  4    nonprintable (libc wcwidth < 0)
+     bit  5    cluster trigger-extend (ZWJ, VS-15/16, keycap,
+               skin tone, tag characters)
+     bit  6    regional indicator
+     bit  7    pictographic (cluster-extension approximation;
+               deliberately broader than the Emoji_Presentation
+               widening set)
+
+   Codepoints below 32 are reported nonprintable width 1 without
+   consulting char_width: ENC_TAB (16) is a vterm cell encoding, not
+   a codepoint, and must not pick up tab width here. */
+CAMLprim value caml_render_cp_class(value v_cp)
+{
+  intnat cp = Long_val(v_cp);
+  unsigned cls;
+  if (cp < 32 || cp > 0x10FFFF)
+    cls = 1u | 0x10u;
+  else {
+    cls = char_width((uint32)cp, 0);
+    if (wcwidth((wchar_t)cp) < 0)              cls |= 0x10u;
+    if (cluster_is_trigger_extend((uint32)cp)) cls |= 0x20u;
+    if (cluster_is_ri((uint32)cp))             cls |= 0x40u;
+    if (cluster_is_pictographic((uint32)cp))   cls |= 0x80u;
+  }
+  return Val_long(cls);
+}

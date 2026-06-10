@@ -1,4 +1,16 @@
-external wcwidth : int -> int = "caml_wcwidth"
+(* Codepoint classification — the single display-width authority,
+   shared with the embedded terminal and glterm via the vendored
+   char_width.h + cluster.h (see caml_render_cp_class in
+   vterm_stubs.c). Bitmask: bits 0-3 width; 0x10 nonprintable;
+   0x20 cluster trigger-extend; 0x40 regional indicator;
+   0x80 pictographic. *)
+external cp_class : int -> int = "caml_render_cp_class"
+
+let class_width cl = cl land 0x0f
+let class_nonprintable cl = cl land 0x10 <> 0
+let class_trigger_extend cl = cl land 0x20 <> 0
+let class_ri cl = cl land 0x40 <> 0
+let class_pictographic cl = cl land 0x80 <> 0
 
 let codepoint_len s i =
   if i >= String.length s then 0
@@ -36,10 +48,11 @@ let decode s i =
       (0xFFFD, 1)  (* replacement character for invalid *)
 
 let codepoint_width cp =
-  let w = wcwidth cp in
-  (* wcwidth returns -1 for non-printable; treat as 0 for combining,
-     1 for control chars *)
-  if w < 0 then 0 else w
+  (* Nonprintable (controls, default-ignorables wcwidth rejects) count
+     as 0 columns; everything else takes char_width's answer, which
+     includes the emoji-presentation widening glterm renders with. *)
+  let cl = cp_class cp in
+  if class_nonprintable cl then 0 else class_width cl
 
 let next s i =
   let len = String.length s in
