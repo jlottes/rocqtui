@@ -61,30 +61,37 @@ let wrap ?(hanging=0) width lines_list =
       result := l :: !result
     else begin
       let len = String.length line in
-      let i = ref 0 in
+      (* Break at display-cell boundaries (cluster-aware) so a wrap
+         can't split a flag pair or separate a combining mark from
+         its base. Followers and skipped bytes between cells travel
+         with the preceding cell. *)
+      let cells = Array.of_list (snd (Utf8.display_cells line)) in
+      let ncells = Array.length cells in
+      let ci = ref 0 in
+      let pos = ref 0 in
       let segment_idx = ref 0 in
-      while !i < len do
-        let start = !i in
+      while !pos < len do
+        let start = !pos in
         let on_continuation = !segment_idx > 0 in
         let prefix_w = if on_continuation then pad_len else 0 in
         let cap = max 1 (avail - prefix_w) in
         let col = ref 0 in
         let stop = ref false in
-        while !i < len && not !stop do
-          let (cp, n) = Utf8.decode line !i in
-          let w = Utf8.codepoint_width cp in
-          if !col + w > cap then
-            stop := true
-          else begin
-            col := !col + w;
-            i := !i + n
-          end
+        while !ci < ncells && not !stop do
+          let w = cells.(!ci).Utf8.cell_width in
+          if !col + w > cap then stop := true
+          else begin col := !col + w; incr ci end
         done;
-        if !i = start then
-          i := Utf8.next line !i;
-        let segment_text = String.sub line start (!i - start) in
+        if not !stop then pos := len  (* all cells consumed *)
+        else begin
+          (* force progress when a single cell exceeds the cap *)
+          if cells.(!ci).Utf8.cell_off = start then incr ci;
+          pos :=
+            if !ci < ncells then cells.(!ci).Utf8.cell_off else len
+        end;
+        let segment_text = String.sub line start (!pos - start) in
         let segment_spans =
-          slice_spans l.spans ~b_lo:start ~b_hi:(!i)
+          slice_spans l.spans ~b_lo:start ~b_hi:(!pos)
             ~offset:(if on_continuation then pad_len else 0)
         in
         let text =
