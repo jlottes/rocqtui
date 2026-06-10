@@ -9,7 +9,7 @@
 #include "utf-8.h"
 #include "sysbuf.h"
 #include "term.h"
-#include "emoji_presentation.h"
+#include "emoji_props.h"
 #include "char_width.h"
 #include "cluster.h"
 
@@ -47,9 +47,7 @@ static struct wrap_state calc_enc(
      } else if(*pos==ENC_CLUSTER_REF) { \
        unsigned consumed; unsigned idx; \
        idx = varint_decode(pos+1, &consumed); \
-       st.cur.ch = CLUSTER_BIT \
-                 | (cluster_get_width(idx)==1 ? CLUSTER_NARROW_BIT : 0) \
-                 | idx; \
+       st.cur.ch = CLUSTER_BIT | cluster_cell_bits(idx) | idx; \
        st.cur.b.off += 1 + consumed; \
        pos += 1 + consumed; \
      } else \

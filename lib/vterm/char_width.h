@@ -2,8 +2,8 @@
 #warning "char_width.h" requires term.h
 #endif
 
-#ifndef EMOJI_PRESENTATION_H
-#warning "char_width.h" requires "emoji_presentation.h"
+#ifndef EMOJI_PROPS_H
+#warning "char_width.h" requires "emoji_props.h"
 #endif
 
 #ifndef _XOPEN_SOURCE
@@ -20,15 +20,14 @@ static inline unsigned char_width(uint32 c, unsigned col)
   if(c==ENC_TAB) return 8-(col&7);
   w = wcwidth((wchar_t)c);
   if(w<0) w = 1;
-  /* wcwidth's tables predate modern emoji width conventions: many
-     pictographic codepoints get reported as 1 even though every modern
-     terminal renders them at width 2. Widen any width-1 codepoint in the
-     main pictographic blocks, plus the scattered Emoji_Presentation=Yes
-     codepoints living in symbol blocks. Symbols that default to text
-     presentation (check marks U+2713/2714, warning sign U+26A0, ...)
-     stay narrow; VS-16 widens them via the cluster path. Matches
-     kitty/foot behavior. */
-  if(w==1 && ((c >= 0x1F300u && c <= 0x1FAFFu) || emoji_presentation(c)))
-    w = 2;
+  /* Guarantee the Emoji_Presentation=Yes set is width 2. On a current
+     glibc this is a no-op except for regional indicators (EAW=N, but
+     deliberately wide here per kitty/foot: an unpaired flag half must
+     not shift text when its partner arrives); it is insurance against
+     stale libc tables (musl, pre-Unicode-9 glibc) and codepoints newer
+     than the host's. Text-presentation symbols (check marks
+     U+2713/2714, warning sign U+26A0, thermometer U+1F321, ...) stay
+     narrow; VS-16 widens them via the cluster path. */
+  if(w==1 && emoji_presentation(c)) w = 2;
   return (unsigned)w;
 }

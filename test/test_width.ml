@@ -58,6 +58,17 @@ let () =
   (* emoji block *)
   expect 0x1F600 2; (* 😀 *)
   expect 0x1F3FB 2; (* skin tone modifier, standalone *)
+  (* EP=No pictographs in the emoji block stay narrow (9eb45ae) *)
+  expect 0x1F321 1; (* 🌡 thermometer *)
+  expect 0x1F441 1; (* 👁 eye *)
+  expect 0x1F5A5 1; (* 🖥 desktop computer *)
+  (* lone regional indicator is wide (EP=Yes; kitty/foot parity) *)
+  expect 0x1F1FA 2;
+  (* bare EP=No modifier bases stay narrow per UTS #51 — the
+     deliberate kitty divergence, handled later by VS injection *)
+  expect 0x261D 1;  (* ☝ *)
+  expect 0x270C 1;  (* ✌ *)
+  expect 0x1F590 1; (* 🖐 *)
   (* zero-width *)
   expect 0x0301 0;  (* combining acute *)
   expect 0x200D 0;  (* ZWJ *)

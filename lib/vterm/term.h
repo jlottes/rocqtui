@@ -131,7 +131,14 @@ struct cell { uint32 code; struct gr gr; };
 
   CLUSTER_NARROW_BIT encodes width: clear = width 2 (the common case —
   flags, ZWJ emoji, keycaps, skin-tone, VS-16 emoji), set = width 1
-  (rare VS-15 forced text presentation).
+  (VS-15 forced text, or a trigger whose gate failed — see
+  cluster_gate in term.c).
+
+  CLUSTER_EMOJI_BIT encodes presentation: set = emoji (color font),
+  clear = text (mono, SGR fg). Width and presentation are not
+  coupled: a CJK base with a stray VS-16 is wide+text, a bare keycap
+  is narrow+text. Both bits are decided together by the parser
+  (cluster_gate); the renderer reads them and never re-derives.
 
   Cluster cells form atomically at the parser layer (see term.c). Wrap
   and selection treat them as ordinary single cells; the renderer
@@ -140,9 +147,16 @@ struct cell { uint32 code; struct gr gr; };
 
 #define CLUSTER_BIT         0x80000000u
 #define CLUSTER_NARROW_BIT  0x40000000u
-#define CLUSTER_INDEX_MASK  0x3fffffffu
+#define CLUSTER_EMOJI_BIT   0x20000000u
+#define CLUSTER_INDEX_MASK  0x1fffffffu
 #define is_cluster(code)    ((code) & CLUSTER_BIT)
 #define cluster_index(code) ((code) & CLUSTER_INDEX_MASK)
+
+/* Rebuild a cluster cell's flag bits from the cluster table (used when
+   decoding ENC_CLUSTER_REF, which stores only the index). */
+#define cluster_cell_bits(idx) \
+  (   (cluster_get_width(idx)==1u ? CLUSTER_NARROW_BIT : 0u) \
+    | (cluster_get_emoji(idx)     ? CLUSTER_EMOJI_BIT  : 0u) )
 
 /*----------------------------------------------------------------------------
   Half-buffer encoding tokens

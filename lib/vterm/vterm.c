@@ -9,7 +9,7 @@
 #include "utf-8.h"
 #include "sysbuf.h"
 #include "term.h"
-#include "emoji_presentation.h"
+#include "emoji_props.h"
 #include "char_width.h"
 #include "cluster.h"
 #include "wrap.h"
@@ -76,9 +76,7 @@ static struct layout_state layout_enc_cells(
       unsigned consumed; unsigned idx; uint32 code;
       idx = varint_decode(start+r.i+1, &consumed);
       r.i += 1 + consumed;
-      code = CLUSTER_BIT
-           | (cluster_get_width(idx)==1 ? CLUSTER_NARROW_BIT : 0)
-           | idx;
+      code = CLUSTER_BIT | cluster_cell_bits(idx) | idx;
       w = char_width(code, st.col);
       if(w && x>=xmax) break;
       if(cursor&&v->t.cursor.col>=st.col&&v->t.cursor.col< st.col+w) {
@@ -461,9 +459,7 @@ static void append_enc_cells(struct vterm *restrict const v, unsigned y)
         unsigned consumed; unsigned idx; uint32 code;
         idx = varint_decode(start+r.i+1, &consumed);
         r.i += 1 + consumed;
-        code = CLUSTER_BIT
-             | (cluster_get_width(idx)==1 ? CLUSTER_NARROW_BIT : 0)
-             | idx;
+        code = CLUSTER_BIT | cluster_cell_bits(idx) | idx;
         w = char_width(code, st.col);
         if(w && st.subline_col>=xmax) break;
         st = append_code(v, code, st, w, y);

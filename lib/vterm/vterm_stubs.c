@@ -25,7 +25,7 @@
 #include "utf-8.h"
 #include "sysbuf.h"
 #include "term.h"
-#include "emoji_presentation.h"
+#include "emoji_props.h"
 #include "char_width.h"
 #include "wrap.h"
 #include "sel.h"
@@ -820,7 +820,7 @@ CAMLprim value caml_render_cp_class(value v_cp)
     if (wcwidth((wchar_t)cp) < 0)              cls |= 0x10u;
     if (cluster_is_trigger_extend((uint32)cp)) cls |= 0x20u;
     if (cluster_is_ri((uint32)cp))             cls |= 0x40u;
-    if (cluster_is_pictographic((uint32)cp))   cls |= 0x80u;
+    if (extended_pictographic((uint32)cp))     cls |= 0x80u;
   }
   return Val_long(cls);
 }

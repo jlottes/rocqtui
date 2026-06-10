@@ -19,7 +19,9 @@
                  length of entry i = offsets[i+1] - offsets[i]
                  length is implicit; offsets has n_entries+1 elements
    - narrow:     bitmap, one bit per entry; clear = width 2 (common),
-                 set = width 1 (rare VS-15 forced text presentation)
+                 set = width 1 (VS-15 text, or failed promotion gate)
+   - emoji:      bitmap, one bit per entry; set = emoji presentation
+                 (color font), clear = text (mono, SGR fg)
    - hash:       open-addressed dedup table of entry indices,
                  power-of-2 sized, NONE = empty slot
 
@@ -70,21 +72,20 @@ static inline int cluster_is_ri(uint32 c)
 {
   return c >= 0x1F1E6u && c <= 0x1F1FFu;
 }
-/* Approximate Extended_Pictographic with the main emoji blocks and the
-   older symbol block. Good enough for v1; refine if a real producer
-   surprises us. */
-static inline int cluster_is_pictographic(uint32 c)
-{
-  return (c >= 0x1F300u && c <= 0x1FAFFu)
-      || (c >= 0x2600u  && c <= 0x27BFu);
-}
+/* The pictographic test for ZWJ continuation (UAX #29 GB11) is the
+   true Extended_Pictographic property — extended_pictographic() in
+   the generated emoji_props.h. */
 
 void cluster_init(void);
 void cluster_done(void);
 
-/* Find or insert a codepoint sequence; returns the entry index (0..2^30-1).
-   `width` is 1 or 2. The sequence must not be empty. */
-unsigned cluster_intern(const uint32 *codes, unsigned n, unsigned width);
+/* Find or insert a codepoint sequence; returns the entry index (0..2^29-1).
+   `width` is 1 or 2; `emoji` is 0 (text presentation) or 1 (emoji).
+   Both are properties of the sequence (cluster_gate in term.c derives
+   them deterministically), so dedup hits ignore them. The sequence
+   must not be empty. */
+unsigned cluster_intern(const uint32 *codes, unsigned n,
+                        unsigned width, unsigned emoji);
 
 /* Read back an entry's codepoint sequence. Returns the codepoint pointer
    and writes the length through `n`. Pointer is invalidated by any
@@ -93,5 +94,8 @@ const uint32 *cluster_get(unsigned index, unsigned *n);
 
 /* Read back an entry's width (1 or 2). */
 unsigned cluster_get_width(unsigned index);
+
+/* Read back an entry's presentation (1 = emoji, 0 = text). */
+unsigned cluster_get_emoji(unsigned index);
 
 #endif

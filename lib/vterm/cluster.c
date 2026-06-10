@@ -30,8 +30,10 @@ static struct {
   /* offsets: offsets[0..n_entries] (with sentinel); length(i) = off[i+1]-off[i] */
   uint32 *offsets; size_t off_n, off_max;
 
-  /* narrow bitmap: one bit per entry; clear = width 2, set = width 1 */
-  uint64 *narrow; size_t narrow_words;
+  /* per-entry flag bitmaps, grown in lockstep (flag_words each):
+     narrow: clear = width 2, set = width 1
+     emoji:  set = emoji presentation, clear = text */
+  uint64 *narrow; uint64 *emoji; size_t flag_words;
 
   /* dedup hash: open addressing, power-of-2 size; stores entry indices,
      CLUSTER_TABLE_NONE = empty slot */
@@ -92,7 +94,7 @@ void cluster_init(void)
 {
   ct.codes = 0; ct.codes_n = 0; ct.codes_max = 0;
   ct.offsets = 0; ct.off_n = 0; ct.off_max = 0;
-  ct.narrow = 0; ct.narrow_words = 0;
+  ct.narrow = 0; ct.emoji = 0; ct.flag_words = 0;
   ct.hash = 0; ct.hash_cap = 0; ct.hash_used = 0;
   hash_grow(64);
 
@@ -107,7 +109,8 @@ void cluster_init(void)
   ct.codes_n = 0;
 
   ct.narrow = tcalloc(uint64, 1);
-  ct.narrow_words = 1;
+  ct.emoji  = tcalloc(uint64, 1);
+  ct.flag_words = 1;
 }
 
 static void ensure_init(void)
@@ -120,14 +123,16 @@ void cluster_done(void)
   free(ct.codes); ct.codes = 0;
   free(ct.offsets); ct.offsets = 0;
   free(ct.narrow); ct.narrow = 0;
+  free(ct.emoji); ct.emoji = 0;
   free(ct.hash); ct.hash = 0;
   ct.codes_n = ct.codes_max = 0;
   ct.off_n = ct.off_max = 0;
-  ct.narrow_words = 0;
+  ct.flag_words = 0;
   ct.hash_cap = ct.hash_used = 0;
 }
 
-unsigned cluster_intern(const uint32 *codes, unsigned n, unsigned width)
+unsigned cluster_intern(const uint32 *codes, unsigned n,
+                        unsigned width, unsigned emoji)
 {
   size_t pos;
   ensure_init();
@@ -156,16 +161,21 @@ unsigned cluster_intern(const uint32 *codes, unsigned n, unsigned width)
   ct.offsets[ct.off_n] = (uint32)ct.codes_n;
   ++ct.off_n;
 
-  /* Grow narrow bitmap if the new bit doesn't fit. */
-  if((size_t)idx / 64 >= ct.narrow_words) {
-    size_t new_words = ct.narrow_words * 2; if(!new_words) new_words = 1;
+  /* Grow flag bitmaps if the new bit doesn't fit. */
+  if((size_t)idx / 64 >= ct.flag_words) {
+    size_t new_words = ct.flag_words * 2; if(!new_words) new_words = 1;
     ct.narrow = trealloc(uint64, ct.narrow, new_words);
-    memset(ct.narrow + ct.narrow_words, 0,
-           (new_words - ct.narrow_words) * sizeof(uint64));
-    ct.narrow_words = new_words;
+    ct.emoji  = trealloc(uint64, ct.emoji,  new_words);
+    memset(ct.narrow + ct.flag_words, 0,
+           (new_words - ct.flag_words) * sizeof(uint64));
+    memset(ct.emoji + ct.flag_words, 0,
+           (new_words - ct.flag_words) * sizeof(uint64));
+    ct.flag_words = new_words;
   }
   if(width == 1) ct.narrow[idx/64] |= (uint64)1 << (idx % 64);
   else           ct.narrow[idx/64] &= ~((uint64)1 << (idx % 64));
+  if(emoji)      ct.emoji[idx/64] |= (uint64)1 << (idx % 64);
+  else           ct.emoji[idx/64] &= ~((uint64)1 << (idx % 64));
 
   /* Slot the new entry. Grow hash first if needed. */
   if(ct.hash_used * HASH_LOAD_DEN >= ct.hash_cap * HASH_LOAD_NUM) {
@@ -187,4 +197,9 @@ const uint32 *cluster_get(unsigned index, unsigned *n)
 unsigned cluster_get_width(unsigned index)
 {
   return (ct.narrow[index/64] >> (index % 64)) & 1u ? 1u : 2u;
+}
+
+unsigned cluster_get_emoji(unsigned index)
+{
+  return (ct.emoji[index/64] >> (index % 64)) & 1u;
 }

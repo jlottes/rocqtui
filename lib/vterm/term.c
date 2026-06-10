@@ -10,7 +10,7 @@
 #include "utf-8.h"
 #include "sysbuf.h"
 #include "term.h"
-#include "emoji_presentation.h"
+#include "emoji_props.h"
 #include "char_width.h"
 #include "acs.h"
 #include "cluster.h"
@@ -459,9 +459,7 @@ static void cells_decode(
       idx = varint_decode(in+r.i+1, &consumed);
       r.i += 1 + consumed;
       out->gr = gr;
-      out->code = CLUSTER_BIT
-                | (cluster_get_width(idx)==1 ? CLUSTER_NARROW_BIT : 0)
-                | idx;
+      out->code = CLUSTER_BIT | cluster_cell_bits(idx) | idx;
       w = char_width(out->code, col);
       set_cell_w(*out, w);
       col+=w;
@@ -1728,6 +1726,36 @@ static unsigned count_graphic(
   return p-start;
 }
 
+/* Width/presentation gating for absorbing trigger `code` into a
+   cluster whose base codepoint is `base`. The trigger is always
+   absorbed (the codepoints must round-trip through copy/selection);
+   only the flags are gated:
+     - VS-16 forces emoji (wide, color) only on bases with a
+       registered emoji variation sequence; elsewhere it is ignored.
+     - VS-15 forces text (narrow, mono) on those bases and on
+       default-emoji-presentation bases (matching kitty); elsewhere
+       ignored.
+     - a skin-tone modifier forces emoji only on a modifier base.
+     - ZWJ, keycap U+20E3, and tag characters never change flags:
+       emoji presentation must be earned by EP, VS-16, or a modifier
+       (so a minimally-qualified ZWJ sequence on an EP=No base stays
+       narrow text — RGI sequences include the FE0F by definition). */
+static void cluster_gate(
+  uint32 base, uint32 code, unsigned old_w, unsigned old_e,
+  unsigned *restrict w_new, unsigned *restrict e_new)
+{
+  if(code == 0xFE0Fu && emoji_vs16_base(base))
+    *w_new = 2u, *e_new = 1u;
+  else if(code == 0xFE0Eu
+          && (emoji_vs16_base(base) || emoji_presentation(base)))
+    *w_new = 1u, *e_new = 0u;
+  else if(code >= 0x1F3FBu && code <= 0x1F3FFu
+          && emoji_modifier_base(base))
+    *w_new = 2u, *e_new = 1u;
+  else
+    *w_new = old_w, *e_new = old_e;
+}
+
 /* Process one codepoint through the cluster parser. Either mutates the
    top cell (promote/extend cluster — possibly widening it) or emits a
    fresh cell at *out. Returns 1 if a cell was emitted (caller should
@@ -1744,19 +1772,22 @@ static int cluster_step(
 {
   int trig = cluster_is_trigger_extend(code);
   int ri   = cluster_is_ri(code);
-  int pict = cluster_is_pictographic(code);
+  int pict = extended_pictographic(code);
 
   if(top) switch(t->cluster_state) {
     case CPS_LEADER:
       if(trig) {
         uint32 seq[2];
+        uint32 base = top->code;
         unsigned old_w = cell_w(*top);
-        unsigned w_new = (code == 0xFE0Eu) ? 1u : 2u;
-        unsigned idx;
-        seq[0] = top->code, seq[1] = code;
-        idx = cluster_intern(seq, 2, w_new);
+        unsigned w_new, e_new, idx;
+        cluster_gate(base, code, old_w,
+                     emoji_presentation(base) ? 1u : 0u, &w_new, &e_new);
+        seq[0] = base, seq[1] = code;
+        idx = cluster_intern(seq, 2, w_new, e_new);
         top->code = CLUSTER_BIT
                   | (w_new==1u ? CLUSTER_NARROW_BIT : 0u)
+                  | (e_new ? CLUSTER_EMOJI_BIT : 0u)
                   | idx;
         if(w_new != old_w) set_cell_w(*top, w_new),
           *col_delta = (int)w_new - (int)old_w;
@@ -1770,11 +1801,11 @@ static int cluster_step(
       if(ri) {
         uint32 seq[2];
         unsigned old_w = cell_w(*top);
-        unsigned w_new = 2u;  /* flag glyph is always width 2 */
+        unsigned w_new = 2u;  /* flag glyph is always width 2, emoji */
         unsigned idx;
         seq[0] = top->code, seq[1] = code;
-        idx = cluster_intern(seq, 2, w_new);
-        top->code = CLUSTER_BIT | idx;  /* narrow bit clear → width 2 */
+        idx = cluster_intern(seq, 2, w_new, 1u);
+        top->code = CLUSTER_BIT | CLUSTER_EMOJI_BIT | idx;
         if(w_new != old_w) set_cell_w(*top, w_new),
           *col_delta = (int)w_new - (int)old_w;
         else *col_delta = 0;
@@ -1788,17 +1819,18 @@ static int cluster_step(
         const uint32 *old = cluster_get(cluster_index(top->code), &old_n);
         if(old_n + 1u <= (unsigned)CLUSTER_MAX_LEN) {
           uint32 seq[CLUSTER_MAX_LEN];
-          /* ZWJ-extension preserves width; just rewrite the leader's
-             code to point at the new (longer) cluster table entry. */
-          unsigned was_narrow = (top->code & CLUSTER_NARROW_BIT) ? 1u : 0u;
-          unsigned w_keep = was_narrow ? 1u : 2u;
+          /* ZWJ-extension preserves width and presentation; just
+             rewrite the leader's code to point at the new (longer)
+             cluster table entry. */
+          unsigned bits = top->code
+                          & (CLUSTER_NARROW_BIT | CLUSTER_EMOJI_BIT);
           unsigned idx;
           memcpy(seq, old, old_n * sizeof(uint32));
           seq[old_n] = code;
-          idx = cluster_intern(seq, old_n + 1u, w_keep);
-          top->code = CLUSTER_BIT
-                    | (was_narrow ? CLUSTER_NARROW_BIT : 0u)
-                    | idx;
+          idx = cluster_intern(seq, old_n + 1u,
+                               (bits & CLUSTER_NARROW_BIT) ? 1u : 2u,
+                               (bits & CLUSTER_EMOJI_BIT) ? 1u : 0u);
+          top->code = CLUSTER_BIT | bits | idx;
           t->cluster_state = CPS_IN_CLUSTER;
           *col_delta = 0;
           return 0;
@@ -1811,17 +1843,16 @@ static int cluster_step(
         const uint32 *old = cluster_get(cluster_index(top->code), &old_n);
         if(old_n + 1u <= (unsigned)CLUSTER_MAX_LEN) {
           uint32 seq[CLUSTER_MAX_LEN];
-          unsigned was_narrow = (top->code & CLUSTER_NARROW_BIT) ? 1u : 0u;
-          unsigned old_w = was_narrow ? 1u : 2u;
-          unsigned w_new = (code == 0xFE0Eu) ? 1u
-                         : (code == 0xFE0Fu) ? 2u
-                         : old_w;
-          unsigned idx;
+          unsigned old_w = (top->code & CLUSTER_NARROW_BIT) ? 1u : 2u;
+          unsigned old_e = (top->code & CLUSTER_EMOJI_BIT) ? 1u : 0u;
+          unsigned w_new, e_new, idx;
+          cluster_gate(old[0], code, old_w, old_e, &w_new, &e_new);
           memcpy(seq, old, old_n * sizeof(uint32));
           seq[old_n] = code;
-          idx = cluster_intern(seq, old_n + 1u, w_new);
+          idx = cluster_intern(seq, old_n + 1u, w_new, e_new);
           top->code = CLUSTER_BIT
                     | (w_new==1u ? CLUSTER_NARROW_BIT : 0u)
+                    | (e_new ? CLUSTER_EMOJI_BIT : 0u)
                     | idx;
           if(w_new != old_w) {
             set_cell_w(*top, w_new);
