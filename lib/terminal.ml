@@ -192,12 +192,15 @@ let resize t ~w ~h =
     Vterm_lib.Pty.set_size t.pty ~w ~h
   end
 
-let render t (grid : Grid.t) ~row ~col ~width ~height =
+(* Copy a vterm's display into a grid region. Takes the vterm directly
+   (rather than a [t]) so the transparency test can drive it without a
+   PTY behind it. *)
+let render_vterm vterm (grid : Grid.t) ~row ~col ~width ~height =
   if width <= 0 || height <= 0 then () else
-  let nrows = Vterm_lib.Vterm_api.prepare_rows t.vterm in
+  let nrows = Vterm_lib.Vterm_api.prepare_rows vterm in
   for y = 0 to min nrows height - 1 do
-    let cells = Vterm_lib.Vterm_api.get_row t.vterm y in
-    let sentinel = Vterm_lib.Vterm_api.get_row_sentinel t.vterm y in
+    let cells = Vterm_lib.Vterm_api.get_row vterm y in
+    let sentinel = Vterm_lib.Vterm_api.get_row_sentinel vterm y in
     let grid_row = row + y in
     if grid_row < grid.rows then begin
       (* Render cells *)
@@ -225,13 +228,13 @@ let render t (grid : Grid.t) ~row ~col ~width ~height =
             if cell.selected then { base with reverse = not base.reverse }
             else base
           in
-          (* vterm encodes tabs as a single cell with code=ENC_TAB (0x07)
-             and dynamic width 1..8 that pads to the next multiple of 8.
-             Expand into [cell.width] single-space cells so the host
-             cursor advances correctly and stale grid content doesn't
-             show through. *)
+          (* vterm encodes tabs as a single cell with code=ENC_TAB
+             (16, see term.h) and dynamic width 1..8 that pads to the
+             next multiple of 8. Expand into [cell.width] single-space
+             cells so the host cursor advances correctly and stale
+             grid content doesn't show through. *)
           let is_tab =
-            String.length cell.text = 1 && cell.text.[0] = '\x07'
+            String.length cell.text = 1 && cell.text.[0] = '\x10'
           in
           if is_tab then begin
             for i = 0 to cell.width - 1 do
@@ -243,21 +246,21 @@ let render t (grid : Grid.t) ~row ~col ~width ~height =
                 cc.attr <- attr
               end
             done;
-            (* Last expanded space is the leader for any trailing combs. *)
+            (* Last expanded space is the leader for any trailing followers. *)
             leader_gc := min (gc + cell.width - 1) (grid.cols - 1)
           end else begin
             let grid_cell = grid.cells.(grid_row).(gc) in
             grid_cell.text <- cell.text;
             grid_cell.width <- cell.width;
             grid_cell.attr <- attr;
-            grid_cell.combs <- [];
+            grid_cell.followers <- [];
             (* Wide char: mark continuation cell *)
             if cell.width = 2 && gc + 1 < col + width && gc + 1 < grid.cols then begin
               let next = grid.cells.(grid_row).(gc + 1) in
               next.text <- "";
               next.width <- 0;
               next.attr <- attr;
-              next.combs <- []
+              next.followers <- []
             end;
             leader_gc := gc
           end;
@@ -285,6 +288,9 @@ let render t (grid : Grid.t) ~row ~col ~width ~height =
       done
     end
   done
+
+let render t grid ~row ~col ~width ~height =
+  render_vterm t.vterm grid ~row ~col ~width ~height
 
 let title t =
   if t.closed then
