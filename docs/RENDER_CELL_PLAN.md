@@ -237,14 +237,25 @@ prescription, injection is VS-15 in practice; the VS-16 direction of
 the rule exists for symmetry should a future prescription change
 introduce wide-but-ambiguous codepoints.
 
-Out of reach from our side: content carrying an explicit VS-16 on a
-narrow base misaligns in any outer terminal that ignores VS for
-layout (iTerm2 status unverified — pending the cursor-position probe
-on macOS); bare keycaps take no trailing VS, but need none — the
-prescription keeps them narrow (kitty and iTerm2 both measure 1); and
+**iTerm2 probe results (2026-06-10, cursor-position measurement on
+macOS, Unicode-9 widths):** bare widths match the prescription
+exactly (✔ ⚠ ☝ 👁 🌡 = 1, ⚡ = 2); **VS-16 IS honored for layout**
+(✔️ ⚠️ ☝️ = 2 — the old "rendering-only" reports are obsolete), so
+explicit VS-16 content aligns on glterm, kitty, and iTerm2 alike;
+and the injection is validated — ☝+VS-15 = 1, a no-op in iTerm2
+while it narrows kitty, giving three-way agreement on the nine EMB
+codepoints. Lone RI = 2, flag pair = 2, ZWJ family = 2, bare
+keycap = 1: all as prescribed.
+
+Remaining iTerm2-only divergences, content-driven and out of reach
+from our side (we follow the prescription; iTerm2 renders a column
+off): VS-15 on a wide base is ignored (⚡︎ renders 2, laid out 1);
+skin-tone sequences on narrow bases sum instead of clustering
+(☝🏽 renders 3, laid out 2 — iTerm2's clustering is ZWJ-only); the
+full keycap sequence stays narrow (1️⃣ renders 1, laid out 2). Also
 the EAW=Ambiguous circled numbers U+3248-324F (glibc wide, kitty
-narrow, not emoji) are not VS bases, so they cannot be pinned —
-accepted divergence, we follow glibc.
+narrow, not emoji) are not VS bases and cannot be pinned — accepted,
+we follow glibc.
 
 The upstream gate is satisfied: the prescription landed as glterm
 `9eb45ae` and is vendored here (rocqtui sync `c9ad02e`). This phase
