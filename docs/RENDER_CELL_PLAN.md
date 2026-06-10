@@ -66,34 +66,35 @@ editor-side cluster walker below).
 
 ### 1. Width + classification stub (vterm_stubs.c)
 
-One new primitive in `vterm_stubs.c` (rocqtui-specific — vendored
-files stay byte-for-byte):
+**Done** (`7799346`, re-synced for upstream `9eb45ae`). One primitive
+in `vterm_stubs.c` (rocqtui-specific — vendored files stay
+byte-for-byte):
 
 ```c
 /* caml_render_cp_class : int -> int
-   Returns char_width(cp) in the low bits plus flag bits:
-   TRIGGER_EXTEND, RI, PICTOGRAPHIC — from the vendored
-   cluster.h classifiers and char_width.h. */
+   char_width(cp) in bits 0-3, plus flags: 0x10 nonprintable,
+   0x20 cluster trigger-extend, 0x40 regional indicator,
+   0x80 Extended_Pictographic — from the vendored char_width.h,
+   cluster.h, and the generated emoji_props.h. */
 ```
 
-- Guard `cp < 32`: return width 1 with no flags (avoids the `ENC_TAB
-  = 16` collision; control codepoints never reach layout anyway).
-- `wcwidth < 0` maps per `char_width.h` (→ 1); the OCaml walker
-  decides skip-vs-place, preserving current `put_str` semantics
-  (non-printable → skip).
-- One OCaml wrapper in `Grid` (or a small `Cellclass` module) decodes
-  the bitmask. This is the *single width authority*: `grid.ml`'s
-  three `wcwidth` call sites and `utf8.ml`'s `codepoint_width` all
-  route through it. `locale_stubs.c`'s `caml_wcwidth` stays for
-  anything genuinely locale-shaped, or dies if nothing else uses it.
+- Guard `cp < 32`: nonprintable width 1 (avoids the `ENC_TAB = 16`
+  collision; control codepoints never reach layout anyway).
+- `Utf8.cp_class` + `class_*` accessors decode the bitmask. This is
+  the *single width authority*: `grid.ml`'s three layout sites and
+  `utf8.ml`'s `codepoint_width` route through it.
+- Phase 3 extends the mask with the gating predicates from the
+  generated `emoji_props.h`: `0x100 emoji_vs16_base`,
+  `0x200 emoji_modifier_base`, `0x400 emoji_presentation`.
 
-Using the vendored `cluster.h` static inlines + `char_width.h` keeps
-the classification aligned with upstream by construction — same
-argument as upstream's `emoji_presentation.h` factoring. Note the two
-sets differ on purpose: widening uses the Emoji_Presentation set
-(post-`3d63ef3`); cluster *extension* uses the broader pictographic
-approximation. `fontvis/text.ml`'s `render_width` still widens by the
-pictographic blanket — upstream drift to fix separately.
+Upstream `9eb45ae` replaced the hand-written property lists with
+predicates generated from vendored UCD 17.0 data, so the
+classification is Unicode-data-driven end to end. Width prescription
+(final): wcwidth corrected by the Emoji_Presentation set — EP=No
+pictographs narrow, lone RI wide, bare EP=No modifier bases narrow
+(the deliberate kitty divergence, see §5). `fontvis/text.ml`'s
+`render_width` still widens by the old pictographic blanket —
+upstream drift to fix separately.
 
 ### 2. Cell model (grid.ml)
 
@@ -134,11 +135,25 @@ producing display cells from a UTF-8 string + base attr:
 walk : string -> (leader_text * width * follower_texts) list
 ```
 
-- Port of the `CPS_*` state machine from `fontvis/text.ml`
-  `build_lines` (itself a port of glterm's `cluster_step`), driven by
-  the classification stub: trigger-extend absorbs into the leader
-  (VS-16 → width 2, VS-15 → width 1, skin tone/keycap/tag → width 2,
-  ZWJ → await pictographic), RI pairs collapse, lone RI is width 2.
+- Port of glterm's `cluster_step` + `cluster_gate` (post-`9eb45ae` —
+  NOT the older ungated `fontvis/text.ml` `build_lines`, whose
+  "any trigger widens to 2" rule is now wrong). Triggers always
+  absorb into the leader (round-trip), but width changes are gated:
+  - VS-16 → width 2 only on `emoji_vs16_base` bases; else width
+    unchanged.
+  - VS-15 → width 1.
+  - Skin tone → width 2 only on `emoji_modifier_base` bases; else
+    unchanged.
+  - ZWJ, bare keycap (U+20E3), tag characters → never change width;
+    ZWJ continuation is gated by `extended_pictographic`. A
+    minimally-qualified ZWJ sequence (no VS-16, EP=No base) stays at
+    base width.
+  - RI pairs collapse to one width-2 cell; lone RI is width 2 by
+    itself (EP=Yes).
+- The walker tracks *width only*. Presentation (mono vs color font)
+  is the rendering terminal's concern — rocqtui re-emits the
+  codepoints and the outer terminal applies UTS #51 itself (§5 pins
+  the ambiguous cases).
 - Zero-width non-triggers attach as followers (old combining path).
 - Non-printables skip, as today.
 
@@ -178,21 +193,77 @@ followers on wide leaders.
 `tools/emoji_check.ml` / `tools/sgr_check.ml` remain as interactive
 probes; update them for the renamed field.
 
+### 5. Presentation disambiguation (VS injection)
+
+Rocqtui follows glterm's width prescription exactly (via the vendored
+headers), but kitty deviates from it on one class of codepoints: the
+EP=No Emoji_Modifier_Base set — U+261D, U+26F9, U+270C, U+270D,
+U+1F3CB, U+1F3CC, U+1F574, U+1F575, U+1F590 — bare-width 2 in kitty
+(its widening rule is effectively EP||EMB), width 1 per UTS #51,
+glibc wcwidth, glterm `9eb45ae`, and iTerm2's strict-EAW tables.
+Upstream's full-plane sweep against kitty 0.45 confirms these nine
+are the only spec-side divergence among codepoints the host libc
+knows. Kitty honors VS-15/VS-16 for layout in both directions
+(verified: VS-15 narrows the EMB hands to 1), so emission can pin
+the width:
+
+- The ambiguous set is exactly `emoji_modifier_base(c) &&
+  !emoji_presentation(c)` — computable from the vendored generated
+  `emoji_props.h`; no separate list to maintain. Phase 3's extended
+  bitmask already carries both predicates, so the emit path derives
+  the bit for free.
+- `emit_cell_payload`: when a leader is a single bare ambiguous
+  codepoint (no VS present — well-defined once followers are never
+  folded into leader text), append VS-15 if the cell's width is 1,
+  VS-16 if 2.
+- Unconditional — no outer-terminal detection. Inside glterm the
+  injected VS is a rendering no-op by construction (glterm honors VS
+  and prescribes the same bare width).
+
+Costs, accepted: emitted bytes differ from source bytes for those
+codepoints, so copy/selection in the *outer* terminal picks up the
+injected selector; and the round-trip transparency test must compare
+modulo injected VS (vterm B clusters what vterm A held bare).
+
+Since the nine ambiguous codepoints are all laid out narrow under the
+prescription, injection is VS-15 in practice; the VS-16 direction of
+the rule exists for symmetry should a future prescription change
+introduce wide-but-ambiguous codepoints.
+
+Out of reach from our side: content carrying an explicit VS-16 on a
+narrow base misaligns in any outer terminal that ignores VS for
+layout (iTerm2 status unverified — pending the cursor-position probe
+on macOS); bare keycaps take no trailing VS, but need none — the
+prescription keeps them narrow (kitty and iTerm2 both measure 1); and
+the EAW=Ambiguous circled numbers U+3248-324F (glibc wide, kitty
+narrow, not emoji) are not VS bases, so they cannot be pinned —
+accepted divergence, we follow glibc.
+
+The upstream gate is satisfied: the prescription landed as glterm
+`9eb45ae` and is vendored here (rocqtui sync `c9ad02e`). This phase
+is now implementable any time after Phase 2 (it needs the no-fold
+leader invariant).
+
 ## Phases
 
 Each phase is a build-clean, test-clean stopping point.
 
-1. **Width authority.** Classification stub; route `grid.ml` and
-   `utf8.ml` widths through it (no cluster collapse yet — flags
-   unused). Editor gains Emoji_Presentation widening parity.
-   `test_width.ml` updated.
+1. **Width authority.** DONE (`7799346`; re-synced to upstream
+   `9eb45ae` in `c9ad02e`). Classification stub; `grid.ml` and
+   `utf8.ml` widths routed through it; `test_width.ml` asserts the
+   prescription.
 2. **Cell model + emit.** `followers` always distinct; forced-break
    emit rule; transparency test added (this is where Gap 1 closes).
-3. **Cluster walker.** `walk` + rewire `put_str` /
-   `put_str_in_rect` / `utf8.ml` column math (Gap 2 closes).
+3. **Cluster walker.** Extend the bitmask with the gating predicates
+   (`emoji_vs16_base`, `emoji_modifier_base`, `emoji_presentation`);
+   `walk` + rewire `put_str` / `put_str_in_rect` / `utf8.ml` column
+   math (Gap 2 closes).
 4. **Verify & prune.** Probe tools updated; manual check in glterm
    (✔/⚠ markers, emoji in a `.v` comment, `cat` of zwj-test files in
    the embedded terminal, copy round-trip).
+5. **VS injection.** Ambiguous bit (`EMB && !EP`), emit-time VS-15
+   append, transparency test compares modulo injected VS. Needs
+   Phase 2's no-fold invariant; upstream gate already satisfied.
 
 ## Open questions
 
