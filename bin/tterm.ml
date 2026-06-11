@@ -371,6 +371,15 @@ let () =
   Sys.set_signal Sys.sigpipe Sys.Signal_ignore;
   Printexc.record_backtrace true;
   Term.init ();
+  (* Restore the terminal on every exit path (same scheme as rocqtui's
+     main): at_exit covers plain [exit]; the uncaught-exception handler
+     tears down before printing so the error lands on the main screen.
+     Term.teardown is idempotent. *)
+  at_exit Term.teardown;
+  Printexc.set_uncaught_exception_handler (fun e bt ->
+    Term.teardown ();
+    Printf.eprintf "Fatal error: exception %s\n%s%!"
+      (Printexc.to_string e) (Printexc.raw_backtrace_to_string bt));
   let r = Render.create () in
   Theme.apply Theme.default;
 
@@ -643,6 +652,7 @@ let () =
     end
   done;
 
-  List.iter Terminal.destroy (Terminal.all ());
+  List.iter (fun t -> try Terminal.destroy t with _ -> ())
+    (Terminal.all ());
   xterm_set_title "";
   Term.teardown ()
