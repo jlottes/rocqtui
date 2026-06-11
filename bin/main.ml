@@ -169,7 +169,20 @@ let () =
   in
   Sys.set_signal Sys.sigint Sys.Signal_ignore;
   Sys.set_signal Sys.sigtstp Sys.Signal_ignore;
+  (* Writes to a dead child (crashed rocqtop, exited terminal PTY, build
+     pipe) must surface as EPIPE, not kill the process with the terminal
+     still in the alternate screen. *)
+  Sys.set_signal Sys.sigpipe Sys.Signal_ignore;
   Term.init ();
+  (* Restore the terminal on every exit path. [Term.teardown] is
+     idempotent; at_exit covers plain [exit], and the uncaught-exception
+     handler tears down *before* printing so the error lands on the main
+     screen instead of vanishing with the alternate one. *)
+  at_exit Term.teardown;
+  Printexc.set_uncaught_exception_handler (fun e bt ->
+    Term.teardown ();
+    Printf.eprintf "Fatal error: exception %s\n%s%!"
+      (Printexc.to_string e) (Printexc.raw_backtrace_to_string bt));
   let r = Render.create () in
   Theme.apply theme;
   Rocq_protocol.set_interrupt_hook (fun t ->
@@ -738,10 +751,16 @@ let () =
      | Render_need.Yes -> render ()
      | Render_need.Full -> render ~force:true ())
   done;
-  Mcp_server.shutdown mcp;
-  File_manager.close fm;
-  Dep_runner.close dr;
+  (* Best-effort shutdown: a dead child (e.g. crashed rocqtop raising
+     EPIPE from Session.quit) must not abort the rest, and above all
+     must not skip the terminal teardown. *)
+  let safely f = try f () with _ -> () in
+  safely (fun () -> Mcp_server.shutdown mcp);
+  safely (fun () -> File_manager.close fm);
+  safely (fun () -> Dep_runner.close dr);
   List.iter (fun (tab : Tab.t) ->
-    match tab.session with Some s -> Session.quit s | None -> ()
+    match tab.session with
+    | Some s -> safely (fun () -> Session.quit s)
+    | None -> ()
   ) mgr.tabs;
   Term.teardown ()

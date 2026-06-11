@@ -47,7 +47,11 @@ let teardown () =
   if not !is_init then ()
   else begin
     is_init := false;
-    let write s = ignore (Unix.write_substring Unix.stdout s 0 (String.length s)) in
+    (* Runs from at_exit too, possibly with the tty already gone (ssh
+       drop) — never let teardown itself raise. *)
+    let write s =
+      try ignore (Unix.write_substring Unix.stdout s 0 (String.length s))
+      with Unix.Unix_error _ -> () in
     write "\x1b[<u";           (* disable Kitty keyboard protocol *)
     write "\x1b[?2004l";       (* disable bracketed paste *)
     write "\x1b[?1006l";       (* disable SGR mouse *)
@@ -58,7 +62,9 @@ let teardown () =
     Sys.set_signal 28 Sys.Signal_default;
     (* Restore terminal settings *)
     (match !original_termios with
-     | Some old -> Unix.tcsetattr Unix.stdin Unix.TCSANOW old
+     | Some old ->
+       (try Unix.tcsetattr Unix.stdin Unix.TCSANOW old
+        with Unix.Unix_error _ -> ())
      | None -> ());
     original_termios := None
   end
