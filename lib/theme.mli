@@ -51,6 +51,11 @@ type t = {
   (* "Success" marker — green check used for built-and-fresh files in
      the file-tree panel. *)
   marker_success_fg : color;
+
+  (* Horizontal scrollbar row in the script pane: faint bg tint,
+     distinguishable from [bg], the region tints and [status_bg]. *)
+  hscroll_bg : color;
+  hscroll_thumb_fg : color;
 }
 
 (** List of available theme names. *)
@@ -103,6 +108,8 @@ type grid_attrs = {
   ga_marker_error : Grid.attr;
   ga_marker_warning : Grid.attr;
   ga_marker_success : Grid.attr;
+  ga_hscroll_track : Grid.attr;
+  ga_hscroll_thumb : Grid.attr;
 }
 
 (** Get the current theme's Grid.attr values. *)

@@ -1,7 +1,7 @@
 (* Editor context: dependencies injected from main.ml.
    Replaces callback refs and global setters. *)
 
-type drag_mode = NoDrag | DragV | DragH | DragBoth | DragMinimap | DragMinimapScroll | DragFileTree
+type drag_mode = NoDrag | DragV | DragH | DragBoth | DragMinimap | DragMinimapScroll | DragFileTree | DragHscroll
 
 (* Which pane currently receives keyboard input. Global rather than
    per-tab: switching buffers shouldn't change which pane is focused. *)

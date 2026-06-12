@@ -35,6 +35,13 @@ type t = {
      the file-tree panel. Paired with [error_bg] (red) and
      [string_fg] (yellow) for the existing error / warning markers. *)
   marker_success_fg : color;
+
+  (* Horizontal scrollbar row in the script pane. The bg tint must be
+     distinguishable from [bg], [verified_bg], [processing_bg] (it can
+     sit directly inside those regions) and from [status_bg] (it can
+     sit directly above the status bar). *)
+  hscroll_bg : color;
+  hscroll_thumb_fg : color;
 }
 
 (* Shorthand constructors *)
@@ -94,6 +101,8 @@ let solarized_dark = {
   paren_match_bg = sol_base01;
   paren_match_fg = grey_fg;
   marker_success_fg = sol_green;
+  hscroll_bg = c 237;
+  hscroll_thumb_fg = c 244;  (* sol_base0 *)
 }
 
 let solarized_light = {
@@ -123,6 +132,8 @@ let solarized_light = {
   paren_match_bg = sol_base1;
   paren_match_fg = c 230;
   marker_success_fg = sol_green;
+  hscroll_bg = c 252;
+  hscroll_thumb_fg = sol_base1;
 }
 
 (* Classic: basic 8-color theme, works on any terminal *)
@@ -153,6 +164,8 @@ let classic = {
   paren_match_bg = c 5;  (* magenta *)
   paren_match_fg = c 0;  (* black *)
   marker_success_fg = c 2;  (* green *)
+  hscroll_bg = c 0;   (* black *)
+  hscroll_thumb_fg = c 7;  (* white *)
 }
 
 (* Monokai-inspired *)
@@ -183,6 +196,8 @@ let monokai = {
   paren_match_bg = c 240;
   paren_match_fg = c 255;
   marker_success_fg = c 148;  (* monokai-ish green *)
+  hscroll_bg = c 237;
+  hscroll_thumb_fg = c 246;
 }
 
 (* Nord *)
@@ -213,6 +228,8 @@ let nord = {
   paren_match_bg = c 60;
   paren_match_fg = c 253;
   marker_success_fg = c 108;  (* nord aurora green *)
+  hscroll_bg = c 239;
+  hscroll_thumb_fg = c 248;
 }
 
 let default = solarized_dark
@@ -270,6 +287,8 @@ type grid_attrs = {
   ga_marker_error : Grid.attr;
   ga_marker_warning : Grid.attr;
   ga_marker_success : Grid.attr;
+  ga_hscroll_track : Grid.attr;
+  ga_hscroll_thumb : Grid.attr;
 }
 
 let make_attr ?(bold=false) ?(dim=false) (fg : color) (bg : color) : Grid.attr =
@@ -320,6 +339,8 @@ let grid_attrs_of_theme (theme : t) : grid_attrs =
     ga_marker_error = make_attr ~bold:true theme.error_bg theme.bg;
     ga_marker_warning = make_attr ~bold:true theme.string_fg theme.bg;
     ga_marker_success = make_attr ~bold:true theme.marker_success_fg theme.bg;
+    ga_hscroll_track = a theme.border_fg theme.hscroll_bg;
+    ga_hscroll_thumb = a theme.hscroll_thumb_fg theme.hscroll_bg;
   }
 
 let current_attrs : grid_attrs ref = ref (grid_attrs_of_theme default)

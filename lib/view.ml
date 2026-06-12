@@ -526,8 +526,13 @@ let render_script (ctx : Editor_context.t) r (tab : Tab.t) =
   let content_cols = max 1 (cols - gw) in
   (* The search prompt and any other bottom panel overlay the pane's
      bottom [panel_rows]; treat those as not visible when ensuring the
-     cursor is in view. *)
-  let visible_rows = max 1 (rows - Render.panel_rows r) in
+     cursor is in view. The horizontal scrollbar, when shown, takes
+     the bottom-most row that remains. Its visibility is computed
+     against the pre-scrollbar row count — accepting one row of fuzz
+     at the boundary (see docs/HSCROLLBAR_PLAN.md). *)
+  let vis0 = max 1 (rows - Render.panel_rows r) in
+  let show_hsb = Hscrollbar.wanted buf ~rows:vis0 ~content_cols in
+  let visible_rows = if show_hsb then max 1 (vis0 - 1) else vis0 in
   let cur = Buffer.cursor buf in
   if tab.last_ensured_cur <> Some cur then begin
     Buffer.ensure_visible_h buf visible_rows content_cols;
@@ -732,9 +737,19 @@ let render_script (ctx : Editor_context.t) r (tab : Tab.t) =
       ~minimap_rows:(Array.length mm_data)
       ~scroll ~visible_lines:rows ~ypc ~border_attr mm_data
   end;
+  let script_rect = Render.pane_rect r Render.PScript in
+  (* Horizontal scrollbar — drawn last so no overlay chgat repaints
+     its row. *)
+  if show_hsb then begin
+    let hsb = Hscrollbar.of_buffer buf ~rows:vis0 ~content_cols in
+    Hscrollbar.draw (Render.curr r)
+      ~row:(script_rect.row + vis0 - 1) ~col:script_rect.col
+      ~gw ~width:cols
+      ~track_attr:a.ga_hscroll_track ~thumb_attr:a.ga_hscroll_thumb
+      hsb
+  end;
   let (cl, cc) = Buffer.cursor buf in
   let cursor_row = cl - scroll in
-  let script_rect = Render.pane_rect r Render.PScript in
   if cursor_row >= 0 && cursor_row < rows then begin
     let line = Buffer.get_line buf cl in
     let cursor_col = min (Utf8.byte_to_col line cc - hscroll) (content_cols - 1) in
@@ -991,34 +1006,6 @@ let update_status (ctx : Editor_context.t) r (tab : Tab.t) =
              Keys.cycle_pane.display Keys.query_menu.display
              Keys.help.display reload_hint)
     in
-    (* Horizontal scroll indicator *)
-    let hscroll_ind =
-      let hs = Buffer.hscroll buf in
-      if hs > 0 then
-        let (_, cols) = Render.pane_dims r Render.PScript in
-        (* Find max line width among visible lines *)
-        let max_w = ref 0 in
-        let scroll = Buffer.scroll_top buf in
-        for i = scroll to min (scroll + 30) (Buffer.line_count buf - 1) do
-          let w = Utf8.string_width (Buffer.get_line buf i) in
-          if w > !max_w then max_w := w
-        done;
-        let total = max !max_w (hs + cols) in
-        let bar_len = 10 in
-        let thumb_start = hs * bar_len / total in
-        let thumb_len = max 1 (cols * bar_len / total) in
-        let b = Stdlib.Buffer.create 16 in
-        Stdlib.Buffer.add_string b " \xe2\x97\x80";  (* triangle left *)
-        for i = 0 to bar_len - 1 do
-          if i >= thumb_start && i < thumb_start + thumb_len then
-            Stdlib.Buffer.add_string b "\xe2\x96\x88"  (* full block *)
-          else
-            Stdlib.Buffer.add_string b "\xe2\x94\x80"  (* hor line *)
-        done;
-        Stdlib.Buffer.add_string b "\xe2\x96\xb6";  (* triangle right *)
-        Stdlib.Buffer.contents b
-      else ""
-    in
     let extra = if ctx.status_extra <> "" then "  " ^ ctx.status_extra else "" in
     let search_info = match ctx.search_query with
       | None -> ""
@@ -1047,9 +1034,9 @@ let update_status (ctx : Editor_context.t) r (tab : Tab.t) =
            Printf.sprintf "  %s \xe2\x86\x90 %s" glyph alts)
       | _ -> ""
     in
-    let status = Printf.sprintf "%s%s  Ln %d, Col %d%s%s%s%s%s%s"
+    let status = Printf.sprintf "%s%s  Ln %d, Col %d%s%s%s%s%s"
       fname mod_flag (cl + 1) (vcol + 1) rocq_status compose_hint
-      search_info extra hscroll_ind focus_info
+      search_info extra focus_info
     in
     Render.set_status r status
   end
@@ -1126,8 +1113,12 @@ let render_all (ctx : Editor_context.t) r (tab : Tab.t) =
     else
       let (cl, _) = Buffer.cursor tab.buf in
       let scroll = Buffer.scroll_top tab.buf in
-      let (rows, _) = Render.pane_dims r Render.PScript in
-      let visible_rows = max 1 (rows - Render.panel_rows r) in
+      let (rows, cols) = Render.pane_dims r Render.PScript in
+      let vis0 = max 1 (rows - Render.panel_rows r) in
+      let content_cols = max 1 (cols - gutter_width tab.buf) in
+      let visible_rows =
+        if Hscrollbar.wanted tab.buf ~rows:vis0 ~content_cols
+        then max 1 (vis0 - 1) else vis0 in
       cl >= scroll && cl < scroll + visible_rows
   in
   let picker = get_picker ctx in

@@ -1,3 +1,15 @@
+(* Script-pane geometry needed to hit-test the horizontal scrollbar
+   row. [vis0] is the row count above any bottom panel — the
+   scrollbar, when shown, sits on row [vis0 - 1]. Mirrors the
+   computation in [View.render_script]. *)
+let hscroll_geom r buf =
+  let rect = Render.pane_rect r Render.PScript in
+  let (rows, cols) = Render.pane_dims r Render.PScript in
+  let vis0 = max 1 (rows - Render.panel_rows r) in
+  let gw = View.gutter_width buf in
+  let content_cols = max 1 (cols - gw) in
+  (rect, vis0, gw, content_cols)
+
 let handle (ctx : Editor_context.t) (mev : Input.mouse_event) (tab : Tab.t) r
   : Action.action option =
   let buf = tab.buf in
@@ -60,6 +72,11 @@ let handle (ctx : Editor_context.t) (mev : Input.mouse_event) (tab : Tab.t) r
        Render.move_split_v r x; Render.move_split_h r y
      | Editor_context.DragMinimap -> Render.move_minimap_border r x
      | Editor_context.DragFileTree -> Render.move_file_tree_border r x
+     | Editor_context.DragHscroll ->
+       let (rect, vis0, gw, content_cols) = hscroll_geom r buf in
+       let t = Hscrollbar.of_buffer buf ~rows:vis0 ~content_cols in
+       let track_x = max 0 (min (content_cols - 1) (x - rect.col - gw)) in
+       Buffer.set_hscroll buf (Hscrollbar.hscroll_of_click t ~track_x)
      | Editor_context.DragMinimapScroll ->
        let mm_rect = Render.pane_rect r Render.PMinimap in
        let mm_row = y - mm_rect.row in
@@ -373,7 +390,26 @@ let handle (ctx : Editor_context.t) (mev : Input.mouse_event) (tab : Tab.t) r
       ctx.focus <- Editor_context.FScript;
       View.clear_pane_selection tab.goals_sel;
       View.clear_pane_selection (Geom.active_msg_pane_sel tab);
-      if has_cmd then begin
+      let (rect, vis0, gw, content_cols) = hscroll_geom r buf in
+      let on_hscrollbar =
+        y - rect.row = vis0 - 1
+        && Hscrollbar.wanted buf ~rows:vis0 ~content_cols in
+      if on_hscrollbar then begin
+        let t = Hscrollbar.of_buffer buf ~rows:vis0 ~content_cols in
+        let px = x - rect.col in
+        if px < gw then
+          (* Left arrow zone (gutter cells) — page left. *)
+          Buffer.set_hscroll buf (Hscrollbar.page t ~dir:(-1))
+        else if px >= gw + content_cols - 1 then
+          (* Right arrow on the last track cell — page right. *)
+          Buffer.set_hscroll buf (Hscrollbar.page t ~dir:1)
+        else begin
+          let track_x = max 0 (min (content_cols - 1) (px - gw)) in
+          Buffer.set_hscroll buf (Hscrollbar.hscroll_of_click t ~track_x);
+          ctx.dragging <- Editor_context.DragHscroll
+        end
+      end
+      else if has_cmd then begin
         match Geom.screen_to_buffer_pos r buf ~x ~y with
         | Some (line, byte_col) ->
           Buffer.move_to buf line byte_col;
