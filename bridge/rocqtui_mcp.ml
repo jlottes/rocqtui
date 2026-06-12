@@ -761,7 +761,10 @@ let tool_defs = [
      ];
      "required", `List [`String "match"; `String "replacement"];
    ]);
-  ("query", "Run a Rocq query (About, Print, Search, Check, etc.)",
+  ("query", "Run a Rocq query (About, Print, Search, Check, etc.). \
+             Each sentence runs independently against the verified-\
+             boundary snapshot: vernac state set by one sentence \
+             (Set/Hint/Opaque) is invisible to the next.",
    `Assoc [
      "type", `String "object";
      "properties", `Assoc [

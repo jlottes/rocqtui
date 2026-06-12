@@ -117,7 +117,17 @@ Extra response: `replaced_text`.
 ### Other tools
 
 - `query({ "command": "About nat." })` — runs a Rocq query. Result in
-  `messages`.
+  `messages`; `error` is non-null if the query timed out (~60s) or
+  failed, and `messages` is then null — never stale editor output.
+
+  **Snapshot semantics:** each sentence in a multi-sentence command
+  runs independently against the state at the verified boundary.
+  Vernac state set by one sentence (`Set ...`, `Hint ...`,
+  `Opaque ...`) is invisible to the next — `Set Typeclasses Debug.
+  Check foo.` silently checks with the option unset. To query under
+  modified state, use the `display` block (printing options are baked
+  in correctly), or `proof_insert` the `Set ...`, then `query`, then
+  `proof_rewind`.
 - `save()` — saves the file. Returns `{"ok": true}` or error.
 - `open_file({ "filename": "/path" })` — open or switch.
   Returns `{"tab": <id>, "existed": <bool>}`.
