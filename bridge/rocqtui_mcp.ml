@@ -297,6 +297,13 @@ let merge_json (base : Yojson.Safe.t) (extra : (string * Yojson.Safe.t) list) =
   | `Assoc fields -> `Assoc (fields @ extra)
   | _ -> `Assoc extra
 
+(* Tab argument for inner tool calls. Every mutating call must carry
+   it: the server resolves a missing [tab] to the *active* tab, which
+   is not necessarily the tab this bridge call addresses. *)
+let tab_field = function
+  | Some n -> ["tab", `Int n]
+  | None -> []
+
 (* --- High-level tool implementations --- *)
 
 let handle_verify_to conn args state =
@@ -344,7 +351,7 @@ let handle_verify_to conn args state =
   in
   (* Call go_to_offset *)
   ignore (call_tool conn "go_to_offset"
-    (`Assoc ["offset", `Int offset]));
+    (`Assoc (("offset", `Int offset) :: tab_field tab)));
   let final = poll_until_idle conn ?tab () in
   let final = apply_display conn args ?tab final in
   let resp = build_response final in
@@ -396,14 +403,14 @@ let handle_proof_insert conn args state =
   let old_vend = vend in
   (* Insert text *)
   ignore (call_tool_or_reject conn "insert_text"
-    (`Assoc [
+    (`Assoc ([
       "offset", `Int vend;
       "text", `String actual_text;
-    ]));
+    ] @ tab_field tab)));
   (* Set target to end of inserted text *)
   let new_target = vend + String.length actual_text in
   ignore (call_tool conn "go_to_offset"
-    (`Assoc ["offset", `Int new_target]));
+    (`Assoc (("offset", `Int new_target) :: tab_field tab)));
   let final = poll_until_idle conn ?tab () in
   (* Determine what verified and what failed *)
   let final_vend = final.verified_end in
@@ -423,7 +430,8 @@ let handle_proof_insert conn args state =
   let delete_to = old_vend + String.length actual_text in
   if delete_to > delete_from then begin
     ignore (call_tool_or_reject conn "delete_range"
-      (`Assoc ["start", `Int delete_from; "end", `Int delete_to]));
+      (`Assoc (["start", `Int delete_from; "end", `Int delete_to]
+               @ tab_field tab)));
     (* Re-read state after deletion *)
     ignore (poll_until_idle conn ?tab ())
   end;
@@ -477,7 +485,7 @@ let handle_proof_forward conn args state =
   if !sent_bytes < nlen then
     target_end := vend + String.length chunk;
   ignore (call_tool conn "go_to_offset"
-    (`Assoc ["offset", `Int !target_end]));
+    (`Assoc (("offset", `Int !target_end) :: tab_field tab)));
   let final = poll_until_idle conn ?tab () in
   let final_vend = final.verified_end in
   let verified_text = if final_vend > vend then
@@ -539,11 +547,12 @@ let handle_proof_rewind conn args state =
         !i
     in
     ignore (call_tool conn "go_to_offset"
-      (`Assoc ["offset", `Int effective_start]));
+      (`Assoc (("offset", `Int effective_start) :: tab_field tab)));
     ignore (poll_until_idle conn ?tab ());
     if delete then begin
       ignore (call_tool_or_reject conn "delete_range"
-        (`Assoc ["start", `Int effective_start; "end", `Int vend]));
+        (`Assoc (["start", `Int effective_start; "end", `Int vend]
+                 @ tab_field tab)));
       ignore (poll_until_idle conn ?tab ())
     end;
     let final = get_state conn ?tab () in
@@ -584,15 +593,16 @@ let handle_replace_after conn args state =
     in
     if match_end > match_start then begin
       ignore (call_tool_or_reject conn "delete_range"
-        (`Assoc ["start", `Int match_start; "end", `Int match_end]));
+        (`Assoc (["start", `Int match_start; "end", `Int match_end]
+                 @ tab_field tab)));
       ignore (poll_until_idle conn ?tab ())
     end;
     if String.length actual_replacement > 0 then begin
       ignore (call_tool_or_reject conn "insert_text"
-        (`Assoc [
+        (`Assoc ([
           "offset", `Int match_start;
           "text", `String actual_replacement;
-        ]));
+        ] @ tab_field tab)));
       ignore (poll_until_idle conn ?tab ())
     end;
     let final = get_state conn ?tab () in

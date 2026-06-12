@@ -675,14 +675,23 @@ let resolve_tab args mgr =
   match args |> member "tab" with
   | `Int id ->
     (match Tab.find_by_id mgr id with
-     | Some tab -> tab, id
-     | None -> Tab.active_tab mgr, (Tab.active_tab mgr).Tab.id)
+     | Some tab -> Ok (tab, id)
+     | None -> Error id)
   | _ ->
     let tab = Tab.active_tab mgr in
-    tab, tab.Tab.id
+    Ok (tab, tab.Tab.id)
 
 let handle_tool t client name args mgr =
-  let (tab, tab_idx) = resolve_tab args mgr in
+  match resolve_tab args mgr with
+  | Error id ->
+    (false, `Assoc [
+      "content", `List [
+        `Assoc ["type", `String "text";
+                "text", `String (Printf.sprintf
+                  "No tab with id %d. Check rocqtui://tabs." id)]];
+      "isError", `Bool true;
+    ])
+  | Ok (tab, tab_idx) ->
   mark_tab_active t tab_idx;
   t.last_activity <- Unix.gettimeofday ();
   match name with
