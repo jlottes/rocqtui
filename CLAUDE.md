@@ -97,6 +97,12 @@ Rocqtui exposes an MCP server over a Unix socket. Full API docs in
 [`CLAUDE_MCP.md`](CLAUDE_MCP.md). Claude Code records usability friction in
 `mcp-feedback.md` in whatever project is using rocqtui.
 
+[`docs/FEEDBACK.md`](docs/FEEDBACK.md) tracks the status of every
+feedback item (sources, statuses, resolutions). When triaging or
+addressing feedback: add/update its row, and bump the source's
+"triaged through" date once all its entries are tracked. Register any
+new project's `mcp-feedback.md` in the Sources table.
+
 ## Key bindings
 
 See `lib/keys.ml` for the source of truth. Summary:
