@@ -195,13 +195,14 @@ let async_poll_timeout = 60.0
 
 (* Drive a server-side async tool: call [start_name], extract the
    ticket, then poll [poll_name] until status "done" (or timeout).
-   Returns the final text from a "done" response. *)
+   Returns [Ok text] from a "done" response, [Error `Timeout] when the
+   poll deadline passes, [Error `Failed] on any protocol breakdown. *)
 let call_async_tool conn start_name poll_name args =
   match call_tool conn start_name args with
-  | None -> None
+  | None -> Error `Failed
   | Some (start_result, _) ->
     (match parse_tool_content_json start_result with
-     | None -> None
+     | None -> Error `Failed
      | Some payload ->
        match Yojson.Safe.Util.member "ticket" payload with
        | `String ticket ->
@@ -209,27 +210,27 @@ let call_async_tool conn start_name poll_name args =
          let rec poll () =
            match call_tool conn poll_name
                    (`Assoc ["ticket", `String ticket]) with
-           | None -> None
+           | None -> Error `Failed
            | Some (poll_result, _) ->
              (match parse_tool_content_json poll_result with
-              | None -> None
+              | None -> Error `Failed
               | Some p ->
                 match Yojson.Safe.Util.member "status" p with
                 | `String "done" ->
                   (match Yojson.Safe.Util.member "text" p with
-                   | `String text -> Some text
-                   | _ -> None)
+                   | `String text -> Ok text
+                   | _ -> Error `Failed)
                 | `String "pending" ->
                   if Unix.gettimeofday () -. start_t > async_poll_timeout
-                  then None
+                  then Error `Timeout
                   else begin
                     Unix.sleepf async_poll_interval;
                     poll ()
                   end
-                | _ -> None)
+                | _ -> Error `Failed)
          in
          poll ()
-       | _ -> None)
+       | _ -> Error `Failed)
 
 (* If [args] carries a [display] options block, replace [state.goals] with
    a fresh render via the get_goals_start/poll tools. The [rocqtui://state]
@@ -246,8 +247,8 @@ let apply_display conn args ?tab state =
     in
     (match call_async_tool conn "get_goals_start" "get_goals_poll"
              (`Assoc tool_args) with
-     | Some text -> { state with goals = Some text }
-     | None -> state)
+     | Ok text -> { state with goals = Some text }
+     | Error _ -> state)
   | _ -> state
 
 (* --- Poll until idle --- *)
@@ -627,17 +628,25 @@ let handle_query conn args _state =
      | Some n -> ["tab", `Int n]
      | None -> [])
   ) in
-  (* The server delivers the query result via the ticket — it does NOT
-     pollute the editor's [t.msgs] anymore. Inject the result into
-     the response directly rather than reading [state.messages]. *)
+  (* The query result arrives via the ticket and is the only message
+     this response may carry. [state.messages] is the editor's
+     persistent message buffer, still holding output from earlier
+     boundary motion — falling back to it would present stale messages
+     as query output. *)
   let query_text = call_async_tool conn "query_start" "query_poll" tool_args in
   let final = get_state conn ?tab () in
   let final = apply_display conn args ?tab final in
-  let final = match query_text with
-    | Some t when t <> "" -> { final with messages = [t] }
-    | _ -> final
-  in
-  build_response final
+  let final = { final with messages =
+    (match query_text with Ok t when t <> "" -> [t] | _ -> []) } in
+  let resp = build_response final in
+  merge_json resp [
+    "error", (match query_text with
+      | Ok _ -> `Null
+      | Error `Timeout -> `String (Printf.sprintf
+          "Query timed out: no result after %.0fs. The command may \
+           still be running in rocqtop." async_poll_timeout)
+      | Error `Failed -> `String "Query failed: no result from server.");
+  ]
 
 (* Unwrap an inner MCP tool's content-envelope result so the bridge's
    dispatch loop only wraps it once (otherwise the response is
