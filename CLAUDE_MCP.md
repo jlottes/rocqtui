@@ -48,6 +48,15 @@ to the IDE's persistent toggles.
 
 Tool responses (except `save`/`open_file`) include `proof_status` fields.
 
+The verifying tools (`verify_to`, `proof_insert`, `proof_forward`)
+accept an optional `timeout` (seconds; default 60, clamped to 1–600).
+If verification is still running when it expires, the bridge
+auto-interrupts: the in-flight sentence errors ("User interrupt.") and
+the boundary retracts to the last verified sentence. Their responses
+always carry `timed_out` (bool; `error` is non-null whenever it's
+true) and `elapsed_seconds` — check the latter to spot
+slow-but-finishing steps before they become timeouts.
+
 ### Proving tools
 
 #### `verify_to` — move the verified boundary
@@ -62,7 +71,7 @@ No args = beginning of file. Returns error listing line numbers if
 `before_text` matches multiple locations. Whitespace in match args is
 normalized.
 
-Extra response: `error`, `failed_sentence`.
+Extra response: `error`, `failed_sentence`, `timed_out`, `elapsed_seconds`.
 
 #### `proof_insert` — insert and verify new sentences
 
@@ -76,7 +85,7 @@ that fails. **Invariant: only inserts verified text.**
 Text must be complete sentences. A space is auto-prepended if needed
 to prevent fusion with the preceding token.
 
-Extra response: `verified_text`, `failed_sentence`, `error`.
+Extra response: `verified_text`, `failed_sentence`, `error`, `timed_out`, `elapsed_seconds`.
 
 #### `proof_forward` — verify existing buffer text
 
@@ -87,7 +96,7 @@ Extra response: `verified_text`, `failed_sentence`, `error`.
 Steps through what's already in the buffer. Failed text is NOT deleted
 (it was already there).
 
-Extra response: `verified_text`, `failed_sentence`, `error`.
+Extra response: `verified_text`, `failed_sentence`, `error`, `timed_out`, `elapsed_seconds`.
 
 #### `proof_rewind` — retract verified sentences
 

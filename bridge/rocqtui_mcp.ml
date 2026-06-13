@@ -254,14 +254,24 @@ let apply_display conn args ?tab state =
 (* --- Poll until idle --- *)
 
 let poll_interval = 0.05  (* 50ms *)
-let poll_timeout = 60.0
+let default_op_timeout = 60.0
+let max_op_timeout = 600.0
+let interrupt_settle_timeout = 30.0
 
-let poll_until_idle conn ?tab () =
+(* Optional per-call [timeout] argument (seconds), clamped so a
+   diverging tactic can never wait forever. *)
+let op_timeout args =
+  match Yojson.Safe.Util.member "timeout" args with
+  | `Int n -> Float.min (Float.max (float_of_int n) 1.0) max_op_timeout
+  | `Float f -> Float.min (Float.max f 1.0) max_op_timeout
+  | _ -> default_op_timeout
+
+let poll_until_idle conn ?tab ?(timeout=default_op_timeout) () =
   let start = Unix.gettimeofday () in
   let rec loop () =
     let st = get_state conn ?tab () in
     if not st.is_busy then st
-    else if Unix.gettimeofday () -. start > poll_timeout then st
+    else if Unix.gettimeofday () -. start > timeout then st
     else begin
       Unix.sleepf poll_interval;
       loop ()
@@ -304,6 +314,27 @@ let merge_json (base : Yojson.Safe.t) (extra : (string * Yojson.Safe.t) list) =
 let tab_field = function
   | Some n -> ["tab", `Int n]
   | None -> []
+
+(* Wait for verification to finish. If it is still running after
+   [timeout], auto-interrupt and wait for the session to settle (the
+   interrupt errors the in-flight sentence and retracts the boundary
+   to the last verified one). Returns the settled state and whether
+   the wait timed out. *)
+let wait_or_interrupt conn ?tab ~timeout () =
+  let st = poll_until_idle conn ?tab ~timeout () in
+  if not st.is_busy then (st, false)
+  else begin
+    ignore (call_tool conn "interrupt" (`Assoc (tab_field tab)));
+    let st = poll_until_idle conn ?tab ~timeout:interrupt_settle_timeout () in
+    (st, true)
+  end
+
+(* Response fields shared by the verifying tools: an unmistakable
+   timeout signal and the wall-clock cost of the call (0.1s
+   resolution), so slow-but-finishing steps are visible too. *)
+let timing_fields ~timed_out ~elapsed =
+  [ "timed_out", `Bool timed_out;
+    "elapsed_seconds", `Float (Float.round (elapsed *. 10.) /. 10.) ]
 
 (* --- High-level tool implementations --- *)
 
@@ -351,9 +382,12 @@ let handle_verify_to conn args state =
       !off
   in
   (* Call go_to_offset *)
+  let timeout = op_timeout args in
+  let t0 = Unix.gettimeofday () in
   ignore (call_tool conn "go_to_offset"
     (`Assoc (("offset", `Int offset) :: tab_field tab)));
-  let final = poll_until_idle conn ?tab () in
+  let (final, timed_out) = wait_or_interrupt conn ?tab ~timeout () in
+  let elapsed = Unix.gettimeofday () -. t0 in
   let final = apply_display conn args ?tab final in
   let resp = build_response final in
   (* Check for errors *)
@@ -368,10 +402,14 @@ let handle_verify_to conn args state =
       [ "error", `String msg;
         "failed_sentence", (match failed with
           | Some s -> `String s | None -> `Null) ]
+    | None when timed_out ->
+      [ "error", `String (Printf.sprintf
+          "Timed out after %.0fs; sent interrupt." timeout);
+        "failed_sentence", `Null ]
     | None ->
       [ "error", `Null; "failed_sentence", `Null ]
   in
-  merge_json resp extra
+  merge_json resp (extra @ timing_fields ~timed_out ~elapsed)
 
 let handle_proof_insert conn args state =
   let open Yojson.Safe.Util in
@@ -409,10 +447,23 @@ let handle_proof_insert conn args state =
       "text", `String actual_text;
     ] @ tab_field tab)));
   (* Set target to end of inserted text *)
+  let timeout = op_timeout args in
+  let t0 = Unix.gettimeofday () in
   let new_target = vend + String.length actual_text in
   ignore (call_tool conn "go_to_offset"
     (`Assoc (("offset", `Int new_target) :: tab_field tab)));
-  let final = poll_until_idle conn ?tab () in
+  let (final, timed_out) = wait_or_interrupt conn ?tab ~timeout () in
+  let elapsed = Unix.gettimeofday () -. t0 in
+  (* The cleanup delete below restores the only-verified-text-in-buffer
+     invariant; it needs the pending region gone, which the interrupt
+     guarantees unless the session failed to settle. *)
+  if final.is_busy then
+    raise (Failure (Yojson.Safe.to_string
+      (Mcp_json.tool_error (Printf.sprintf
+         "Timed out after %.0fs and the interrupt did not settle \
+          within %.0fs; inserted text is still pending. Check \
+          proof_status before retrying." timeout
+         interrupt_settle_timeout))));
   (* Determine what verified and what failed *)
   let final_vend = final.verified_end in
   let verified_text = if final_vend > old_vend then
@@ -424,6 +475,9 @@ let handle_proof_insert conn args state =
         Some (String.trim (String.sub final.buffer s (e - s)))
       else None in
       (fs, Some msg)
+    | None when timed_out ->
+      (None, Some (Printf.sprintf
+         "Timed out after %.0fs; sent interrupt." timeout))
     | None -> (None, None)
   in
   (* Delete unverified inserted text *)
@@ -439,13 +493,13 @@ let handle_proof_insert conn args state =
   let final2 = get_state conn ?tab () in
   let final2 = apply_display conn args ?tab final2 in
   let resp = build_response final2 in
-  merge_json resp [
+  merge_json resp ([
     "verified_text", `String verified_text;
     "failed_sentence", (match failed_sentence with
       | Some s -> `String s | None -> `Null);
     "error", (match error_msg with
       | Some s -> `String s | None -> `Null);
-  ]
+  ] @ timing_fields ~timed_out ~elapsed)
 
 let handle_proof_forward conn args state =
   let open Yojson.Safe.Util in
@@ -485,9 +539,12 @@ let handle_proof_forward conn args state =
   ) matched_sents;
   if !sent_bytes < nlen then
     target_end := vend + String.length chunk;
+  let timeout = op_timeout args in
+  let t0 = Unix.gettimeofday () in
   ignore (call_tool conn "go_to_offset"
     (`Assoc (("offset", `Int !target_end) :: tab_field tab)));
-  let final = poll_until_idle conn ?tab () in
+  let (final, timed_out) = wait_or_interrupt conn ?tab ~timeout () in
+  let elapsed = Unix.gettimeofday () -. t0 in
   let final_vend = final.verified_end in
   let verified_text = if final_vend > vend then
     String.sub final.buffer vend (final_vend - vend)
@@ -498,17 +555,20 @@ let handle_proof_forward conn args state =
         Some (String.trim (String.sub final.buffer s (e - s)))
       else None in
       (fs, Some msg)
+    | None when timed_out ->
+      (None, Some (Printf.sprintf
+         "Timed out after %.0fs; sent interrupt." timeout))
     | None -> (None, None)
   in
   let final = apply_display conn args ?tab final in
   let resp = build_response final in
-  merge_json resp [
+  merge_json resp ([
     "verified_text", `String verified_text;
     "failed_sentence", (match failed_sentence with
       | Some s -> `String s | None -> `Null);
     "error", (match error_msg with
       | Some s -> `String s | None -> `Null);
-  ]
+  ] @ timing_fields ~timed_out ~elapsed)
 
 let handle_proof_rewind conn args state =
   let open Yojson.Safe.Util in
@@ -703,6 +763,9 @@ let tool_defs = [
          "description", `String "Text after the boundary (disambiguates)"];
        "line", `Assoc ["type", `String "integer";
          "description", `String "1-based line number hint"];
+       "timeout", `Assoc ["type", `String "number";
+         "description", `String "Seconds to wait for verification \
+           before auto-interrupting (default 60, max 600)"];
        "display", `Assoc ["type", `String "object"];
        "tab", `Assoc ["type", `String "integer"];
      ];
@@ -713,6 +776,9 @@ let tool_defs = [
      "properties", `Assoc [
        "text", `Assoc ["type", `String "string";
          "description", `String "Complete sentences to insert"];
+       "timeout", `Assoc ["type", `String "number";
+         "description", `String "Seconds to wait for verification \
+           before auto-interrupting (default 60, max 600)"];
        "display", `Assoc ["type", `String "object"];
        "tab", `Assoc ["type", `String "integer"];
      ];
@@ -724,6 +790,9 @@ let tool_defs = [
      "properties", `Assoc [
        "sentences", `Assoc ["type", `String "string";
          "description", `String "Text that must match buffer after verified boundary"];
+       "timeout", `Assoc ["type", `String "number";
+         "description", `String "Seconds to wait for verification \
+           before auto-interrupting (default 60, max 600)"];
        "display", `Assoc ["type", `String "object"];
        "tab", `Assoc ["type", `String "integer"];
      ];
