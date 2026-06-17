@@ -31,6 +31,10 @@ type t = {
   add_file_watch : string -> unit;
   (** Snapshot of the dep runner state. Cheap to call every frame. *)
   dep_state : unit -> Dep_graph.t option * bool;
+  (** Recompute the global [Build_status] table from current mtimes and
+      the dep graph. Invoked before a dependency build so both the build
+      decision and the file-tree markers reflect freshly-edited sources. *)
+  refresh_build_status : unit -> unit;
   (** All currently-open tabs. Used by project-search merge to
       substitute live buffer matches for open files. *)
   tabs : unit -> Tab.t list;
@@ -82,6 +86,7 @@ val create :
   ?set_project_dir:(string -> unit) ->
   ?add_file_watch:(string -> unit) ->
   ?dep_state:(unit -> Dep_graph.t option * bool) ->
+  ?refresh_build_status:(unit -> unit) ->
   unit -> t
 
 (** Record the session's project and fire the side-effect callback

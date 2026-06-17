@@ -126,6 +126,9 @@ let handle_build (ctx : Editor_context.t) ev (tab : Tab.t) r =
     else if c = 'd' then begin
       (match Buffer.filename buf, project_dir with
        | Some f, Some pd ->
+         (* Re-stat against current mtimes so freshly-edited deps aren't
+            skipped as fresh — and so the tree markers match the build. *)
+         ctx.refresh_build_status ();
          if Build.build_deps ~project_dir:pd f then on_build_started ()
          else Render.set_status r "Build already running."
        | _, None -> Render.set_status r "No project."

@@ -262,6 +262,7 @@ let () =
       refresh_dep_runner_for_dir dir)
     ~add_file_watch:(fun p -> File_manager.add_watch fm p)
     ~dep_state:(fun () -> (Dep_runner.graph dr, Dep_runner.running dr))
+    ~refresh_build_status
     () in
   ctx_ref := Some ctx;
   Editor_context.set_project ctx initial_project;

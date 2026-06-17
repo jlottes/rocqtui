@@ -229,13 +229,32 @@ let get_deps ~project_dir v_path =
   ignore (Unix.close_process_in ic);
   List.rev !deps
 
-(* Build dependencies of a .v file (but not the file itself). *)
+(* Recover the .v source from a project-relative .vo target. *)
+let v_of_vo rel_vo =
+  if Filename.check_suffix rel_vo ".vo" then
+    Filename.chop_suffix rel_vo ".vo" ^ ".v"
+  else rel_vo
+
+(* Build dependencies of a .v file (but not the file itself).
+   Skips deps already known fresh (green check in the file tree): make
+   wouldn't rebuild them anyway, and dropping them avoids a wall of
+   "is up to date." noise in the build output. *)
 let build_deps ~project_dir v_path =
-  let deps = get_deps ~project_dir v_path in
+  let all_deps = get_deps ~project_dir v_path in
+  let deps =
+    List.filter
+      (fun vo -> Build_status.get (v_of_vo vo) <> Build_status.Built_fresh)
+      all_deps
+  in
   if deps = [] then begin
+    let msg =
+      if all_deps = [] then "No dependencies to build."
+      else Printf.sprintf "All %d dependencies up to date."
+             (List.length all_deps)
+    in
     active := Some {
       pid = 0; fd = Unix.stdin; (* dummy *)
-      output = ["No dependencies to build."];
+      output = [msg];
       buf = ""; finished = true; exit_code = Some 0;
       finished_at = Some (Unix.gettimeofday ());
       description = "deps (none)";

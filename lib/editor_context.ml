@@ -29,6 +29,10 @@ type t = {
     (* Add an inotify watch on the given file path. Called when a tab
        starts pointing at a new file (e.g. after rename). *)
   dep_state : unit -> Dep_graph.t option * bool;
+  (* Recompute the global [Build_status] table from current mtimes and
+     the dep graph. Invoked before a dependency build so the build (and
+     the file-tree markers it reads) reflect freshly-edited sources. *)
+  refresh_build_status : unit -> unit;
   tabs : unit -> Tab.t list;
   modal : Modal.t;
   mutable status_extra : string;
@@ -72,6 +76,7 @@ let create
     ?(set_project_dir = fun _ -> ())
     ?(add_file_watch = fun _ -> ())
     ?(dep_state = fun () -> (None, false))
+    ?(refresh_build_status = fun () -> ())
     () =
   { switch_tab;
     switch_to_tab_id;
@@ -79,6 +84,7 @@ let create
     set_project_dir;
     add_file_watch;
     dep_state;
+    refresh_build_status;
     tabs;
     modal = Modal.create ();
     status_extra = "";
