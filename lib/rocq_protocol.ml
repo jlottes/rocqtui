@@ -16,6 +16,7 @@ type t = {
   mutable fragment : string;
   mutable lexerror : int option;
   mutable dead : bool;
+  max_fragment : int;                 (* runaway-message cap, bytes *)
 }
 
 let handle_feedback t xml =
@@ -24,6 +25,18 @@ let handle_feedback t xml =
 
 (* Stamp on Fail values we synthesize when the subprocess died. *)
 let died_pp = Pp.str "rocq subprocess died"
+
+(* Largest a single un-parsed protocol message may grow before we treat
+   it as a runaway (e.g. a notation/printing blowup) and reset. This is
+   per incomplete message, not cumulative — a normal stream of many
+   small messages never trips it, because each is consumed and the
+   fragment trimmed past it. Read once per session in [spawn];
+   overridable via ROCQTUI_MAX_XML_BYTES. *)
+let default_max_fragment_bytes () =
+  let default = 16 * 1024 * 1024 in
+  match Sys.getenv_opt "ROCQTUI_MAX_XML_BYTES" with
+  | Some s -> (match int_of_string_opt s with Some n when n > 0 -> n | _ -> default)
+  | None -> default
 
 (* Mark the protocol as dead and reply Fail to every queued caller.
    Idempotent — multiple write failures land here harmlessly. *)
@@ -75,38 +88,74 @@ let handle_final_answer t xml =
        dispatch now. *)
     if not t.head_dispatched then dispatch_head t
 
+(* A single protocol message has grown past [max_fragment_bytes]
+   (e.g. a notation/printing blowup). The stream is now desynced, so we
+   can't safely resume parsing — fail the in-flight call with an
+   explanatory message and tear the protocol down. Returns [false]
+   (not alive) so the watch is dropped. *)
+let reset_oversized t =
+  Log.logf "handle_input: fragment exceeded %d bytes (got %d) -> reset"
+    t.max_fragment (String.length t.fragment);
+  let human n =
+    if n >= 1024 * 1024 then Printf.sprintf "%d MB" (n / (1024 * 1024))
+    else if n >= 1024 then Printf.sprintf "%d KB" (n / 1024)
+    else Printf.sprintf "%d bytes" n
+  in
+  let msg =
+    Pp.str (Printf.sprintf
+      "Rocq response exceeded %s (likely a notation/printing blowup); \
+       session reset."
+      (human t.max_fragment))
+  in
+  (match t.queue with
+   | Pending (_, k) :: rest ->
+     t.queue <- rest;
+     t.head_dispatched <- false;
+     k (Interface.Fail (Stateid.dummy, None, msg))
+   | [] -> ());
+  mark_dead t;
+  false
+
+(* Parse as many complete protocol messages as [s] holds, dispatching
+   each, and leave any trailing incomplete bytes in [t.fragment]. *)
+let parse_fragment t s =
+  let lex = Lexing.from_string s in
+  let p = Xml_parser.make (Xml_parser.SLexbuf lex) in
+  Xml_parser.check_eof p false;
+  let rec loop () =
+    let xml = Xml_parser.parse ~canonicalize:false p in
+    let l_end = Lexing.lexeme_end lex in
+    t.fragment <- String.sub s l_end (String.length s - l_end);
+    t.lexerror <- None;
+    match Xmlprotocol.msg_kind xml with
+    | Xmlprotocol.Feedback ->
+      handle_feedback t xml;
+      loop ()
+    | Xmlprotocol.LtacDebugInfo ->
+      loop ()
+    | Xmlprotocol.Other ->
+      handle_final_answer t xml;
+      (* If more calls are queued (or were enqueued in the
+         continuation just run), there may be more responses. *)
+      if t.queue <> [] then loop ()
+  in
+  (try loop ()
+   with Xml_parser.Error _ as e ->
+     let l_end = Lexing.lexeme_end lex in
+     if t.lexerror = Some l_end then raise e;
+     t.lexerror <- Some l_end);
+  true
+
 let [@warning "-32"] handle_input t ~read_all =
   let s = read_all () in
   if String.length s = 0 then false  (* EOF / empty *)
   else begin
-    let s = t.fragment ^ s in
-    t.fragment <- s;
-    let lex = Lexing.from_string s in
-    let p = Xml_parser.make (Xml_parser.SLexbuf lex) in
-    Xml_parser.check_eof p false;
-    let rec loop () =
-      let xml = Xml_parser.parse ~canonicalize:false p in
-      let l_end = Lexing.lexeme_end lex in
-      t.fragment <- String.sub s l_end (String.length s - l_end);
-      t.lexerror <- None;
-      match Xmlprotocol.msg_kind xml with
-      | Xmlprotocol.Feedback ->
-        handle_feedback t xml;
-        loop ()
-      | Xmlprotocol.LtacDebugInfo ->
-        loop ()
-      | Xmlprotocol.Other ->
-        handle_final_answer t xml;
-        (* If more calls are queued (or were enqueued in the
-           continuation just run), there may be more responses. *)
-        if t.queue <> [] then loop ()
-    in
-    (try loop ()
-     with Xml_parser.Error _ as e ->
-       let l_end = Lexing.lexeme_end lex in
-       if t.lexerror = Some l_end then raise e;
-       t.lexerror <- Some l_end);
-    true
+    t.fragment <- t.fragment ^ s;
+    (* Guard before re-lexing: an incomplete fragment is re-parsed from
+       byte 0 on every drain, so an unbounded single message is O(N²) in
+       CPU and unbounded in memory. Cap it. *)
+    if String.length t.fragment > t.max_fragment then reset_oversized t
+    else parse_fragment t t.fragment
   end
 
 let spawn ?(prog="coqidetop") ?(args=[]) () =
@@ -132,6 +181,7 @@ let spawn ?(prog="coqidetop") ?(args=[]) () =
     process; out_chan = cout; xml_printer;
     pending_feedback = []; queue = []; head_dispatched = false;
     fragment = ""; lexerror = None; dead = false;
+    max_fragment = default_max_fragment_bytes ();
   } in
   t_ref := Some t;
   t
