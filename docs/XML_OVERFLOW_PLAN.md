@@ -78,20 +78,27 @@ so worst-case re-lex work is ~16MB × (16MB/64KB) ≈ a few GB of scans →
 a few seconds, then reset) but does **not eliminate** it. A legitimately
 large-but-valid message still pays the quadratic on the way to success.
 
-### Follow-up 1 (separate commit): eliminate the O(N²) re-lexing
+### Follow-up 1 (DONE): eliminate the O(N²) re-lexing
 
-Stop re-lexing the whole fragment from byte 0 on every drain. Track a
-scan cursor + XML element depth across `handle_input` calls, advancing
-only over newly-arrived bytes, and only invoke `Xml_parser.parse` once a
-complete top-level element is buffered (depth back to 0). That makes
-boundary detection O(total bytes) and the parse O(message) once — the
-quadratic term disappears, and the cap becomes a pure backstop.
+Implemented in `lib/xml_framing.ml` (+ `.mli`, + `test/test_xml_framing.ml`).
+`handle_input` no longer re-lexes the whole fragment from byte 0 on every
+drain. A pure incremental boundary scanner tracks XML element-nesting
+depth byte by byte across `handle_input` calls (`t.scan`), advancing only
+over newly-arrived bytes; `parse_fragment` is invoked only once the
+scanner reports a complete top-level element is buffered (depth back to
+0). After a parse trims the fragment, the scanner is re-synced to the
+remainder. Boundary detection is O(total bytes), parse is O(message)
+once — the quadratic term is gone, and the cap is now a pure backstop.
 
-Risk: the incremental scanner must respect XML lexical nuance — quotes
-inside tags, `<!-- -->`, `<![CDATA[ ]]>`, `<?...?>`. The coqidetop
-protocol escapes `<`/`>` in text content (`&lt;`/`&gt;`), so the surface
-is small, but this is the parse hot path and needs its own tests. Hence
-a separate commit, not bolted onto the cap.
+The scanner is purely a performance gate: `Xml_parser` stays
+authoritative on real boundaries, so a false positive only costs a
+wasted parse attempt the parser rejects as incomplete. The contract is
+no false *negatives* for well-formed coqidetop output — hence depth
+accounting mirrors coqide's `xml_lexer.mll` exactly (content excludes raw
+`<`/`>`; `<!-- -->`/`<? ?>` are depth-neutral; attribute values are
+quoted with backslash escapes and may contain `>`; no CDATA/DOCTYPE).
+`test_xml_framing.ml` covers split feeds, self-close, nesting, `>` inside
+attribute values, escapes, comments/headers, and the resync path.
 
 ### Follow-up 2 (separate commit): make Alt+. force a reset
 

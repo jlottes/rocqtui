@@ -13,7 +13,8 @@ type t = {
   mutable pending_feedback : Feedback.feedback list;
   mutable queue : pending list;       (* head is in flight if head_dispatched *)
   mutable head_dispatched : bool;     (* head of queue has been written *)
-  mutable fragment : string;
+  mutable fragment : string;          (* unparsed stream bytes *)
+  mutable scan : Xml_framing.t;       (* boundary scanner, in sync with [fragment] *)
   mutable lexerror : int option;
   mutable dead : bool;
   max_fragment : int;                 (* runaway-message cap, bytes *)
@@ -151,11 +152,24 @@ let [@warning "-32"] handle_input t ~read_all =
   if String.length s = 0 then false  (* EOF / empty *)
   else begin
     t.fragment <- t.fragment ^ s;
-    (* Guard before re-lexing: an incomplete fragment is re-parsed from
-       byte 0 on every drain, so an unbounded single message is O(N²) in
-       CPU and unbounded in memory. Cap it. *)
+    (* Runaway cap: bound the single-message size so the (now linear, but
+       still per-message) re-lex and the value tree can't grow without
+       limit. *)
     if String.length t.fragment > t.max_fragment then reset_oversized t
-    else parse_fragment t t.fragment
+    else begin
+      (* Advance the boundary scanner over just the new bytes, and only
+         re-lex once a complete top-level message is buffered. Without
+         this, an in-progress giant message would be re-lexed from byte 0
+         on every drain — O(N²). The scanner is O(new bytes). *)
+      t.scan <- Xml_framing.feed t.scan s;
+      if Xml_framing.at_boundary t.scan then begin
+        ignore (parse_fragment t t.fragment);
+        (* parse_fragment trimmed [t.fragment] to the incomplete
+           remainder; re-sync the scanner to it. *)
+        t.scan <- Xml_framing.feed Xml_framing.initial t.fragment
+      end;
+      true
+    end
   end
 
 let spawn ?(prog="coqidetop") ?(args=[]) () =
@@ -180,7 +194,7 @@ let spawn ?(prog="coqidetop") ?(args=[]) () =
   let t = {
     process; out_chan = cout; xml_printer;
     pending_feedback = []; queue = []; head_dispatched = false;
-    fragment = ""; lexerror = None; dead = false;
+    fragment = ""; scan = Xml_framing.initial; lexerror = None; dead = false;
     max_fragment = default_max_fragment_bytes ();
   } in
   t_ref := Some t;

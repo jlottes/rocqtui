@@ -5,5 +5,5 @@
         test_wrap test_width test_tab_names test_locate test_grid test_qualid
         test_search test_msg_pane test_file_watch test_dep_graph
         test_search_results test_text_field test_paren_match
-        test_transparency test_hscrollbar)
+        test_transparency test_hscrollbar test_xml_framing)
  (libraries rocqtui_lib unix))
