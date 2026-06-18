@@ -98,7 +98,32 @@ navigate, with a collapsible affordance that expands to the `Print`
     cursor, so local variables / non-globals will show "not a defined
     object". If that's too noisy, drop the `word_at_cursor` fallback in
     `subject_at_cursor` (qualid-only) — easy one-liner.
-- Phase 3 (pinned list) remains TODO.
+- **Phase 3: implemented.** A saved list of **live** entries below the
+  main item (`Live_info.entry`). Each carries its own originating session
+  and re-queries (About, and Print once expanded) when that session's
+  tip or the print options change — `tick_entries` issues one query per
+  idle session per tick (they serialise, so it converges); failures mark
+  that entry `(stale)`.
+  - **Append** the main item with the `+` glyph on its header (cols 5-6)
+    or the `+` key; deduped by subject+session; starts at type-only.
+  - **Remove** an entry with its `✕` glyph (cols 2-4).
+  - **Collapse level** cycles type → +definition → +information via the
+    entry's `▸`/`▾` glyph (cols 0-1).
+  - **Click routing:** `Live_info` owns wrapping and emits a per-row
+    `target_at` map (wrap line-by-line, tag the glyph row); the pane is
+    drawn with `~wrap:false` so wrapped-row indices line up with the
+    map. `mouse.ml` looks up `target_at ~row ~col`.
+  - Divergence from the chosen mockup: `+`/`✕` are inline left glyphs
+    (fixed columns, robust to wrapping) rather than right-aligned
+    `[+]`/`[x]`. Easy to switch if right-alignment is preferred.
+- **Go-to-definition glyph (🔍).** Each header row carries a 🔍 after the
+  subject; clicking it (or `l` in the focused pane, for the main item)
+  jumps to the identifier's definition. Reuses the `^L` machinery, which
+  was factored into `lib/editor/goto_def.ml` (`of_ident` / `of_require_module`)
+  and is now shared by the key and the glyph. Each item resolves via the
+  session its result came from (`main_locate` / `entry_locate`). The
+  click-target map records the glyph's (variable) column per row, since
+  it sits right of the subject.
 
 ## Phase 1 — live About pane (MVP)
 

@@ -50,9 +50,37 @@ val subject_at_cursor : Buffer.t -> string option
     current entry is left intact. *)
 val repin : Session.t -> string -> unit
 
-(** Rendered header + body as styled lines, formatted to [width] columns
-    and syntax-highlighted. Cached; recomputed when [width] changes or
-    the underlying result changes. *)
+(** Append the current (main) item to the saved list as a live entry
+    (deduped by subject + session); no-op when nothing is shown. *)
+val append_current : unit -> unit
+
+(** Remove the [i]th saved entry (0-based, top to bottom). *)
+val remove_entry : int -> unit
+
+(** Cycle the [i]th saved entry's collapse level: type → +definition →
+    +information → type. *)
+val cycle_entry : int -> unit
+
+(** Resolve a click at wrapped-row [row], content column [col] to an
+    action on the pane's header glyphs. Rows are indices into the lines
+    last returned by {!render}; [`None] when the click hits no glyph.
+    [`Goto] / [`EntryGoto i] are the 🔍 go-to-definition glyphs. *)
+val target_at :
+  row:int -> col:int ->
+  [ `None | `Expand | `Pin | `Append | `Goto
+  | `Cycle of int | `Remove of int | `EntryGoto of int ]
+
+(** (session, subject) for resolving a go-to-definition: the main item,
+    or the [i]th saved entry — each via the session its result came from.
+    [None] when there's nothing to resolve. *)
+val main_locate : unit -> (Session.t * string) option
+val entry_locate : int -> (Session.t * string) option
+
+(** Rendered pane as styled lines, formatted and wrapped to [width]
+    columns and syntax-highlighted (reserved error row, main item, then
+    the saved list). The lines are already wrapped, so the caller must
+    render them with wrapping disabled; row indices line up with
+    {!target_at}. Cached; recomputed when [width] or the content changes. *)
 val render : width:int -> Styled.line list
 
 (** Force the next {!render} to rebuild (e.g. after a theme change). *)

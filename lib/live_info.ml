@@ -6,11 +6,30 @@ type result = {
   about_pp : Pp.t list;
   mutable print_pp : Pp.t list option;  (* None until fetched on expand *)
   mutable print_pending : bool;         (* a Print query is in flight *)
+  mutable print_stale : bool;           (* displayed Print needs a refetch *)
+}
+
+(* A saved-list entry: a live, self-re-querying item below the main one.
+   Each carries its own originating session and re-queries (like the main
+   pin) when that session's tip or the print options change. [e_level]
+   cycles the collapse depth: 0 = type only, 1 = + definition, 2 = +
+   information. *)
+type entry = {
+  e_subject : string;
+  e_session : Session.t;
+  mutable e_about : Pp.t list;
+  mutable e_print : Pp.t list option;
+  mutable e_print_pending : bool;
+  mutable e_print_stale : bool;
+  mutable e_key : (Stateid.t * (string list * Interface.option_value) list) option;
+  mutable e_stale : bool;
+  mutable e_level : int;
 }
 
 let current : result option ref = ref None
 let expanded = ref false
 let src_session : Session.t option ref = ref None
+let saved : entry list ref = ref []
 
 (* Pin: freeze cursor-following on the current result. While pinned the
    subject is fixed and re-queries target the *originating* session, so
@@ -42,10 +61,18 @@ let key_changed (subject, tip, opts) =
   | Some (s', t', o') ->
     not (subject = s' && Stateid.equal tip t' && opts = o')
 
-(* Render cache, rebuilt when the width changes or [dirty] is set. *)
+(* Clickable regions, one per rendered (wrapped) row. The leading column
+   ranges are fixed by the header layout; the trailing int is the display
+   column of the 🔍 goto-definition glyph (which sits after the subject,
+   so its column varies). See [render]. *)
+type row_target = RT_main of int | RT_entry of int * int
+
+(* Render cache, rebuilt when the width changes or [dirty] is set.
+   [cache_targets] is aligned 1:1 with [cache_lines] (post-wrap). *)
 let dirty = ref true
 let cache_width = ref (-1)
 let cache_lines : Styled.line list ref = ref []
+let cache_targets : row_target option array ref = ref [||]
 
 let invalidate () = dirty := true
 
@@ -104,10 +131,20 @@ let first_line s =
 let deliver_success s subj msgs =
   (* Preserve the collapse state across re-queries of the same subject
      (tip / option changes); only a genuinely new subject re-collapses. *)
-  let same_subject =
-    match !current with Some r -> r.subject = subj | None -> false in
-  current := Some { subject = subj; about_pp = msgs;
-                    print_pp = None; print_pending = false };
+  let same_subject, old_print =
+    match !current with
+    | Some r when r.subject = subj -> true, r.print_pp
+    | _ -> false, None
+  in
+  current := Some {
+    subject = subj; about_pp = msgs;
+    (* On a same-subject re-query keep showing the previous definition
+       and refetch in the background, so stepping while pinned+expanded
+       doesn't flash the About body before Print returns. *)
+    print_pp = (if same_subject then old_print else None);
+    print_pending = false;
+    print_stale = same_subject;
+  };
   if not same_subject then expanded := false;
   src_session := Some s;
   stale := false;
@@ -130,12 +167,58 @@ let deliver_print subj msgs =
   match !current with
   | Some r when r.subject = subj ->
     r.print_pending <- false;
+    r.print_stale <- false;
     (* On a Print error (e.g. an axiom with no body) fall back to the
        About output so expanding always shows something sensible. *)
     if looks_like_error (pp_text msgs) then r.print_pp <- Some r.about_pp
     else r.print_pp <- Some msgs;
     invalidate ()
   | _ -> ()
+
+(* --- saved-list entry delivery --- *)
+
+let deliver_entry_about e msgs =
+  if looks_like_error (pp_text msgs) then begin
+    e.e_stale <- true; invalidate ()
+  end else begin
+    e.e_about <- msgs;
+    (* Keep the old definition shown; refetch it in the background. *)
+    e.e_print_stale <- true;
+    e.e_print_pending <- false;
+    e.e_stale <- false;
+    invalidate ()
+  end
+
+let deliver_entry_print e msgs =
+  e.e_print_pending <- false;
+  e.e_print_stale <- false;
+  if looks_like_error (pp_text msgs) then e.e_print <- Some e.e_about
+  else e.e_print <- Some msgs;
+  invalidate ()
+
+(* Re-query each saved entry against its own session when that session's
+   tip or the print options change; fetch its definition lazily once it's
+   expanded past the type-only level. One query per (idle) session per
+   tick — queries serialise within a session, so this converges. *)
+let tick_entries opts =
+  List.iter (fun e ->
+    if not (Session.is_busy e.e_session) then begin
+      let k = Some (Session.tip e.e_session, opts) in
+      if e.e_key <> k then begin
+        e.e_key <- k;
+        Session.query e.e_session ~extra_opts:opts
+          ~on_done:(fun msgs -> deliver_entry_about e msgs)
+          ("About " ^ e.e_subject ^ ".")
+      end
+      else if e.e_level >= 1 && (e.e_print = None || e.e_print_stale)
+              && not e.e_print_pending then begin
+        e.e_print_pending <- true;
+        Session.query e.e_session ~extra_opts:opts
+          ~on_done:(fun msgs -> deliver_entry_print e msgs)
+          ("Print " ^ e.e_subject ^ ".")
+      end
+    end
+  ) !saved
 
 (* --- per-frame driver --- *)
 
@@ -155,14 +238,14 @@ let repin s w =
     ("About " ^ w ^ ".")
 
 let tick session buf =
+  let opts = Printopts.to_set_options () in
   (* While pinned, target the originating session (so the pin survives
      switching file tabs) and keep the subject frozen; otherwise follow
      the active tab's session and cursor. *)
   let active_session = if !pinned then !src_session else session in
-  match active_session with
+  (match active_session with
   | None -> ()
   | Some s ->
-    let opts = Printopts.to_set_options () in
     let tip = Session.tip s in
     let mode = if !pinned then `Auto else `Cursor in
     let subject =
@@ -189,20 +272,35 @@ let tick session buf =
        None) whenever the key changes, so this re-fetches automatically. *)
     (match !current with
      | Some r
-       when !expanded && r.print_pp = None && not r.print_pending
-            && not (Session.is_busy s) ->
+       when !expanded && (r.print_pp = None || r.print_stale)
+            && not r.print_pending && not (Session.is_busy s) ->
        r.print_pending <- true;
        let subj = r.subject in
        Session.query s ~extra_opts:opts
          ~on_done:(fun msgs -> deliver_print subj msgs)
          ("Print " ^ subj ^ ".")
-     | _ -> ())
+     | _ -> ()));
+  (* Saved-list entries re-query independently against their own sessions
+     (which [Tab.poll_all] keeps polling), regardless of the main item. *)
+  tick_entries opts
 
 (* --- accessors --- *)
 
 let has_content () = !current <> None
 let current_subject () = match !current with Some r -> Some r.subject | None -> None
 let is_expanded () = !expanded
+
+(* (session, subject) to resolve a go-to-definition for the main item /
+   the i-th saved entry — each via the session its result came from. *)
+let main_locate () =
+  match !current, !src_session with
+  | Some r, Some s -> Some (s, r.subject)
+  | _ -> None
+
+let entry_locate i =
+  match List.nth_opt !saved i with
+  | Some e -> Some (e.e_session, e.e_subject)
+  | None -> None
 
 let toggle_expand () =
   expanded := not !expanded;
@@ -225,6 +323,40 @@ let toggle_pin () =
     invalidate ()
   end
 
+(* Append the current (main) item to the saved list as a live entry,
+   capturing its session and current context. Deduped by subject+session.
+   Defaults to the type-only collapse level. *)
+let append_current () =
+  match !current, !src_session with
+  | Some r, Some s ->
+    let dup = List.exists
+      (fun e -> e.e_subject = r.subject && e.e_session == s) !saved in
+    if not dup then begin
+      let e = {
+        e_subject = r.subject;
+        e_session = s;
+        e_about = r.about_pp;
+        e_print = r.print_pp;
+        e_print_pending = false;
+        e_print_stale = false;
+        e_key = Some (Session.tip s, Printopts.to_set_options ());
+        e_stale = false;
+        e_level = 0;
+      } in
+      saved := !saved @ [e];
+      invalidate ()
+    end
+  | _ -> ()
+
+let remove_entry i =
+  saved := List.filteri (fun j _ -> j <> i) !saved;
+  invalidate ()
+
+let cycle_entry i =
+  match List.nth_opt !saved i with
+  | Some e -> e.e_level <- (e.e_level + 1) mod 3; invalidate ()
+  | None -> ()
+
 (* --- rendering --- *)
 
 let glyph_collapsed = "\xe2\x96\xb8 "  (* ▸  (same as file-tree) *)
@@ -236,15 +368,26 @@ let glyph_expanded  = "\xe2\x96\xbe "  (* ▾ *)
 let pin_off = "\xe2\x97\x8c  "    (* ◌ + two spaces  → click to pin *)
 let pin_on  = "\xf0\x9f\x93\x8c " (* 📌 + one space  → pinned (frozen) *)
 
-(* Format a Pp list to [width], then highlight the whole snippet once so
-   the lexer keeps cross-line context, and dim the info/prose lines. *)
-let format_body ~width pps =
+(* Main header "+" (append to list) at cols 5-6; entry "✕" (remove) at
+   cols 2-4. The collapse/cycle glyph stays at cols 0-1 on every header. *)
+let append_glyph = "+ "
+let remove_glyph = "\xe2\x9c\x95  "  (* ✕ + two spaces *)
+
+(* Go-to-definition affordance, placed after the subject (two-space gap).
+   🔍 is a 2-wide emoji. *)
+let goto_glyph = "\xf0\x9f\x94\x8d"  (* 🔍 *)
+
+let pp_to_texts ~width pps =
+  List.concat_map
+    (fun pp -> String.split_on_char '\n' (Session.string_of_pp ~width pp))
+    pps
+
+(* Highlight a list of text lines (Rocq snippet) once so the lexer keeps
+   cross-line context; info/prose lines are dimmed instead. An optional
+   [indent] prefixes each line (used to nest saved-list entries). *)
+let highlight_texts ?(indent="") texts =
   let a = Theme.attrs () in
-  let texts =
-    List.concat_map
-      (fun pp -> String.split_on_char '\n' (Session.string_of_pp ~width pp))
-      pps
-  in
+  let texts = List.map (fun t -> indent ^ t) texts in
   let spans = Highlight.highlight_text (String.concat "\n" texts) in
   List.mapi (fun i text ->
     if is_info_line text then
@@ -259,43 +402,121 @@ let format_body ~width pps =
     end
   ) texts
 
+let format_body ~width pps = highlight_texts (pp_to_texts ~width pps)
+
+(* Split an About rendering into its leading type signature (lines up to
+   the first blank) and the rest (info / Arguments / etc.). *)
+let split_type_rest texts =
+  let rec go acc = function
+    | [] -> (List.rev acc, [])
+    | "" :: tl -> (List.rev acc, tl)
+    | x :: tl -> go (x :: acc) tl
+  in
+  go [] texts
+
+(* Body lines for a saved entry at its collapse level, indented to nest
+   under its header: 0 = type only, 1 = + definition, 2 = + information. *)
+let entry_lines ~width e =
+  let w = max 1 (width - 2) in
+  let about_texts = pp_to_texts ~width:w e.e_about in
+  let (type_texts, rest_texts) = split_type_rest about_texts in
+  let def_texts () =
+    match e.e_print with
+    | Some p -> pp_to_texts ~width:w p
+    | None -> type_texts  (* not fetched yet, or no body *)
+  in
+  let body_texts =
+    match e.e_level with
+    | 0 -> type_texts
+    | 1 -> def_texts ()
+    | _ -> def_texts () @ rest_texts
+  in
+  highlight_texts ~indent:"  " body_texts
+
 let render ~width =
   if (not !dirty) && !cache_width = width then !cache_lines
   else begin
     let a = Theme.attrs () in
-    let err_line msg = Styled.style ("  " ^ msg) { a.ga_default with dim = true } in
-    let lines =
-      match !current with
-      | None ->
-        (* Nothing good yet: show the error if there is one, else a hint. *)
-        (match !error_msg with
-         | Some msg -> [ err_line msg ]
-         | None ->
-           [ Styled.style "  (move the cursor onto an identifier)"
-               { a.ga_default with dim = true } ])
-      | Some r ->
-        (* Reserved top row: dimmed error, or blank when clear. *)
-        let error_row =
-          match !error_msg with Some msg -> err_line msg | None -> Styled.plain ""
-        in
-        let g = if !expanded then glyph_expanded else glyph_collapsed in
-        let pin = if !pinned then pin_on else pin_off in
-        let title = Styled.style (g ^ pin ^ r.subject) { a.ga_default with bold = true } in
-        let header =
-          if !pinned && !stale then
-            Styled.concat
-              [ title; Styled.style "  (stale)" { a.ga_default with dim = true } ]
-          else title
-        in
-        let body_pp =
-          if !expanded then
-            (match r.print_pp with Some p -> p | None -> r.about_pp)
-          else r.about_pp
-        in
-        error_row :: header :: format_body ~width body_pp
+    let dim = { a.ga_default with dim = true } in
+    let bold = { a.ga_default with bold = true } in
+    let err_line msg = Styled.style ("  " ^ msg) dim in
+    let stale_suffix t = Styled.concat [ t; Styled.style "  (stale)" dim ] in
+    (* A header line "<lead><subject>" + the 🔍 goto glyph; returns the
+       styled line and the display column the glyph lands on. *)
+    let header_with_goto lead subject stale =
+      let lead_w = Utf8.string_width lead and subj_w = Utf8.string_width subject in
+      let goto_col = lead_w + subj_w + 2 in  (* two-space gap before 🔍 *)
+      let title =
+        Styled.concat [ Styled.style (lead ^ subject) bold;
+                        Styled.style ("  " ^ goto_glyph) dim ] in
+      ((if stale then stale_suffix title else title), goto_col)
     in
-    cache_lines := lines;
+    (* Build semantic rows paired with an optional click target; wrap
+       each one below so targets stay aligned to displayed rows. *)
+    let rows = ref [] in
+    let push ?target line = rows := (line, target) :: !rows in
+    (match !current with
+     | None ->
+       (match !error_msg with
+        | Some msg -> push (err_line msg)
+        | None ->
+          push (Styled.style "  (move the cursor onto an identifier)" dim))
+     | Some r ->
+       (* Reserved top row: dimmed error, or blank when clear. *)
+       push (match !error_msg with Some msg -> err_line msg | None -> Styled.plain "");
+       let g = if !expanded then glyph_expanded else glyph_collapsed in
+       let pin = if !pinned then pin_on else pin_off in
+       let (header, goto_col) =
+         header_with_goto (g ^ pin ^ append_glyph) r.subject (!pinned && !stale) in
+       push ~target:(RT_main goto_col) header;
+       let body_pp =
+         if !expanded then (match r.print_pp with Some p -> p | None -> r.about_pp)
+         else r.about_pp
+       in
+       List.iter (fun l -> push l) (format_body ~width body_pp);
+       (* Saved list below, separated by a blank row. *)
+       if !saved <> [] then push (Styled.plain "");
+       List.iteri (fun i e ->
+         let cyc = if e.e_level = 0 then glyph_collapsed else glyph_expanded in
+         let (eheader, goto_col) =
+           header_with_goto (cyc ^ remove_glyph) e.e_subject e.e_stale in
+         push ~target:(RT_entry (i, goto_col)) eheader;
+         List.iter (fun l -> push l) (entry_lines ~width e)
+       ) !saved);
+    let semantic = List.rev !rows in
+    (* Wrap each semantic line; only its first wrapped row keeps the
+       target (the glyphs live there). *)
+    let wlines = ref [] and wtargets = ref [] in
+    List.iter (fun (line, tgt) ->
+      let ws = match Styled.wrap width [line] with [] -> [line] | ws -> ws in
+      List.iteri (fun j wl ->
+        wlines := wl :: !wlines;
+        wtargets := (if j = 0 then tgt else None) :: !wtargets
+      ) ws
+    ) semantic;
+    cache_lines := List.rev !wlines;
+    cache_targets := Array.of_list (List.rev !wtargets);
     cache_width := width;
     dirty := false;
-    lines
+    !cache_lines
   end
+
+(* Map a click in the (already-wrapped) pane to an action, using the
+   fixed header-glyph columns. [row] is the wrapped-line index, [col] the
+   content display column. *)
+let target_at ~row ~col =
+  let on_goto goto_col = col >= goto_col && col <= goto_col + 1 in
+  if row < 0 || row >= Array.length !cache_targets then `None
+  else match (!cache_targets).(row) with
+  | None -> `None
+  | Some (RT_main goto_col) ->
+    if col <= 1 then `Expand
+    else if col <= 4 then `Pin
+    else if col <= 6 then `Append
+    else if on_goto goto_col then `Goto
+    else `None
+  | Some (RT_entry (i, goto_col)) ->
+    if col <= 1 then `Cycle i
+    else if col <= 4 then `Remove i
+    else if on_goto goto_col then `EntryGoto i
+    else `None

@@ -424,12 +424,14 @@ let render_messages (_ctx : Editor_context.t) r (tab : Tab.t) =
       r Render.PMessages ms lines;
     tab.rocq_msg.rms_scroll <- !ms
   | Msg_pane.Info ->
-    (* Live About/Print pane: content from Live_info, re-formatted to
-       the current pane width each frame (Live_info caches by width). *)
+    (* Live About/Print pane: content from Live_info, re-formatted to the
+       current pane width each frame (Live_info caches by width). The
+       lines are already wrapped by Live_info so the click-target rows
+       stay aligned, so render without re-wrapping. *)
     let width = pp_width_for_pane r Render.PMessages in
     let lines = Live_info.render ~width in
     let ms = ref active.scroll in
-    render_text_pane ~sel:active.sel
+    render_text_pane ~sel:active.sel ~wrap:false
       ~set_cache:(fun l -> active.lines_cache <- l)
       r Render.PMessages ms lines;
     active.scroll <- !ms

@@ -215,25 +215,35 @@ let handle (ctx : Editor_context.t) (mev : Input.mouse_event) (tab : Tab.t) r
       ctx.focus <-
         (if pane = Render.PGoals then Editor_context.FGoals
          else Editor_context.FMessages);
-      (* Click on the Info pane's header glyphs: cols 0-1 = ▸/▾ toggle
-         the About⇄Print collapsible; cols 2-3 = ◌/📌 toggle the pin. *)
+      (* Clicks on the Info pane header glyphs (Live_info maps the fixed
+         glyph columns per row): main row ▸/▾ expand, ◌/📌 pin, + append;
+         entry row ▸/▾ cycle collapse, ✕ remove. *)
       let info_click =
         if pane = Render.PMessages
            && Msg_pane.kind_eq (Msg_pane.active_kind ()) Msg_pane.Info
            && Live_info.has_content ()
         then match Geom.screen_to_pane_pos tab r ~x ~y `Messages with
-          | Some (0, _) ->
+          | Some (row, _) ->
             let rect = Render.pane_rect r Render.PMessages in
             let dc = x - rect.col - 1 in  (* content display column *)
-            if dc >= 0 && dc <= 1 then `Expand
-            else if dc >= 2 && dc <= 3 then `Pin
-            else `None
-          | _ -> `None
+            Live_info.target_at ~row ~col:dc
+          | None -> `None
         else `None
       in
       (match info_click with
        | `Expand -> Live_info.toggle_expand ()
        | `Pin -> Live_info.toggle_pin ()
+       | `Append -> Live_info.append_current ()
+       | `Cycle i -> Live_info.cycle_entry i
+       | `Remove i -> Live_info.remove_entry i
+       | `Goto ->
+         (match Live_info.main_locate () with
+          | Some (s, w) -> Goto_def.of_ident ctx r ~tab ~session:s w
+          | None -> ())
+       | `EntryGoto i ->
+         (match Live_info.entry_locate i with
+          | Some (s, w) -> Goto_def.of_ident ctx r ~tab ~session:s w
+          | None -> ())
        | `None -> ());
       let info_toggle = info_click <> `None in
       (* Build / Errors / Search tab click → jump to entry *)
