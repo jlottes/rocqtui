@@ -29,6 +29,17 @@ val is_expanded : unit -> bool
     next idle {!tick}. *)
 val toggle_expand : unit -> unit
 
+(** Whether the displayed result is pinned (frozen against
+    cursor-following). *)
+val is_pinned : unit -> bool
+
+(** Pin the current result (no-op if there's nothing shown), or unpin.
+    While pinned the subject is frozen and re-queries target the
+    originating session, so the pin survives switching file tabs; it
+    still re-queries when that session's tip or the print options change.
+    Unpinning resumes cursor-following. *)
+val toggle_pin : unit -> unit
+
 (** Rendered header + body as styled lines, formatted to [width] columns
     and syntax-highlighted. Cached; recomputed when [width] changes or
     the underlying result changes. *)

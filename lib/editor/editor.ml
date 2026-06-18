@@ -705,10 +705,12 @@ let handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r =
            tab.rocq_msg.rms_scroll <- !scroll_r;
            (match result with Some a -> a | None -> Continue)
          | Msg_pane.Info ->
-           (* Enter / Space toggles the About⇄Print collapsible. *)
+           (* Enter/Space toggles the About⇄Print collapsible; p pins. *)
            (match ev with
             | Input.Special (Input.Enter, _) | Input.Key (32, _) ->
               Live_info.toggle_expand (); Continue
+            | Input.Key (112, _) ->  (* p *)
+              Live_info.toggle_pin (); Continue
             | _ ->
               let mt = Msg_pane.active_tab () in
               let scroll_r = ref mt.scroll in

@@ -12,6 +12,15 @@ let current : result option ref = ref None
 let expanded = ref false
 let src_session : Session.t option ref = ref None
 
+(* Pin: freeze cursor-following on the current result. While pinned the
+   subject is fixed and re-queries target the *originating* session, so
+   the pinned item survives switching to another file tab. [stale] flags
+   that the pinned subject is no longer in scope at its session's current
+   tip (e.g. rewound before its definition) — we keep the last good
+   result on screen and mark it faintly. *)
+let pinned = ref false
+let stale = ref false
+
 (* Dedup key for the live [About] query: the (subject, tip, options)
    triple it was last issued for. We re-fire when any component changes —
    a symbol can go from undefined to defined as the verified region
@@ -80,7 +89,11 @@ let pp_text msgs =
   String.concat "\n" (List.map (fun pp -> Session.string_of_pp pp) msgs)
 
 let deliver_about s subj msgs =
-  if looks_like_error (pp_text msgs) then ()  (* keep last good result *)
+  if looks_like_error (pp_text msgs) then begin
+    (* Keep the last good result. When pinned, the symbol has fallen out
+       of scope at the current tip — flag the displayed result stale. *)
+    if !pinned then begin stale := true; invalidate () end
+  end
   else begin
     (* Preserve the collapse state across re-queries of the same subject
        (tip / option changes); only a genuinely new subject re-collapses. *)
@@ -90,6 +103,7 @@ let deliver_about s subj msgs =
                       print_pp = None; print_pending = false };
     if not same_subject then expanded := false;
     src_session := Some s;
+    stale := false;
     invalidate ()
   end
 
@@ -112,15 +126,23 @@ let subject_at_cursor buf =
   | None -> Buffer.word_at_cursor buf
 
 let tick session buf =
-  match session with
+  (* While pinned, target the originating session (so the pin survives
+     switching file tabs) and keep the subject frozen; otherwise follow
+     the active tab's session and cursor. *)
+  let active_session = if !pinned then !src_session else session in
+  match active_session with
   | None -> ()
   | Some s ->
     let opts = Printopts.to_set_options () in
     let tip = Session.tip s in
-    (* Follow the cursor: (re-)issue About when the subject, tip, or
-       options change and the session is idle. Keep the last result when
-       on a non-identifier (subject = None). *)
-    (match subject_at_cursor buf with
+    let subject =
+      if !pinned then (match !current with Some r -> Some r.subject | None -> None)
+      else subject_at_cursor buf
+    in
+    (* (Re-)issue About when the subject, tip, or options change and the
+       session is idle. Keep the last result when on a non-identifier
+       (subject = None). *)
+    (match subject with
      | Some w when key_changed (w, tip, opts) && not (Session.is_busy s) ->
        last_about_key := Some (w, tip, opts);
        Session.query s ~extra_opts:opts
@@ -152,10 +174,32 @@ let toggle_expand () =
   invalidate ()
   (* the Print fetch (if needed) happens on the next idle tick *)
 
+let is_pinned () = !pinned
+
+(* Pin the current result (no-op when there's nothing to pin), or unpin.
+   Pinning freezes cursor-following; unpinning resumes it on the next
+   tick. *)
+let toggle_pin () =
+  if !pinned then begin
+    pinned := false;
+    stale := false;
+    invalidate ()
+  end else if !current <> None then begin
+    pinned := true;
+    stale := false;
+    invalidate ()
+  end
+
 (* --- rendering --- *)
 
 let glyph_collapsed = "\xe2\x96\xb8 "  (* ▸  (same as file-tree) *)
 let glyph_expanded  = "\xe2\x96\xbe "  (* ▾ *)
+
+(* Pin affordance, fixed at 3 display columns so the subject stays put
+   when toggling: ◌ (1 col) padded with two spaces; 📌 (2 cols) plus one.
+   See docs/LIVE_INFO_PLAN.md for the chosen glyph pair. *)
+let pin_off = "\xe2\x97\x8c  "    (* ◌ + two spaces  → click to pin *)
+let pin_on  = "\xf0\x9f\x93\x8c " (* 📌 + one space  → pinned (frozen) *)
 
 (* Format a Pp list to [width], then highlight the whole snippet once so
    the lexer keeps cross-line context, and dim the info/prose lines. *)
@@ -191,7 +235,14 @@ let render ~width =
             { a.ga_default with dim = true } ]
       | Some r ->
         let g = if !expanded then glyph_expanded else glyph_collapsed in
-        let header = Styled.style (g ^ r.subject) { a.ga_default with bold = true } in
+        let pin = if !pinned then pin_on else pin_off in
+        let title = Styled.style (g ^ pin ^ r.subject) { a.ga_default with bold = true } in
+        let header =
+          if !pinned && !stale then
+            Styled.concat
+              [ title; Styled.style "  (stale)" { a.ga_default with dim = true } ]
+          else title
+        in
         let body_pp =
           if !expanded then
             (match r.print_pp with Some p -> p | None -> r.about_pp)

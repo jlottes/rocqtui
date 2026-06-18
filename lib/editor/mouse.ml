@@ -215,17 +215,27 @@ let handle (ctx : Editor_context.t) (mev : Input.mouse_event) (tab : Tab.t) r
       ctx.focus <-
         (if pane = Render.PGoals then Editor_context.FGoals
          else Editor_context.FMessages);
-      (* Click on the Info pane's ▸/▾ glyph (the header line's first two
-         columns) toggles the About⇄Print collapsible. *)
-      let info_toggle =
-        pane = Render.PMessages
-        && Msg_pane.kind_eq (Msg_pane.active_kind ()) Msg_pane.Info
-        && Live_info.has_content ()
-        && (match Geom.screen_to_pane_pos tab r ~x ~y `Messages with
-            | Some (0, byte_col) -> byte_col <= 3  (* the "▸ " affordance *)
-            | _ -> false)
+      (* Click on the Info pane's header glyphs: cols 0-1 = ▸/▾ toggle
+         the About⇄Print collapsible; cols 2-3 = ◌/📌 toggle the pin. *)
+      let info_click =
+        if pane = Render.PMessages
+           && Msg_pane.kind_eq (Msg_pane.active_kind ()) Msg_pane.Info
+           && Live_info.has_content ()
+        then match Geom.screen_to_pane_pos tab r ~x ~y `Messages with
+          | Some (0, _) ->
+            let rect = Render.pane_rect r Render.PMessages in
+            let dc = x - rect.col - 1 in  (* content display column *)
+            if dc >= 0 && dc <= 1 then `Expand
+            else if dc >= 2 && dc <= 3 then `Pin
+            else `None
+          | _ -> `None
+        else `None
       in
-      if info_toggle then Live_info.toggle_expand ();
+      (match info_click with
+       | `Expand -> Live_info.toggle_expand ()
+       | `Pin -> Live_info.toggle_pin ()
+       | `None -> ());
+      let info_toggle = info_click <> `None in
       (* Build / Errors / Search tab click → jump to entry *)
       let jumped_to_error =
         if pane = Render.PMessages then begin

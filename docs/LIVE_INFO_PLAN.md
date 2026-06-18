@@ -71,7 +71,19 @@ navigate, with a collapsible affordance that expands to the `Print`
   matching. `on_done : Pp.t list -> unit` left unchanged.
 - Tick is gated on the Info tab being the **visible** sub-tab, so we
   don't churn the STM with queries while it's hidden.
-- Phases 2 (pin) and 3 (pinned list) remain TODO.
+
+- **Phase 2: implemented.** Pin via the `◌`→`📌` header glyph (click
+  cols 2-3) or `p` when the Info pane is focused. Pinning freezes
+  cursor-following: the subject is held fixed and re-queries target the
+  **originating** session (stored in `src_session`), so the pinned item
+  survives switching to another file tab (all sessions are polled by
+  `Tab.poll_all`). It still re-queries when that session's tip or the
+  print options change. When the pinned subject falls out of scope
+  (e.g. rewound before its definition) the re-query errors, the last
+  good result is kept, and the header gets a faint `(stale)` marker. The
+  glyphs occupy a fixed 3-col field so the subject doesn't shift on
+  toggle.
+- Phase 3 (pinned list) remains TODO.
 
 ## Phase 1 — live About pane (MVP)
 
