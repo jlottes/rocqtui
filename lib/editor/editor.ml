@@ -524,11 +524,21 @@ let handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r =
       Some Continue
     end
     else if Keymatch.match_binding ev Keys.about then begin
-      (* Toggle the live Info pane. Show + activate it (without stealing
-         focus) when it isn't the active messages sub-tab; hide it when
-         it is. The manual "About → Rocq pane" query stays on Alt+Q. *)
-      if Msg_pane.kind_eq (Msg_pane.active_kind ()) Msg_pane.Info then
-        Msg_pane.remove Msg_pane.Info
+      (* Toggle the live Info pane. When it's showing and pinned with the
+         cursor on a *different* identifier, re-pin to that identifier
+         (staying pinned) instead of closing. Otherwise show+activate it
+         (without stealing focus) / hide it. The manual "About → Rocq
+         pane" query stays on Alt+Q. *)
+      if Msg_pane.kind_eq (Msg_pane.active_kind ()) Msg_pane.Info then begin
+        let repinned =
+          match Live_info.is_pinned (), session,
+                Live_info.subject_at_cursor tab.buf with
+          | true, Some s, Some w when Some w <> Live_info.current_subject () ->
+            Live_info.repin s w; true
+          | _ -> false
+        in
+        if not repinned then Msg_pane.remove Msg_pane.Info
+      end
       else begin
         ignore (Msg_pane.ensure_after ~after:Msg_pane.Rocq Msg_pane.Info);
         Msg_pane.activate Msg_pane.Info

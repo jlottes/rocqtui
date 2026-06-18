@@ -40,6 +40,16 @@ val is_pinned : unit -> bool
     Unpinning resumes cursor-following. *)
 val toggle_pin : unit -> unit
 
+(** The qualified identifier under [buf]'s cursor (dotted names), falling
+    back to the plain word — the same choice the live tick uses. *)
+val subject_at_cursor : Buffer.t -> string option
+
+(** Re-pin to subject [w] queried against session [s] (used by ^A while
+    pinned). On success [w] replaces the pinned entry and the pinned
+    state is kept; on failure the error is shown in the top row and the
+    current entry is left intact. *)
+val repin : Session.t -> string -> unit
+
 (** Rendered header + body as styled lines, formatted to [width] columns
     and syntax-highlighted. Cached; recomputed when [width] changes or
     the underlying result changes. *)

@@ -21,6 +21,13 @@ let src_session : Session.t option ref = ref None
 let pinned = ref false
 let stale = ref false
 
+(* Error for the reserved top row: set when a cursor-driven query (live
+   navigation, or an explicit ^A re-pin) fails; cleared on the next
+   success or when the cursor leaves the failing identifier. A pinned
+   *auto* re-query failure uses [stale] instead, so navigation in the
+   pinned state never raises the error row (only an explicit ^A does). *)
+let error_msg : string option ref = ref None
+
 (* Dedup key for the live [About] query: the (subject, tip, options)
    triple it was last issued for. We re-fire when any component changes —
    a symbol can go from undefined to defined as the verified region
@@ -88,24 +95,36 @@ let is_info_line text =
 let pp_text msgs =
   String.concat "\n" (List.map (fun pp -> Session.string_of_pp pp) msgs)
 
-let deliver_about s subj msgs =
-  if looks_like_error (pp_text msgs) then begin
-    (* Keep the last good result. When pinned, the symbol has fallen out
-       of scope at the current tip — flag the displayed result stale. *)
-    if !pinned then begin stale := true; invalidate () end
-  end
-  else begin
-    (* Preserve the collapse state across re-queries of the same subject
-       (tip / option changes); only a genuinely new subject re-collapses. *)
-    let same_subject =
-      match !current with Some r -> r.subject = subj | None -> false in
-    current := Some { subject = subj; about_pp = msgs;
-                      print_pp = None; print_pending = false };
-    if not same_subject then expanded := false;
-    src_session := Some s;
-    stale := false;
-    invalidate ()
-  end
+let first_line s =
+  let s = String.trim s in
+  match String.index_opt s '\n' with
+  | Some i -> String.sub s 0 i
+  | None -> s
+
+let deliver_success s subj msgs =
+  (* Preserve the collapse state across re-queries of the same subject
+     (tip / option changes); only a genuinely new subject re-collapses. *)
+  let same_subject =
+    match !current with Some r -> r.subject = subj | None -> false in
+  current := Some { subject = subj; about_pp = msgs;
+                    print_pp = None; print_pending = false };
+  if not same_subject then expanded := false;
+  src_session := Some s;
+  stale := false;
+  error_msg := None;
+  invalidate ()
+
+(* [mode] selects how a failed query is surfaced (the last good result is
+   kept on screen either way): [`Cursor] — live navigation or an explicit
+   ^A re-pin — puts the message in the reserved error row; [`Auto] — a
+   pinned re-query forced by a tip/option change — marks the pinned entry
+   stale instead, so navigating while pinned never raises the error row. *)
+let deliver_about ~mode s subj msgs =
+  if looks_like_error (pp_text msgs) then
+    (match mode with
+     | `Cursor -> error_msg := Some (first_line (pp_text msgs)); invalidate ()
+     | `Auto -> stale := true; invalidate ())
+  else deliver_success s subj msgs
 
 let deliver_print subj msgs =
   match !current with
@@ -125,6 +144,16 @@ let subject_at_cursor buf =
   | Some _ as x -> x
   | None -> Buffer.word_at_cursor buf
 
+(* Explicit ^A re-pin to [w] against session [s]: query now (forcing the
+   key) and route the result through the [`Cursor] path, so a failure
+   shows in the error row and leaves the current pinned entry intact. *)
+let repin s w =
+  let opts = Printopts.to_set_options () in
+  last_about_key := Some (w, Session.tip s, opts);
+  Session.query s ~extra_opts:opts
+    ~on_done:(fun msgs -> deliver_about ~mode:`Cursor s w msgs)
+    ("About " ^ w ^ ".")
+
 let tick session buf =
   (* While pinned, target the originating session (so the pin survives
      switching file tabs) and keep the subject frozen; otherwise follow
@@ -135,10 +164,16 @@ let tick session buf =
   | Some s ->
     let opts = Printopts.to_set_options () in
     let tip = Session.tip s in
+    let mode = if !pinned then `Auto else `Cursor in
     let subject =
       if !pinned then (match !current with Some r -> Some r.subject | None -> None)
       else subject_at_cursor buf
     in
+    (* Unpinned: clear the error row once the cursor leaves a failing
+       identifier (onto whitespace / a keyword). *)
+    if (not !pinned) && subject = None && !error_msg <> None then begin
+      error_msg := None; invalidate ()
+    end;
     (* (Re-)issue About when the subject, tip, or options change and the
        session is idle. Keep the last result when on a non-identifier
        (subject = None). *)
@@ -146,7 +181,7 @@ let tick session buf =
      | Some w when key_changed (w, tip, opts) && not (Session.is_busy s) ->
        last_about_key := Some (w, tip, opts);
        Session.query s ~extra_opts:opts
-         ~on_done:(fun msgs -> deliver_about s w msgs)
+         ~on_done:(fun msgs -> deliver_about ~mode s w msgs)
          ("About " ^ w ^ ".")
      | _ -> ());
     (* Lazily fetch Print for the current subject once expanded, at the
@@ -228,12 +263,21 @@ let render ~width =
   if (not !dirty) && !cache_width = width then !cache_lines
   else begin
     let a = Theme.attrs () in
+    let err_line msg = Styled.style ("  " ^ msg) { a.ga_default with dim = true } in
     let lines =
       match !current with
       | None ->
-        [ Styled.style "  (move the cursor onto an identifier)"
-            { a.ga_default with dim = true } ]
+        (* Nothing good yet: show the error if there is one, else a hint. *)
+        (match !error_msg with
+         | Some msg -> [ err_line msg ]
+         | None ->
+           [ Styled.style "  (move the cursor onto an identifier)"
+               { a.ga_default with dim = true } ])
       | Some r ->
+        (* Reserved top row: dimmed error, or blank when clear. *)
+        let error_row =
+          match !error_msg with Some msg -> err_line msg | None -> Styled.plain ""
+        in
         let g = if !expanded then glyph_expanded else glyph_collapsed in
         let pin = if !pinned then pin_on else pin_off in
         let title = Styled.style (g ^ pin ^ r.subject) { a.ga_default with bold = true } in
@@ -248,7 +292,7 @@ let render ~width =
             (match r.print_pp with Some p -> p | None -> r.about_pp)
           else r.about_pp
         in
-        header :: format_body ~width body_pp
+        error_row :: header :: format_body ~width body_pp
     in
     cache_lines := lines;
     cache_width := width;

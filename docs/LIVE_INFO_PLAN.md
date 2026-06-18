@@ -83,6 +83,21 @@ navigate, with a collapsible affordance that expands to the `Print`
   good result is kept, and the header gets a faint `(stale)` marker. The
   glyphs occupy a fixed 3-col field so the subject doesn't shift on
   toggle.
+- **Phase 2 refinements:**
+  - `^A` while the pane is showing and **pinned** with the cursor on a
+    *different* identifier re-pins to it (stays pinned) instead of
+    closing (`Live_info.repin`). Same-identifier / non-identifier `^A`
+    still closes.
+  - **Reserved error row** (top of the pane): a dimmed message when a
+    cursor-driven query fails (live navigation, or an explicit `^A`
+    re-pin), blank otherwise; the last good result stays below it. A
+    *pinned auto* re-query failure (tip/option change, e.g. rewind) uses
+    the `(stale)` header marker instead — so navigating while pinned
+    never raises the error row, only an explicit `^A` does.
+  - Note: unpinned, the error row reflects the identifier under the
+    cursor, so local variables / non-globals will show "not a defined
+    object". If that's too noisy, drop the `word_at_cursor` fallback in
+    `subject_at_cursor` (qualid-only) — easy one-liner.
 - Phase 3 (pinned list) remains TODO.
 
 ## Phase 1 — live About pane (MVP)
