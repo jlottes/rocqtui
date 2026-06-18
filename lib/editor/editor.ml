@@ -458,25 +458,26 @@ let handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r =
       Some Continue
     end
     else if Keymatch.match_binding ev Keys.about then begin
-      (* Toggle the live Info pane. When it's showing and pinned with the
-         cursor on a *different* identifier, re-pin to that identifier
-         (staying pinned) instead of closing. Otherwise show+activate it
-         (without stealing focus) / hide it. The manual "About → Rocq
-         pane" query stays on Alt+Q. *)
-      if Msg_pane.kind_eq (Msg_pane.active_kind ()) Msg_pane.Info then begin
-        let repinned =
-          match Live_info.is_pinned (), session,
-                Live_info.subject_at_cursor tab.buf with
-          | true, Some s, Some w when Some w <> Live_info.current_subject () ->
-            Live_info.repin s w; true
-          | _ -> false
-        in
-        if not repinned then Msg_pane.remove Msg_pane.Info
-      end
-      else begin
+      (* ^A on the live Info pane. Re-pin to the identifier under the
+         cursor whenever pinned on a *different* one — done up front so a
+         single press both surfaces the pane and re-pins (no double-tap).
+         Otherwise: show + activate it (without stealing focus) when
+         hidden, or hide it when already up with nothing to re-pin. The
+         manual "About → Rocq pane" query stays on Alt+Q. *)
+      let was_active = Msg_pane.kind_eq (Msg_pane.active_kind ()) Msg_pane.Info in
+      let repinned =
+        match Live_info.is_pinned (), session,
+              Live_info.subject_at_cursor tab.buf with
+        | true, Some s, Some w when Some w <> Live_info.current_subject () ->
+          Live_info.repin s w; true
+        | _ -> false
+      in
+      if not was_active then begin
         ignore (Msg_pane.ensure_after ~after:Msg_pane.Rocq Msg_pane.Info);
         Msg_pane.activate Msg_pane.Info
-      end;
+      end
+      else if not repinned then
+        Msg_pane.remove Msg_pane.Info;
       Some Continue
     end
     else if Keymatch.match_binding ev Keys.print_query then begin
