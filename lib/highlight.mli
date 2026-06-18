@@ -13,6 +13,12 @@ type span = {
     Returns an array where entry [i] is the list of spans for line [i]. *)
 val highlight_buffer : Buffer.t -> span list array
 
+(** Like {!highlight_buffer} but over a raw string (newline-separated
+    lines). Entry [i] holds the spans for the [i]th line. Used to
+    syntax-highlight query-result snippets that aren't backed by a
+    [Buffer.t]. *)
+val highlight_text : string -> span list array
+
 (** Find the qualified identifier at the cursor's byte position, using the
     Coq lexer to identify IDENT/FIELD tokens. Adjacent IDENT/FIELD tokens
     (e.g. [Foo.Bar.baz]) are assembled into a single qualified name.

@@ -176,6 +176,13 @@ let handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r =
       | Terminal_input.Pass_to_term -> None
     end
     else if Keymatch.match_binding ev Keys.quit then Some Quit
+    else if Keymatch.match_binding ev Keys.close_tab
+            && ctx.focus = FMessages
+            && Msg_pane.kind_eq (Msg_pane.active_kind ()) Msg_pane.Info then begin
+      (* ^W closes the Info pane when it's focused, instead of the tab. *)
+      Msg_pane.remove Msg_pane.Info;
+      Some Continue
+    end
     else if Keymatch.match_binding ev Keys.close_tab then Some Close_tab
     else if Keymatch.match_binding ev Keys.save then Some Save_prompt
     else if Keymatch.match_binding ev Keys.jump_back then begin
@@ -517,11 +524,15 @@ let handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r =
       Some Continue
     end
     else if Keymatch.match_binding ev Keys.about then begin
-      (match Modals.query_subject ctx tab, session with
-       | Some word, Some s ->
-         Session.query s ("About " ^ word ^ ".");
-         Msg_pane.activate Msg_pane.Rocq
-       | _ -> ());
+      (* Toggle the live Info pane. Show + activate it (without stealing
+         focus) when it isn't the active messages sub-tab; hide it when
+         it is. The manual "About → Rocq pane" query stays on Alt+Q. *)
+      if Msg_pane.kind_eq (Msg_pane.active_kind ()) Msg_pane.Info then
+        Msg_pane.remove Msg_pane.Info
+      else begin
+        ignore (Msg_pane.ensure_after ~after:Msg_pane.Rocq Msg_pane.Info);
+        Msg_pane.activate Msg_pane.Info
+      end;
       Some Continue
     end
     else if Keymatch.match_binding ev Keys.print_query then begin
@@ -693,6 +704,17 @@ let handle_event (ctx : Editor_context.t) (ev : Input.event) (tab : Tab.t) r =
            let result = handle_pane_scroll scroll_r Render.PMessages in
            tab.rocq_msg.rms_scroll <- !scroll_r;
            (match result with Some a -> a | None -> Continue)
+         | Msg_pane.Info ->
+           (* Enter / Space toggles the About⇄Print collapsible. *)
+           (match ev with
+            | Input.Special (Input.Enter, _) | Input.Key (32, _) ->
+              Live_info.toggle_expand (); Continue
+            | _ ->
+              let mt = Msg_pane.active_tab () in
+              let scroll_r = ref mt.scroll in
+              let result = handle_pane_scroll scroll_r Render.PMessages in
+              mt.scroll <- !scroll_r;
+              (match result with Some a -> a | None -> Continue))
          | Msg_pane.Build | Msg_pane.Errors | Msg_pane.Search ->
            let mt = Msg_pane.active_tab () in
            let scroll_r = ref mt.scroll in

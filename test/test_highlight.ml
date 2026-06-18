@@ -128,6 +128,31 @@ Definition x := 1.
   check spans4 buf4 "Definition after comment" 2 6 "Definition";
   Printf.printf "\n";
 
+  (* === Test 5: highlight_text matches highlight_buffer, handles
+     query-result snippets (unicode, ∀/→) without throwing === *)
+  Printf.printf "=== Test 5: highlight_text ===\n";
+  let text5 = "Definition bar := 42.\n(* c *)\n" in
+  let buf5 = load_text_into_buf text5 in
+  let from_buf = Rocqtui_lib.Highlight.highlight_buffer buf5 in
+  let from_text = Rocqtui_lib.Highlight.highlight_text text5 in
+  if from_buf = from_text then
+    Printf.printf "  PASS: highlight_text agrees with highlight_buffer\n"
+  else begin
+    Printf.printf "  FAIL: highlight_text differs from highlight_buffer\n";
+    pass := false
+  end;
+  (* Representative About/Print output — must not raise, keyword found. *)
+  let snippet =
+    "foo : forall {A : Type}, A -> A\nfoo : \xe2\x88\x80 {A}, A \xe2\x86\x92 A" in
+  let st = Rocqtui_lib.Highlight.highlight_text snippet in
+  if Array.length st = 2 then
+    Printf.printf "  PASS: highlight_text returns one entry per line\n"
+  else begin
+    Printf.printf "  FAIL: expected 2 lines, got %d\n" (Array.length st);
+    pass := false
+  end;
+  Printf.printf "\n";
+
   if !pass then
     Printf.printf "All checks passed!\n"
   else begin

@@ -1,12 +1,13 @@
 type kind =
   | Rocq
+  | Info
   | Build
   | Errors
   | Search
   | Terminal of Terminal.t
 
 let kind_eq a b = match a, b with
-  | Rocq, Rocq | Build, Build | Errors, Errors | Search, Search -> true
+  | Rocq, Rocq | Info, Info | Build, Build | Errors, Errors | Search, Search -> true
   | Terminal t1, Terminal t2 -> t1 == t2
   | _ -> false
 
@@ -65,6 +66,25 @@ let ensure_in mp kind =
     mp.tabs <- mp.tabs @ [t];
     t
 
+(* Like [ensure_in], but when creating the tab insert it immediately
+   after the first [after] tab instead of appending (falls back to
+   append if [after] isn't present). Keeps [active] pointing at the same
+   tab. Used to pin the Info tab right after Rocq. *)
+let ensure_after_in mp ~after kind =
+  match find_in mp kind with
+  | Some (_, t) -> t
+  | None ->
+    let t = make_tab kind in
+    let pos = ref (List.length mp.tabs) in
+    let rec ins i = function
+      | [] -> [t]
+      | x :: rest when kind_eq x.kind after -> pos := i + 1; x :: t :: rest
+      | x :: rest -> x :: ins (i + 1) rest
+    in
+    mp.tabs <- ins 0 mp.tabs;
+    if !pos <= mp.active then mp.active <- mp.active + 1;
+    t
+
 let history_remove kind hist =
   List.filter (fun k -> not (kind_eq k kind)) hist
 
@@ -115,6 +135,7 @@ let remove_in mp kind =
 let display_name tab =
   match tab.kind with
   | Rocq -> "Rocq"
+  | Info -> "Info"
   | Build -> "Build"
   | Errors -> "Errors"
   | Search -> "Search"
@@ -197,6 +218,7 @@ let find kind = find_in global kind
 let active_tab () = active_tab_in global
 let active_kind () = active_kind_in global
 let ensure kind = ensure_in global kind
+let ensure_after ~after kind = ensure_after_in global ~after kind
 let pop_active () = pop_active_in global
 let activate kind = activate_in global kind
 let activate_unless_terminal kind = activate_unless_terminal_in global kind

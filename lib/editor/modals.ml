@@ -92,6 +92,7 @@ let handle_theme (ctx : Editor_context.t) ev =
        let name = List.nth themes idx in
        let theme = Theme.find name in
        Theme.apply theme;
+       Live_info.invalidate ();  (* drop cached attrs for the new theme *)
        ctx.theme_name <- name
      end
    | None -> ());

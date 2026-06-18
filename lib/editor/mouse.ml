@@ -183,7 +183,7 @@ let handle (ctx : Editor_context.t) (mev : Input.mouse_event) (tab : Tab.t) r
          | Msg_pane.Rocq ->
            tab.rocq_msg.rms_scroll <-
              max 0 (tab.rocq_msg.rms_scroll + delta)
-         | Msg_pane.Build | Msg_pane.Errors | Msg_pane.Search ->
+         | Msg_pane.Info | Msg_pane.Build | Msg_pane.Errors | Msg_pane.Search ->
            let mt = Msg_pane.active_tab () in
            mt.scroll <- max 0 (mt.scroll + delta))
       | _ -> ()
@@ -215,11 +215,22 @@ let handle (ctx : Editor_context.t) (mev : Input.mouse_event) (tab : Tab.t) r
       ctx.focus <-
         (if pane = Render.PGoals then Editor_context.FGoals
          else Editor_context.FMessages);
+      (* Click on the Info pane's ▸/▾ glyph (the header line's first two
+         columns) toggles the About⇄Print collapsible. *)
+      let info_toggle =
+        pane = Render.PMessages
+        && Msg_pane.kind_eq (Msg_pane.active_kind ()) Msg_pane.Info
+        && Live_info.has_content ()
+        && (match Geom.screen_to_pane_pos tab r ~x ~y `Messages with
+            | Some (0, byte_col) -> byte_col <= 3  (* the "▸ " affordance *)
+            | _ -> false)
+      in
+      if info_toggle then Live_info.toggle_expand ();
       (* Build / Errors / Search tab click → jump to entry *)
       let jumped_to_error =
         if pane = Render.PMessages then begin
           match Msg_pane.active_kind () with
-          | Msg_pane.Terminal _ | Msg_pane.Rocq -> false
+          | Msg_pane.Terminal _ | Msg_pane.Rocq | Msg_pane.Info -> false
           | Msg_pane.Search ->
             (match Geom.screen_to_pane_pos tab r ~x ~y `Messages with
              | None -> false
@@ -289,6 +300,8 @@ let handle (ctx : Editor_context.t) (mev : Input.mouse_event) (tab : Tab.t) r
            gesture — focus should end up in the script pane where
            the cursor now is, not in the messages tab we clicked. *)
         ctx.focus <- Editor_context.FScript
+      else if info_toggle then
+        ()  (* glyph click already handled; stay in the Info pane *)
       else
       (* Check if we should forward to terminal *)
       let forwarded = if pane = Render.PMessages then

@@ -300,6 +300,12 @@ let update_msg_tabs (ctx : Editor_context.t) r (tab : Tab.t) =
   (* Rocq tab is always present. Its content (and scroll/sel) is
      pulled at render time from the active file. *)
   ignore (Msg_pane.ensure Msg_pane.Rocq);
+  (* Info tab: toggled on/off by ^A (see editor.ml), pinned just after
+     Rocq when open. Drive the live query only while it's the visible
+     sub-tab, to avoid churning the Rocq STM with queries nobody's
+     looking at. *)
+  if Msg_pane.kind_eq (Msg_pane.active_kind ()) Msg_pane.Info then
+    Live_info.tick tab.session tab.buf;
   let _ = r in
   (* Build tab: ensured when there is build output or a running build.
      On a fresh build, clear the previous build's selection — line
@@ -417,6 +423,16 @@ let render_messages (_ctx : Editor_context.t) r (tab : Tab.t) =
       ~set_cache:(fun l -> tab.rocq_msg.rms_lines_cache <- l)
       r Render.PMessages ms lines;
     tab.rocq_msg.rms_scroll <- !ms
+  | Msg_pane.Info ->
+    (* Live About/Print pane: content from Live_info, re-formatted to
+       the current pane width each frame (Live_info caches by width). *)
+    let width = pp_width_for_pane r Render.PMessages in
+    let lines = Live_info.render ~width in
+    let ms = ref active.scroll in
+    render_text_pane ~sel:active.sel
+      ~set_cache:(fun l -> active.lines_cache <- l)
+      r Render.PMessages ms lines;
+    active.scroll <- !ms
   | Msg_pane.Build | Msg_pane.Errors | Msg_pane.Search ->
     let ms = ref active.scroll in
     let hanging = match active.kind with

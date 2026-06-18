@@ -117,7 +117,7 @@ let jump_to_def = {
 
 let about = {
   name = "about"; codes = [ctrl 'a']; kitty_codes = []; display = "^A";
-  context = Global; description = "About" }
+  context = Global; description = "Toggle info pane" }
 
 let print_query = {
   name = "print_query"; codes = [ctrl 'd']; kitty_codes = []; display = "^D";

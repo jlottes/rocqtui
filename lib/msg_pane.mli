@@ -25,6 +25,7 @@
     [Terminal _] is by physical identity. *)
 type kind =
   | Rocq
+  | Info
   | Build
   | Errors
   | Search
@@ -61,6 +62,12 @@ val find_in : t -> kind -> (int * tab) option
 val active_tab_in : t -> tab
 val active_kind_in : t -> kind
 val ensure_in : t -> kind -> tab
+
+(** Like {!ensure_in}, but a newly-created tab is inserted right after
+    the first [after] tab (append if [after] is absent). Existing tabs
+    are returned unmoved. *)
+val ensure_after_in : t -> after:kind -> kind -> tab
+
 val remove_in : t -> kind -> unit
 val activate_in : t -> kind -> unit
 val activate_unless_terminal_in : t -> kind -> unit
@@ -98,6 +105,10 @@ val active_kind : unit -> kind
     rocqtui ensures [Rocq] at startup; [tterm] ensures the initial
     [Terminal _]. *)
 val ensure : kind -> tab
+
+(** Singleton {!ensure_after_in}: ensure [kind], inserting it right after
+    the first [after] tab when newly created. *)
+val ensure_after : after:kind -> kind -> tab
 
 (** Remove a sub-tab. If it was active, falls back via {!pop_active}.
     Also drops the kind from {!history}. *)

@@ -36,6 +36,11 @@ val poll : t -> bool
 (** End of the verified region (last confirmed sentence). *)
 val verified_end : t -> int
 
+(** The current document tip — the state a query runs at. Use as part of
+    a cache key to detect when a re-query is needed (e.g. a symbol that
+    has just become defined as the verified region advanced). *)
+val tip : t -> Stateid.t
+
 (** End of the pending region (= target_end, for display). *)
 val pending_end : t -> int
 

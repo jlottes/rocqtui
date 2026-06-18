@@ -175,6 +175,10 @@ let verified_end t =
   | s :: _ -> s.end_off
   | [] -> 0
 
+(* Current document tip — the state a query would run at. Changes as the
+   verified region advances/rewinds. *)
+let tip t = t.tip
+
 (* --- Diagnostic logging (gated by ROCQTUI_LOG; see lib/log.ml) --- *)
 
 let status_char = function

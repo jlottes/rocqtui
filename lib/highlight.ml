@@ -263,13 +263,13 @@ let add_span result line_offsets num_lines bp ep attr color =
                          grid_attr = grid_attr_of_color color } :: result.(line)
   end
 
-let add_multiline_span result line_offsets buf num_lines bp total_len attr color =
+let add_multiline_span result line_offsets lines_arr num_lines bp total_len attr color =
   let rec go pos remaining =
     if remaining <= 0 then ()
     else begin
       let (line, col) = offset_to_line_col line_offsets pos in
       if line < num_lines then begin
-        let line_len = String.length (Buffer.get_line buf line) in
+        let line_len = String.length lines_arr.(line) in
         let avail = line_len - col in
         let span_len = min remaining avail in
         if span_len > 0 then
@@ -284,17 +284,17 @@ let add_multiline_span result line_offsets buf num_lines bp total_len attr color
 
 (* --- Main highlighting function --- *)
 
-let highlight_buffer buf =
-  let num_lines = Buffer.line_count buf in
+let highlight_text text =
+  let lines_arr = Array.of_list (String.split_on_char '\n' text) in
+  let num_lines = Array.length lines_arr in
   let result = Array.make num_lines [] in
-  let text = Buffer.text buf in
   if String.length text = 0 then result
   else begin
     let line_offsets = Array.make num_lines 0 in
     let offset = ref 0 in
     for i = 0 to num_lines - 1 do
       line_offsets.(i) <- !offset;
-      offset := !offset + String.length (Buffer.get_line buf i) + 1
+      offset := !offset + String.length lines_arr.(i) + 1
     done;
     let st = make_state () in
     let comment_state = CLexer.LexerDiff.State.init () in
@@ -326,13 +326,13 @@ let highlight_buffer buf =
            else if tok_text = "*)" then begin
              decr in_comment;
              if !in_comment = 0 then
-               add_multiline_span result line_offsets buf num_lines
+               add_multiline_span result line_offsets lines_arr num_lines
                  !comment_start (ep - !comment_start)
                  0 color_comment
            end else if tok_text = ")" && !prev_comment_tok = "*" then begin
              decr in_comment;
              if !in_comment = 0 then
-               add_multiline_span result line_offsets buf num_lines
+               add_multiline_span result line_offsets lines_arr num_lines
                  !comment_start (ep - !comment_start)
                  0 color_comment
            end;
@@ -365,6 +365,8 @@ let highlight_buffer buf =
     Array.iteri (fun i spans -> result.(i) <- List.rev spans) result;
     result
   end
+
+let highlight_buffer buf = highlight_text (Buffer.text buf)
 
 (* --- Identifier lookup at cursor (used by ^L, About, Print) --- *)
 

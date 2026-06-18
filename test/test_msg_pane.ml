@@ -10,6 +10,7 @@ let assert_eq_kind msg got expected =
   else begin
     let to_s = function
       | Msg_pane.Rocq -> "Rocq"
+      | Msg_pane.Info -> "Info"
       | Msg_pane.Build -> "Build"
       | Msg_pane.Errors -> "Errors"
       | Msg_pane.Search -> "Search"
@@ -33,7 +34,7 @@ let assert_eq_kinds msg got expected =
   if all_eq then pass msg
   else begin
     let to_s = function
-      | Msg_pane.Rocq -> "R" | Msg_pane.Build -> "B"
+      | Msg_pane.Rocq -> "R" | Msg_pane.Info -> "I" | Msg_pane.Build -> "B"
       | Msg_pane.Errors -> "E" | Msg_pane.Search -> "S"
       | Msg_pane.Terminal _ -> "T"
     in
