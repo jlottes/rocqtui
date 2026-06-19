@@ -254,15 +254,17 @@ let fill g ~row ~col ~width ch attr =
     end
   done
 
-(* Change attributes of a row region without touching text. Resets followers:
-   chgat is meant to recolor the column, and we don't want lingering followers
-   with stale attrs to override that. *)
+(* Change attributes of a row region without touching text. Recolors
+   followers (combining marks) to the new attr rather than dropping them:
+   chgat is meant to recolor the column, and a stale follower attr must not
+   override that — but the combining glyph itself has to survive the recolor. *)
 let chgat g ~row ~col ~width attr =
   if row >= 0 && row < g.rows then
     for c = max 0 col to min (col + width - 1) (g.cols - 1) do
       let cell = g.cells.(row).(c) in
       cell.attr <- attr;
-      cell.followers <- []
+      if cell.followers <> [] then
+        cell.followers <- List.map (fun (text, _) -> (text, attr)) cell.followers
     done
 
 (* Overlay just the underline style and underline color on a row region,

@@ -58,6 +58,15 @@ let () =
   assert (g.cells.(0).(0).width = 1);
   Printf.printf "OK: combining character\n";
 
+  (* chgat recolors the cell *and* its followers, but must not drop the
+     combining mark (regression: verified-region restyling erased "∊̸"). *)
+  let recolor = { Grid.default_attr with fg = Grid.Color256 42 } in
+  Grid.chgat g ~row:0 ~col:0 ~width:1 recolor;
+  assert (g.cells.(0).(0).text = "e");
+  assert (g.cells.(0).(0).attr.fg = Grid.Color256 42);
+  assert (g.cells.(0).(0).followers = [("\xcc\x81", recolor)]);
+  Printf.printf "OK: chgat preserves followers\n";
+
   (* Test fill *)
   Grid.clear g;
   Grid.fill g ~row:0 ~col:2 ~width:5 '-' Grid.default_attr;
