@@ -40,6 +40,15 @@ let saved : entry list ref = ref []
 let pinned = ref false
 let stale = ref false
 
+(* The pinned target subject (set when pinning / re-pinning). While
+   pinned this — not the cursor and not the displayed [current] — is the
+   single source the tick queries, so there's exactly one in-flight query
+   reconciling toward it. A ^A re-pin just repoints this (and
+   [src_session]) synchronously; the tick issues the query when the
+   session is idle, so it can't be dropped and nothing competes to revert
+   it. [None] when unpinned. *)
+let pin_subject : string option ref = ref None
+
 (* Error for the reserved top row: set when a cursor-driven query (live
    navigation, or an explicit ^A re-pin) fails; cleared on the next
    success or when the cursor leaves the failing identifier. A pinned
@@ -227,29 +236,30 @@ let subject_at_cursor buf =
   | Some _ as x -> x
   | None -> Buffer.word_at_cursor buf
 
-(* Explicit ^A re-pin to [w] against session [s]: query now (forcing the
-   key) and route the result through the [`Cursor] path, so a failure
-   shows in the error row and leaves the current pinned entry intact. *)
+(* Explicit ^A re-pin to [w] against session [s]: just repoint the pin
+   target synchronously. The tick's single pinned query path issues the
+   [About] when [s] is idle (a changed subject ⇒ [`Cursor] mode, so a
+   failure shows in the error row and leaves the current entry intact). *)
 let repin s w =
-  let opts = Printopts.to_set_options () in
-  last_about_key := Some (w, Session.tip s, opts);
-  Session.query s ~extra_opts:opts
-    ~on_done:(fun msgs -> deliver_about ~mode:`Cursor s w msgs)
-    ("About " ^ w ^ ".")
+  src_session := Some s;
+  pin_subject := Some w;
+  invalidate ()
 
 let tick session buf =
   let opts = Printopts.to_set_options () in
-  (* While pinned, target the originating session (so the pin survives
-     switching file tabs) and keep the subject frozen; otherwise follow
-     the active tab's session and cursor. *)
+  (* While pinned, target the pin's originating session (so the pin
+     survives switching file tabs) and its frozen subject; otherwise
+     follow the active tab's session and cursor. Exactly one query path,
+     keyed on (subject, tip, options), reconciles toward this — so a
+     re-pin (which just repoints [pin_subject]/[src_session]) can't race
+     a stale auto-requery on the old subject. *)
   let active_session = if !pinned then !src_session else session in
   (match active_session with
   | None -> ()
   | Some s ->
     let tip = Session.tip s in
-    let mode = if !pinned then `Auto else `Cursor in
     let subject =
-      if !pinned then (match !current with Some r -> Some r.subject | None -> None)
+      if !pinned then !pin_subject
       else subject_at_cursor buf
     in
     (* Unpinned: clear the error row once the cursor leaves a failing
@@ -259,9 +269,18 @@ let tick session buf =
     end;
     (* (Re-)issue About when the subject, tip, or options change and the
        session is idle. Keep the last result when on a non-identifier
-       (subject = None). *)
+       (subject = None). A *subject* change (live navigation, or a ^A
+       re-pin) surfaces failures in the error row [`Cursor]; a same-subject
+       refresh forced by a tip/option change marks the entry [`Auto]
+       stale instead. *)
     (match subject with
      | Some w when key_changed (w, tip, opts) && not (Session.is_busy s) ->
+       let mode =
+         if not !pinned then `Cursor              (* live navigation *)
+         else match !last_about_key with
+           | Some (s', _, _) when s' = w -> `Auto (* pinned, tip/opts moved *)
+           | _ -> `Cursor                          (* a ^A re-pin to a new subject *)
+       in
        last_about_key := Some (w, tip, opts);
        Session.query s ~extra_opts:opts
          ~on_done:(fun msgs -> deliver_about ~mode s w msgs)
@@ -315,12 +334,17 @@ let is_pinned () = !pinned
 let toggle_pin () =
   if !pinned then begin
     pinned := false;
+    pin_subject := None;
     stale := false;
     invalidate ()
-  end else if !current <> None then begin
-    pinned := true;
-    stale := false;
-    invalidate ()
+  end else begin
+    match !current with
+    | Some r ->
+      pinned := true;
+      pin_subject := Some r.subject;  (* freeze on the displayed subject *)
+      stale := false;
+      invalidate ()
+    | None -> ()
   end
 
 (* Append the current (main) item to the saved list as a live entry,
