@@ -583,11 +583,13 @@ let () =
                   | Compose.NoMatch ->
                     (match ev, active with
                      | Input.Special (Input.Escape, _), Some term ->
-                       (* Emit a plain ESC byte to the leaf's active
-                          terminal. [Pty.send_escape] uses the
-                          singleton's active terminal, so we bypass
-                          it for tterm. *)
-                       Terminal.send term "\x1b"
+                       (* Forward ESC to the leaf's active terminal,
+                          encoded per its kitty keyboard mode (CSI 27u
+                          when active, bare \x1b otherwise). [send_escape]
+                          targets the Msg_pane singleton, so route through
+                          [forward_event] directly for tterm's leaf. *)
+                       Editor.Pty.forward_event term
+                         (Input.Special (Input.Escape, Input.no_mod))
                      | _ -> ()));
                  true
                | None ->

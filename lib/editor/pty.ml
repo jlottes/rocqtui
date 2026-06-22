@@ -76,15 +76,35 @@ let forward_event term (ev : Input.event) =
     match seq with
     | Some s -> write_pty s
     | None ->
-      (* Fallback: basic keys that keyseq doesn't handle *)
+      (* Fallback for keys [keyseq] doesn't encode. This is the
+         [kitty_flags = 0] (legacy) path — with kitty active the ctrl/alt
+         text combos are CSI u from [kitty_keyseq] above. The legacy
+         [keyseq] only covers functional keys (arrows, edit, keypad, F),
+         returning None for text keys, so the ctrl/alt control-byte
+         encodings a terminal would otherwise send are reproduced here. *)
+      let ctrl = mods land 0x4 <> 0 in
+      let alt = mods land 0x2 <> 0 in
       let fallback =
         if key = Vterm_lib.Keys.enter then Some "\r"
         else if key = Vterm_lib.Keys.backspace then Some "\x7f"
         else if key = Vterm_lib.Keys.tab then Some "\t"
         else if key = Vterm_lib.Keys.escape then Some "\x1b"
-        else if key < 0x100 && mods = 0 then
+        else if mods = 0 && key < 0x100 then
           (* ASCII-range text key, no modifiers *)
           Some (String.make 1 (Char.chr key))
+        else if ctrl then
+          (* Ctrl+key: C0 control byte, ESC-prefixed when Alt is held. *)
+          let ctrl_byte =
+            if key < 32 then Some key
+            else if key >= 64 && key <= 127 then Some (key land 0x1f)
+            else None in
+          (match ctrl_byte with
+           | Some b ->
+             Some (if alt then Printf.sprintf "\x1b%c" (Char.chr b)
+                   else String.make 1 (Char.chr b))
+           | None -> None)
+        else if alt && key < 128 then
+          Some (Printf.sprintf "\x1b%c" (Char.chr key))
         else None
       in
       (match fallback with
@@ -93,23 +113,16 @@ let forward_event term (ev : Input.event) =
   in
   match ev with
   | Input.Key (cp, mods) when cp >= 32 && not mods.ctrl && not mods.alt ->
+    (* Plain text (shift allowed — the codepoint already reflects it):
+       send as UTF-8, never CSI u. *)
     let buf = Stdlib.Buffer.create 4 in
     encode_utf8 buf cp;
     write_pty (Stdlib.Buffer.contents buf)
-  | Input.Key (cp, mods) when cp < 32 && mods.ctrl ->
-    (* Ctrl+letter: codepoint is 1-26 (ETX etc.), send raw byte *)
-    write_pty (String.make 1 (Char.chr cp))
-  | Input.Key (cp, mods) when mods.ctrl && cp >= 64 && cp <= 127 ->
-    (* Ctrl+letter via Kitty: cp is the letter (e.g. 99='c'),
-       convert to control byte (cp land 0x1f) *)
-    let ctrl_byte = cp land 0x1f in
-    if mods.alt then
-      write_pty (Printf.sprintf "\x1b%c" (Char.chr ctrl_byte))
-    else
-      write_pty (String.make 1 (Char.chr ctrl_byte))
-  | Input.Key (cp, mods) when mods.alt && not mods.ctrl && cp < 128 ->
-    write_pty (Printf.sprintf "\x1b%c" (Char.chr cp))
   | Input.Key (cp, mods) ->
+    (* Everything else — notably ctrl/alt combos — goes through the
+       kitty-aware encoder so an inner app that enabled the kitty
+       keyboard protocol gets CSI u, and a legacy terminal gets the
+       control-byte / ESC-prefixed fallback. *)
     send_key ~key:cp ~mods:(input_mod mods) ()
   | Input.Special (key, mods) ->
     let k = match key with
