@@ -14,16 +14,8 @@ type binding = {
   description : string;
 }
 
-type kitty_key = {
-  kk_keycode : int;
-  kk_modifier : int;
-}
-
 (** Test if a keycode matches a binding. *)
 val match_key : int -> binding -> bool
-
-(** Test if a Kitty protocol key matches a binding. *)
-val match_kitty_key : kitty_key -> binding -> bool
 
 (** Global bindings *)
 val quit : binding
@@ -105,40 +97,3 @@ val hint_string : binding list -> string
 
 (** Generate the full help screen text from bindings. *)
 val generate_help : unit -> string
-
-(** Kitty keyboard protocol *)
-val enable_kitty : unit -> unit
-val disable_kitty : unit -> unit
-val is_kitty_enabled : unit -> bool
-val kitty_enable_seq : string
-val kitty_disable_seq : string
-val parse_csi_u : string -> kitty_key option
-
-(** A complete key event (may consume multiple getch calls). *)
-type key_event =
-  | RawKey of int
-  | KittyKey of kitty_key
-  | Paste of string
-  | Escape
-
-(** Match a key event against a binding. *)
-val match_event : key_event -> binding -> bool
-
-(** Extract raw keycode from event (for printable char checks etc). *)
-val raw_key_of_event : key_event -> int option
-
-(** Check if event is a mouse event. *)
-val is_mouse_event : key_event -> bool
-
-(** Check if event is a resize event. *)
-val is_resize_event : key_event -> bool
-
-(** Read one complete key event from the terminal.
-    [peek timeout] reads with timeout (-1 on timeout).
-    [block ()] blocks until available.
-    [getch ()] non-blocking read (-1 if nothing). *)
-val read_key_event :
-  peek:(float -> int) ->
-  block:(unit -> int) ->
-  getch:(unit -> int) ->
-  unit -> key_event option

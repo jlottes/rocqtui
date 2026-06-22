@@ -142,9 +142,11 @@ let is_quit_key (ev : Input.event) =
   | Input.Key (124, m) when m.Input.ctrl -> true
   | _ -> false
 
+let parser = Input.create ()
+
 let test_one (b : Keys.binding) =
   print_prefix b;
-  match Input.read_event ~timeout:10.0 Unix.stdin with
+  match Input.read_event ~timeout:10.0 parser Unix.stdin with
   | None ->
     Printf.printf "TIMEOUT (no key received)\n%!";
     Timeout

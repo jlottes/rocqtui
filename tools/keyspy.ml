@@ -28,8 +28,15 @@ let () =
   try while true do
     let n = Unix.read Unix.stdin buf 0 64 in
     if n > 0 then begin
-      (* Check for Ctrl+\ (0x1c) to quit *)
-      if n = 1 && Bytes.get buf 0 = '\x1c' then begin
+      (* Quit on Ctrl+\ : legacy single byte 0x1c, or — when the kitty
+         keyboard protocol is active (iTerm2 etc.) — CSI 92 ; <mods> u
+         (backslash = codepoint 92, ctrl = modifier bit). *)
+      let is_ctrl_backslash =
+        (n = 1 && Bytes.get buf 0 = '\x1c')
+        || (let s = Bytes.sub_string buf 0 n in
+            n >= 6 && String.sub s 0 5 = "\x1b[92;" && s.[n - 1] = 'u')
+      in
+      if is_ctrl_backslash then begin
         Printf.printf "\nquit.\n%!";
         exit 0
       end;

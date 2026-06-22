@@ -185,14 +185,20 @@ let () =
       (Printexc.to_string e) (Printexc.raw_backtrace_to_string bt));
   let r = Render.create () in
   Theme.apply theme;
+  (* Shared input parser. The interrupt hook and the main loop both feed
+     this instance and drain from its queue, so no bytes/state are lost
+     between them. *)
+  let input = Input.create () in
   Rocq_protocol.set_interrupt_hook (fun t ->
-    (* Read input event to check for ^C *)
-    match Input.read_event ~timeout:0.0 Unix.stdin with
-    | Some (Input.Key (99, m)) when m.ctrl ->  (* ctrl+c = codepoint 99 *)
-      (try Unix.kill (Rocq_protocol.pid t) Sys.sigint with _ -> ())
-    | Some (Input.Key (3, _)) ->  (* raw ctrl+c = 3 *)
-      (try Unix.kill (Rocq_protocol.pid t) Sys.sigint with _ -> ())
-    | _ -> ());
+    (* Feed any available stdin bytes and check for ^C without consuming
+       the other events — they stay queued for the main loop. *)
+    ignore (Input.read_available input Unix.stdin);
+    let is_ctrl_c = function
+      | Input.Key (99, m) when m.Input.ctrl -> true  (* kitty ^C *)
+      | Input.Key (3, _) -> true                      (* raw ^C *)
+      | _ -> false in
+    if Input.any_queued input is_ctrl_c then
+      (try Unix.kill (Rocq_protocol.pid t) Sys.sigint with _ -> ()));
   Printexc.record_backtrace true;
   (* Msg_pane no longer auto-creates the Rocq sub-tab on module load;
      rocqtui ensures it here so the bordered tab strip always has a
@@ -488,7 +494,9 @@ let () =
   while !running do
     let tab = Tab.active_tab mgr in
     let timeout =
-      if Session.is_busy_opt tab.session then 0.01 else 0.1
+      let base = if Session.is_busy_opt tab.session then 0.01 else 0.1 in
+      (* A held lone ESC resolves on the next idle cycle — keep it short. *)
+      if Input.pending input then Float.min base 0.05 else base
     in
     let mcp_fds = Mcp_server.server_fd mcp :: Mcp_server.client_fds mcp in
     let build_fds = match Build.watch_fd () with
@@ -619,9 +627,13 @@ let () =
       Render_need.request_full ()
     end;
     (* Handle keyboard input *)
-    if List.mem stdin_fd ready then begin
+    if List.mem stdin_fd ready then ignore (Input.read_available input stdin_fd);
+    (* A lone ESC with no follow-up byte this cycle resolves to Escape. *)
+    if not (List.mem stdin_fd ready) && Input.pending input then
+      Input.flush input;
+    begin
       let rec drain () =
-        match Input.read_event ~timeout:0.0 stdin_fd with
+        match Input.next_event input with
         | None -> ()
         | Some ev when not !running -> ignore ev
         | Some ev ->

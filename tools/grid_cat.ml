@@ -116,8 +116,9 @@ let () =
   render ();
 
   let running = ref true in
+  let parser = Input.create () in
   while !running do
-    match Input.read_event ~timeout:1.0 Unix.stdin with
+    match Input.read_event ~timeout:1.0 parser Unix.stdin with
     | None -> ()
     | Some ev ->
       let ev_str = Input.show_event ev in

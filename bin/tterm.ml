@@ -404,6 +404,7 @@ let () =
   Layout.compute_rects !layout ~bounds:initial_bounds;
   ignore (spawn_in_leaf root_leaf);
 
+  let input = Input.create () in
   let last_host_title = ref "" in
   let sync_host_title () =
     let title =
@@ -493,7 +494,8 @@ let () =
 
   while !running do
     let term_fds = Terminal.fds () in
-    let timeout = 0.1 in
+    (* A held lone ESC resolves on the next idle cycle — keep it short. *)
+    let timeout = if Input.pending input then 0.05 else 0.1 in
     let ready =
       try
         Main_loop.select_with_watches
@@ -532,9 +534,13 @@ let () =
       Render_need.request_full ()
     end;
 
-    if !running && List.mem stdin_fd ready then begin
+    if List.mem stdin_fd ready then ignore (Input.read_available input stdin_fd);
+    (* A lone ESC with no follow-up byte this cycle resolves to Escape. *)
+    if not (List.mem stdin_fd ready) && Input.pending input then
+      Input.flush input;
+    if !running then begin
       let rec drain () =
-        match Input.read_event ~timeout:0.0 stdin_fd with
+        match Input.next_event input with
         | None -> ()
         | Some Input.Resize ->
           Render.resize r;
